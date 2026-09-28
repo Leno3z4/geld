@@ -1,11 +1,7 @@
 import express, { type Response } from "express";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { TradingEngine } from "./engine.js";
 
-const webDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../webapp/dist");
-
-export function startServer(engine: TradingEngine, port: number) {
+export function createApp(engine: TradingEngine) {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
 
@@ -57,8 +53,11 @@ export function startServer(engine: TradingEngine, port: number) {
     req.on("close", () => { clearInterval(heartbeat); unsubscribe(); });
   });
 
-  app.use(express.static(webDist));
-  app.use((_req, res) => res.sendFile(path.join(webDist, "index.html")));
+  return app;
+}
 
-  return app.listen(port, "0.0.0.0", () => console.log("geld listening on " + port));
+export function startServer(engine: TradingEngine, port: number) {
+  return createApp(engine).listen(port, "0.0.0.0", () => {
+    console.log("geld listening on " + port);
+  });
 }

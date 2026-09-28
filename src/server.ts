@@ -1,8 +1,8 @@
-import express, { type Response } from "express";
+import express, { type Express, type Response } from "express";
 import type { TradingEngine } from "./engine.js";
 
-export function createApp(engine: TradingEngine) {
-  const app = express();
+export function createApp(engine: TradingEngine, existingApp?: Express) {
+  const app = existingApp ?? express();
   app.use(express.json({ limit: "1mb" }));
 
   app.get("/api/health", (_req, res) => {

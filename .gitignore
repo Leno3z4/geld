@@ -1,17 +1,10 @@
-# Environment variables
+node_modules/
+dist/
+webapp/dist/
 .env
-
-# Build artifacts
-/target/
-
-# IDE/Editor specific files
-.vscode/
-.idea/
-
-# OS specific files
+.env.*
+!.env.example
+data/
+.wrangler/
 .DS_Store
-Thumbs.db
-
-# Data files (like positions) - consider if this should be tracked
-/data/
-auth_raw.json
+*.log

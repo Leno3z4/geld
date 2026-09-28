@@ -1,70 +1,19 @@
-# TraderTony V4 - Multi-stage Docker Build
-# Optimized for Railway deployment
-
-# =============================================================================
-# Stage 1: Build Environment
-# =============================================================================
-FROM rust:1.85-bookworm AS builder
-
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create app directory
+FROM node:22-alpine AS build
 WORKDIR /app
+COPY package.json ./
+COPY webapp/package.json ./webapp/package.json
+RUN npm install
+COPY . .
+RUN npm run build
 
-# Copy manifests first for better caching
-COPY Cargo.toml Cargo.lock ./
-
-# Create dummy main.rs + bin stub so cargo can resolve all [[bin]] targets
-RUN mkdir -p src/bin && \
-    echo "fn main() {}" > src/main.rs && \
-    echo "fn main() {}" > src/bin/tg_login.rs
-
-# Build dependencies (this layer will be cached)
-RUN cargo build --release && \
-    rm -rf src target/release/trader-tony-v4* target/release/tg_login*
-
-# Copy actual source code
-COPY src ./src
-
-# Build the actual application
-RUN cargo build --release
-
-# =============================================================================
-# Stage 2: Runtime Environment
-# =============================================================================
-FROM debian:bookworm-slim AS runtime
-
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    libssl3 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create non-root user for security
-RUN useradd -m -u 1000 trader
+FROM node:22-alpine
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/dist ./dist
+COPY --from=build /app/webapp/dist ./webapp/dist
+RUN adduser -D -u 10001 trader
 USER trader
-
-# Create data directory for persistence
-WORKDIR /app
-RUN mkdir -p /app/data
-
-# Copy the compiled binary from builder
-COPY --from=builder /app/target/release/trader-tony-v4 /app/trader-tony-v4
-
-# Expose the API port (Railway routes to this port)
-EXPOSE 3030
-
-# Note: Railway uses its own health check (healthcheckPath in railway.toml)
-# Docker HEALTHCHECK removed as it requires curl which isn't in slim image
-
-# Default environment variables
-ENV RUST_LOG=info
-ENV API_HOST=0.0.0.0
-ENV API_PORT=3030
-
-# Run the application
-CMD ["./trader-tony-v4"]
+EXPOSE 8787
+CMD ["node", "dist/src/index.js"]

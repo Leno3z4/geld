@@ -1,129 +1,87 @@
-# TraderTony V4
+# geld — Monad / Nad.fun AI meme trading bot
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Rust](https://img.shields.io/badge/rust-1.78%2B-orange.svg)](https://www.rust-lang.org/)
-[![Solana](https://img.shields.io/badge/Solana-Mainnet-blue.svg)](https://solana.com/)
-
-An autonomous trading bot for Solana memecoins with REST API, web dashboard, and copy trading.
-
-## Features
-
-- **Autonomous Trading**: Automatically discovers and trades new tokens on Solana using configurable strategies
-- **REST API**: Full HTTP API for controlling the bot and retrieving data
-- **Web Dashboard**: Real-time dashboard showing performance, positions, and controls
-- **Copy Trading**: Users can copy bot trades with automatic 10% profit fee
-- **Risk Analysis**: Evaluates tokens for common risks (mint/freeze authority, LP status, honeypot, holder concentration)
-- **Position Management**: Automatic take profit, stop loss, and trailing stop loss
-- **Demo Mode**: Simulate trading without executing real transactions
+This branch fully replaces the old Solana/Rust application with a TypeScript/Node + React + Tailwind application built around Nad.fun V2 on Monad.
 
 ## Architecture
 
-```
-Frontend (Vercel)          Backend (Railway)
-┌──────────────────┐      ┌──────────────────┐
-│  Web Dashboard   │─────▶│   REST API       │
-│  - Stats         │ HTTP │   - /api/*       │
-│  - Positions     │◀─────│                  │
-│  - Copy Trade    │ WSS  │   WebSocket      │
-└──────────────────┘      │   - Real-time    │
-                          │                  │
-                          │   AutoTrader     │
-                          │   - Scanning     │
-                          │   - Trading      │
-                          └────────┬─────────┘
-                                   │
-                                   ▼
-                            Solana Blockchain
-```
+- Monad mainnet, chain 143.
+- Nad.fun V2 lifecycle-aware router for native MON buys/sells.
+- Nad.fun V2 BondingCurve event stream with HTTP log polling fallback.
+- Optional Nad.fun API for token metadata and market enrichment.
+- Gemini Interactions API with strict structured JSON decisions.
+- Adaptive 168-bucket hour-of-week market-flow seasonality.
+- Local scoring before AI calls, so Gemini is not called for every event.
+- Aggressive sizing defaults that are configurable through environment variables.
+- React/Tailwind dashboard based on the supplied shadcn dashboard layout.
+- Cloudflare Container for the long-lived Node process and Cron Trigger to revive it.
+- Durable Object-backed state endpoint for restart-safe state synchronization.
 
-## Quick Start
+## Old fork audit
 
-### Prerequisites
+The original fork is Solana-specific: Solana RPC, Solana keypairs, Jupiter, Helius, Telegram and a large Rust trading stack. I inspected its repository metadata, local agent settings, CI, Dockerfile, wallet, web server/routes, Jupiter client and trading entrypoints. I did not find an obvious credential-exfiltration payload in those inspected files. A complete local dependency/binary audit was not possible because the environment could not clone external repositories directly.
 
-- Rust 1.78+ (for Cargo.lock v4 support)
-- Helius API Key
-- Birdeye API Key
-- Solana Wallet Private Key (Base58) - **USE A BURNER WALLET**
+The rewrite branch removes the legacy runtime rather than carrying unknown old behavior into the Monad trader. The original master branch is untouched.
 
-### Local Development
+## Nad.fun V2 mainnet contracts used
 
-```bash
-# Clone and setup
-git clone https://github.com/tony-42069/trader-tony-v4.git
-cd trader-tony-v4
-cp .env.example .env  # Fill in your API keys
+- Chain: 143
+- WMON: 0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A
+- NadFunRouter: 0x8986C8fD44eb85294A725a7e61AF35E76bA26F91
+- BondingCurve: 0x9f3832732923252A21044F21eE6bd87F09514ae4
+- NadFunFactory: 0xA25b13127e63ddae6d0b35570FF3D39dBD621001
 
-# Build and run
-cargo build --release
-mkdir data
-./target/release/trader-tony-v4
+Re-verify official deployment docs before deploying after a protocol upgrade.
 
-# Open dashboard
-cd webapp && python -m http.server 8080
-# Navigate to http://localhost:8080
-```
+## Run locally
 
-### Environment Variables
+npm install
+cp .env.example .env
+edit .env
+npm run build
+npm start
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `SOLANA_RPC_URL` | Yes | Helius/QuickNode RPC endpoint |
-| `SOLANA_PRIVATE_KEY` | Yes | Bot wallet private key (base58) |
-| `HELIUS_API_KEY` | Yes | Helius API key |
-| `BIRDEYE_API_KEY` | Yes | Birdeye API key |
-| `DEMO_MODE` | No | Set to `true` for simulation (default: false) |
-| `API_PORT` | No | API port (default: 3030) |
+Dashboard: http://localhost:8787
+Tests: npm test
 
-See `.env.example` for all options.
+## Live execution
 
-## API Endpoints
+Set:
+LIVE_TRADING=true
+AUTO_START=true
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/health` | GET | Health check |
-| `/api/wallet` | GET | Wallet balance |
-| `/api/stats` | GET | Trading statistics |
-| `/api/positions` | GET | Current positions |
-| `/api/config` | GET/PUT | AutoTrader config |
-| `/api/autotrader/start` | POST | Start trading |
-| `/api/autotrader/stop` | POST | Stop trading |
-| `/api/signals` | GET | Trade signals |
-| `/api/copy/register` | POST | Register for copy trading |
-| `/ws` | WebSocket | Real-time updates |
+Then configure MONAD_PRIVATE_KEY, MONAD_RPC_URL, MONAD_WS_URL and GEMINI_API_KEYS.
 
-## Deployment
+Use a dedicated hot wallet containing only the capital you intend to trade. Never commit the private key.
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for full Railway + Vercel deployment guide.
+Gemini is never given the private key and never signs transactions. It returns BUY/HOLD/SELL, confidence, suggested size fraction and invalidation text. The execution layer independently calculates quotes, slippage bounds, deadlines, approvals and signs the on-chain call.
 
-## Security
+There is no guaranteed profit. With a small bankroll, gas, slippage and adverse price selection can dominate returns.
 
-- **USE AT YOUR OWN RISK** - Cryptocurrency trading involves significant risk
-- **NEVER use your main wallet** - Always use a dedicated burner wallet
-- **Start with Demo Mode** - Test thoroughly before live trading
-- **Review the code** - Understand the trading logic before deploying
+## Gemini fallback behavior
 
-## Telegram Sniper Setup
+GEMINI_API_KEYS accepts comma-separated current Gemini auth keys. The bot advances to another key when the current key hits credential, transient or quota errors.
 
-The Telegram-driven sniper requires a one-time interactive login to generate a session file.
+This is a failure fallback, not a quota multiplier: Gemini documents that rate limits are project-scoped rather than API-key-scoped.
 
-1. **Get API credentials** from https://my.telegram.org → API development tools.
-2. **Set env vars locally** in `.env`:
-   ```
-   TG_API_ID=1234567
-   TG_API_HASH=...
-   TG_PHONE=+14155551234
-   TG_CHANNEL=cryptoyeezuscalls
-   TG_SESSION_PATH=data/tg_session.session
-   ```
-3. **Run the login binary**:
-   ```
-   cargo run --bin tg_login
-   ```
-   Enter the SMS code (and 2FA password if applicable). On success a session file is written to `data/tg_session.session`.
-4. **For Railway deployment**: mount a volume at `/app/data` and copy the session file to it via SCP/Railway volume CLI. The main binary will reuse the session without re-login.
+Use the appropriate Google AI Studio/Gemini billing tier if higher throughput is needed.
 
-Tune execution with `SNIPE_AMOUNT_SOL`, `SNIPE_SLIPPAGE_BPS`, `SNIPE_PRIORITY_FEE_MICRO_LAMPORTS`, `SNIPE_EXIT_DELAY_MS`, `SNIPE_EXIT_PERCENT`. Switch the active strategy to "Telegram Call (Snipe)" in the dashboard to arm the sniper.
+## Cloudflare
 
-## License
+Cloudflare Containers are available on the Workers Paid plan. The singleton container is configured with a 24-hour idle timeout and a one-minute Cron Trigger that calls startAndWaitForPorts.
 
-MIT License - see LICENSE file for details.
+Container disk is ephemeral, so the process writes a compact JSON journal and can POST it to a Durable Object state endpoint using STATE_SYNC_URL + STATE_SYNC_SECRET.
+
+Deploy:
+npx wrangler login
+npx wrangler secret put MONAD_PRIVATE_KEY
+npx wrangler secret put GEMINI_API_KEYS
+npx wrangler secret put STATE_SYNC_SECRET
+npx wrangler secret put MONAD_RPC_URL
+npx wrangler secret put MONAD_WS_URL
+npx wrangler deploy
+
+The Worker class passes the secrets to the Container at startup.
+
+## Research basis
+
+Primary sources were the official Nad.fun V2 integration repository/API guide, the official Nad.fun TypeScript SDK repository, current Gemini API documentation, and current Cloudflare Containers documentation. Public meme-bot repositories were used as implementation references only; the rewrite intentionally does not implement wash-trading, stealth-volume or market-manipulation features.

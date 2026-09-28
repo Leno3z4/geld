@@ -6,7 +6,8 @@
   "workspaces": ["webapp"],
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "npm run build:web && tsc -p tsconfig.json",
+    "build": "npm run build:web && npm run build:app",
+    "build:app": "tsc -p tsconfig.json",
     "build:web": "npm --workspace webapp run build",
     "start": "node dist/src/index.js",
     "typecheck": "tsc --noEmit",
@@ -14,6 +15,7 @@
   },
   "dependencies": {
     "@google/genai": "latest",
+    "dotenv": "latest",
     "express": "latest",
     "viem": "latest",
     "zod": "latest"

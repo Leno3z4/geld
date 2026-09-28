@@ -11,6 +11,6 @@
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "worker.ts", "tests/**/*.ts"],
-  "exclude": ["webapp/node_modules", "webapp/dist", "node_modules", "dist"]
+  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["webapp/node_modules", "webapp/dist", "node_modules", "dist", "worker.ts"]
 }

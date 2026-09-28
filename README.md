@@ -1,6 +1,6 @@
 # geld — Monad / Nad.fun AI meme trading bot
 
-This branch fully replaces the old Solana/Rust application with a TypeScript/Node + React + Tailwind application built around Nad.fun V2 on Monad.
+This repository replaces the old Solana/Rust application with a TypeScript/Node + React + Tailwind application built around Nad.fun V2 on Monad.
 
 ## Architecture
 
@@ -18,9 +18,9 @@ This branch fully replaces the old Solana/Rust application with a TypeScript/Nod
 
 ## Old fork audit
 
-The original fork is Solana-specific: Solana RPC, Solana keypairs, Jupiter, Helius, Telegram and a large Rust trading stack. I inspected its repository metadata, local agent settings, CI, Dockerfile, wallet, web server/routes, Jupiter client and trading entrypoints. I did not find an obvious credential-exfiltration payload in those inspected files. A complete local dependency/binary audit was not possible because the environment could not clone external repositories directly.
+The original fork was Solana-specific: Solana RPC, Solana keypairs, Jupiter, Helius, Telegram and a large Rust trading stack. I inspected its repository metadata, local agent settings, CI, Dockerfile, wallet, web server/routes, Jupiter client and trading entrypoints. I did not find an obvious credential-exfiltration payload in those inspected files. A complete local dependency/binary audit was not possible because the environment could not clone external repositories directly.
 
-The rewrite branch removes the legacy runtime rather than carrying unknown old behavior into the Monad trader. The original master branch is untouched.
+The production master branch now contains the Monad rewrite. The legacy Solana runtime is not part of the active Node/React application path.
 
 ## Nad.fun V2 mainnet contracts used
 
@@ -64,6 +64,18 @@ GEMINI_API_KEYS accepts comma-separated current Gemini auth keys. The bot advanc
 This is a failure fallback, not a quota multiplier: Gemini documents that rate limits are project-scoped rather than API-key-scoped.
 
 Use the appropriate Google AI Studio/Gemini billing tier if higher throughput is needed.
+
+## Vercel Services
+
+The repository is configured for Vercel Services in the root vercel.json:
+
+- webapp is the public frontend service at /.
+- app is the API service exposed only through /api and /api/*.
+- The frontend uses same-origin browser requests (/api/state, /api/events, etc.), so no service binding is required.
+- The backend no longer serves webapp/dist; Vercel routes frontend traffic directly to the webapp service.
+- Run vercel dev from the repository root to exercise the multi-service routing locally.
+
+Important: the Express service is a Vercel Function/Fluid compute workload, not a guaranteed always-on 24/7 process. The trading engine's long-running event loop is still intended for the Cloudflare Container deployment described below. Vercel is appropriate for the dashboard and API surface, but should not be treated as the sole always-on trading-worker host.
 
 ## Cloudflare
 

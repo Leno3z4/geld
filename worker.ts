@@ -49,9 +49,6 @@ async function startContainer(env: Env) {
   await container.startAndWaitForPorts({
     startOptions: {
       envVars: containerEnv(env)
-    },
-    cancellationOptions: {
-      portReadyTimeoutMS: 30000
     }
   });
   return container;

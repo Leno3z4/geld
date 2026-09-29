@@ -26,28 +26,59 @@ export class StateStore {
   private state: BotState = initialState();
 
   async load() {
+    let local: BotState | null = null;
+
     try {
       const raw = await fs.readFile(config.stateFile, "utf8");
       const parsed = JSON.parse(raw) as BotState;
-      if (parsed?.version === 1) this.state = parsed;
+      if (parsed?.version === 1) local = parsed;
     } catch {}
+
+    if (local) this.state = local;
 
     if (config.stateSyncUrl) {
       try {
-        const r = await fetch(config.stateSyncUrl, { headers: { "x-geld-state-secret": config.stateSyncSecret } });
-        if (r.ok) {
-          const remote = await r.json() as BotState | null;
-          if (remote?.version === 1 && remote.equity.length >= this.state.equity.length) this.state = remote;
+        const response = await fetch(config.stateSyncUrl, {
+          headers: { "x-geld-state-secret": config.stateSyncSecret }
+        });
+
+        if (response.ok) {
+          const remote = await response.json() as BotState | null;
+
+          if (remote?.version === 1) {
+            const remoteAge = Math.max(
+              remote.stats.startedAt ?? 0,
+              remote.trades[0]?.ts ?? 0,
+              remote.equity.at(-1)?.ts ?? 0
+            );
+            const localAge = Math.max(
+              this.state.stats.startedAt ?? 0,
+              this.state.trades[0]?.ts ?? 0,
+              this.state.equity.at(-1)?.ts ?? 0
+            );
+
+            if (!local || remoteAge >= localAge) this.state = remote;
+          }
         }
       } catch {}
     }
   }
 
-  get() { return this.state; }
-  update(fn: (s: BotState) => void) { fn(this.state); }
+  get() {
+    return this.state;
+  }
 
-  upsertToken(token: TokenSnapshot) { this.state.tokens[token.token.toLowerCase()] = token; }
-  upsertPosition(position: Position) { this.state.positions[position.id] = position; }
+  update(fn: (s: BotState) => void) {
+    fn(this.state);
+  }
+
+  upsertToken(token: TokenSnapshot) {
+    this.state.tokens[token.token.toLowerCase()] = token;
+  }
+
+  upsertPosition(position: Position) {
+    this.state.positions[position.id] = position;
+  }
 
   addTrade(trade: TradeRecord) {
     this.state.trades.unshift(trade);
@@ -60,19 +91,28 @@ export class StateStore {
   }
 
   async save() {
-    await fs.mkdir(path.dirname(config.stateFile), { recursive: true });
-    await fs.writeFile(config.stateFile, JSON.stringify(this.state, null, 2));
+    const body = JSON.stringify(this.state, null, 2);
+
+    try {
+      await fs.mkdir(path.dirname(config.stateFile), { recursive: true });
+      await fs.writeFile(config.stateFile, body);
+    } catch {
+      // Container disk is disposable; remote state is the durable source of truth.
+    }
+
     if (config.stateSyncUrl) {
-      try {
-        await fetch(config.stateSyncUrl, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-geld-state-secret": config.stateSyncSecret
-          },
-          body: JSON.stringify(this.state)
-        });
-      } catch {}
+      const response = await fetch(config.stateSyncUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-geld-state-secret": config.stateSyncSecret
+        },
+        body
+      });
+
+      if (!response.ok) {
+        throw new Error("State sync failed: HTTP " + response.status);
+      }
     }
   }
 }

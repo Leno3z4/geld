@@ -23,20 +23,17 @@ Never paste your wallet private key into chat or commit it to git.
 
 Cloudflare Containers require the Workers Paid plan. The repo already contains the Container + Durable Object bindings and a `* * * * *` Cron Trigger.
 
-### 2. Login and deploy
+### 2. Login
 
 From the repository root:
 
 ```bash
 npx wrangler login
-npx wrangler deploy
 ```
-
-The first deploy establishes the Worker and its Container/Durable Object resources.
 
 ### 3. Add Worker secrets
 
-Use interactive prompts so secrets do not end up in shell history:
+Use interactive prompts so secrets do not end up in shell history. The repo declares the core secrets as required:
 
 ```bash
 npx wrangler secret put GELD_API_SECRET
@@ -55,9 +52,15 @@ npx wrangler secret put NADFUN_API_KEY
 
 `GEMINI_API_KEYS` is a comma-separated list of Gemini keys. Multiple keys are used for failure fallback; Gemini rate limits are project-scoped, so additional keys are not an automatic quota multiplier.
 
-### 4. Configure state sync
+### 4. Deploy and configure state sync
 
-After the first deploy, Cloudflare gives you a Worker URL such as:
+Deploy after the required secrets exist:
+
+```bash
+npx wrangler deploy
+```
+
+After deploy, Cloudflare gives you a Worker URL such as:
 
 ```
 https://geld.<your-subdomain>.workers.dev
@@ -76,7 +79,7 @@ and put this non-secret URL into the Worker's Variables:
 STATE_SYNC_URL=https://geld.<your-subdomain>.workers.dev/internal/state/singleton
 ```
 
-You can also put `STATE_SYNC_URL` in the `vars` object in `wrangler.jsonc` once you know the final Worker hostname.
+You can also put `STATE_SYNC_URL` in the `vars` object in `wrangler.jsonc` once you know the final Worker hostname, then redeploy.
 
 ### 5. Vercel environment variables
 

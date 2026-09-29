@@ -4,7 +4,19 @@
   "main": "worker.ts",
   "compatibility_date": "2026-09-29",
   "compatibility_flags": ["nodejs_compat"],
-  "vars": { "BOT_PORT": "8787" },
+  "vars": {
+    "BOT_PORT": "8787",
+    "GELD_LIVE_TRADING": "true",
+    "GELD_AUTO_START": "true"
+  },
+  "secrets": {
+    "required": [
+      "GELD_API_SECRET",
+      "MONAD_PRIVATE_KEY",
+      "GEMINI_API_KEYS",
+      "STATE_SYNC_SECRET"
+    ]
+  },
   "containers": [
     {
       "class_name": "GeldContainer",
@@ -23,5 +35,10 @@
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["GeldContainer", "GeldState"] }
   ],
-  "triggers": { "crons": ["* * * * *"] }
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+  "observability": {
+    "enabled": true
+  }
 }

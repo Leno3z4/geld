@@ -101,7 +101,7 @@ CLOUDFLARE_API_TOKEN
 CLOUDFLARE_ACCOUNT_ID
 ```
 
-Cloudflare's current GitHub Actions guidance uses the official `cloudflare/wrangler-action` and recommends storing the account ID and API token as CI secrets rather than in the repository. citeturn669779search0
+Cloudflare's current GitHub Actions guidance uses the official `cloudflare/wrangler-action` and recommends storing the account ID and API token as CI secrets rather than in the repository.
 
 ### 7. Verify the live worker
 

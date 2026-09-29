@@ -92,7 +92,18 @@ GELD_CLOUDFLARE_SECRET=<same value as Cloudflare GELD_API_SECRET>
 
 Do not put the wallet key or Gemini keys in Vercel. They belong on Cloudflare.
 
-### 6. Verify the live worker
+### 6. Optional GitHub auto-deploy
+
+The repo includes `.github/workflows/cloudflare-deploy.yml`. To make every push to `master` deploy the Worker + Container automatically, add these GitHub repository secrets:
+
+```
+CLOUDFLARE_API_TOKEN
+CLOUDFLARE_ACCOUNT_ID
+```
+
+Cloudflare's current GitHub Actions guidance uses the official `cloudflare/wrangler-action` and recommends storing the account ID and API token as CI secrets rather than in the repository. citeturn669779search0
+
+### 7. Verify the live worker
 
 From your terminal:
 

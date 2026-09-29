@@ -1,60 +1,34 @@
 import React from "react";
-import { createRoot, type ErrorInfo, type ReactNode } from "react";
-import Dashboard from "@/components/ui/dashboard-4";
+import { createRoot } from "react-dom/client";
 import "@/index.css";
 
-class DashboardErrorBoundary extends React.Component<
-  { children: ReactNode },
-  { error: Error | null }
-> {
-  state = { error: null as Error | null };
-
-  static getDerivedStateFromError(error: Error) {
-    return { error };
-  }
-
-  componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("GELD dashboard render error", error, info);
-  }
-
-  render() {
-    if (this.state.error) {
-      return (
-        <main className="min-h-screen bg-background p-6 text-foreground">
-          <div className="mx-auto max-w-3xl rounded-xl border border-red-900/60 bg-red-950/20 p-5">
-            <div className="text-xs uppercase tracking-[0.3em] text-red-400">
-              GELD // DASHBOARD ERROR
-            </div>
-            <h1 className="mt-2 text-xl font-semibold">Dashboard failed to render</h1>
-            <p className="mt-2 text-sm text-zinc-400">
-              The application is still running. Refresh after the next deployment or inspect the
-              browser console for the component error.
-            </p>
-            <pre className="mt-4 overflow-auto rounded-lg bg-black/40 p-3 text-xs text-red-300">
-              {this.state.error.message}
-            </pre>
+function App() {
+  return (
+    <main className="min-h-screen bg-background p-6 text-foreground">
+      <div className="mx-auto max-w-7xl">
+        <div className="text-xs tracking-[0.3em] text-lime-400">GELD // NAD.FUN</div>
+        <h1 className="mt-2 text-3xl font-bold">MONAD MEME TERMINAL</h1>
+        <p className="mt-2 text-sm text-zinc-400">
+          React is mounted successfully. Dashboard modules are temporarily isolated for production debugging.
+        </p>
+        <div className="mt-6 rounded-xl border border-zinc-800 bg-zinc-950/70 p-5">
+          <div className="text-sm font-semibold">Production shell online</div>
+          <div className="mt-2 text-xs text-zinc-500">
+            This confirms the Vite bundle, React entrypoint, Tailwind CSS, and root mount are working.
           </div>
-        </main>
-      );
-    }
-
-    return this.props.children;
-  }
+        </div>
+      </div>
+    </main>
+  );
 }
 
-createRoot(document.getElementById("root")!).render(
+const root = document.getElementById("root");
+if (!root) {
+  throw new Error("GELD: #root element is missing from index.html");
+}
+
+createRoot(root).render(
   <React.StrictMode>
-    <DashboardErrorBoundary>
-      <div className="min-h-screen bg-background p-4 text-foreground md:p-6">
-        <div className="mx-auto mb-5 max-w-7xl">
-          <div className="text-xs tracking-[.3em] text-lime-400">GELD // NAD.FUN</div>
-          <h1 className="mt-1 text-2xl font-bold">MONAD MEME TERMINAL</h1>
-          <p className="mt-1 text-xs text-zinc-500">
-            AI flow engine · seasonality · live execution telemetry
-          </p>
-        </div>
-        <Dashboard />
-      </div>
-    </DashboardErrorBoundary>
+    <App />
   </React.StrictMode>,
 );

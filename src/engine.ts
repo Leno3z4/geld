@@ -404,8 +404,8 @@ export class TradingEngine {
 
     try {
       let amountRaw: bigint;
-    let decimals = 18;
-    let tx = "PAPER";
+      let decimals = 18;
+      let tx = "PAPER";
 
     if (config.liveTrading) {
       if (!this.walletClient || !this.account) throw new Error("No live wallet");
@@ -457,8 +457,8 @@ export class TradingEngine {
       status: "OPEN"
     };
 
-    this.store.upsertPosition(position);
-    this.store.addTrade({
+      this.store.upsertPosition(position);
+      this.store.addTrade({
       id: "BUY:" + id,
       ts: Date.now(),
       action: "BUY",
@@ -469,7 +469,7 @@ export class TradingEngine {
       reason: "local=" + token.localScore + " ai BUY",
       score: token.localScore,
       aiConfidence: token.aiConfidence
-    });
+      });
       this.emit();
     } finally {
       this.reservedSpendMon = Math.max(0, this.reservedSpendMon - spend);

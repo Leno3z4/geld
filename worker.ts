@@ -61,7 +61,7 @@ export class GeldState extends DurableObject<Env> {
   async fetch(request: Request) {
     const secret = this.env.STATE_SYNC_SECRET;
 
-    if (secret && request.headers.get("x-geld-state-secret") !== secret) {
+    if (!secret || request.headers.get("x-geld-state-secret") !== secret) {
       return new Response("Unauthorized", { status: 401 });
     }
 

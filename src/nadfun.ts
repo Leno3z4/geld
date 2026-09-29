@@ -1,10 +1,11 @@
 import {
   createPublicClient,
   createWalletClient,
+  formatUnits,
+  parseAbi,
+  parseEther,
   http,
   webSocket,
-  parseAbi,
-  formatUnits,
   type Address,
   type Hex,
   defineChain
@@ -52,9 +53,11 @@ export const curveAbi = parseAbi([
 export function clients() {
   const publicClient = createPublicClient({ chain: MONAD, transport: http(config.rpcUrl) });
   const account = config.privateKey.startsWith("0x") && config.privateKey.length === 66
-    ? privateKeyToAccount(config.privateKey as any)
+    ? privateKeyToAccount(config.privateKey as Hex)
     : null;
-  const walletClient = account ? createWalletClient({ account, chain: MONAD, transport: http(config.rpcUrl) }) : null;
+  const walletClient = account
+    ? createWalletClient({ account, chain: MONAD, transport: http(config.rpcUrl) })
+    : null;
   return { publicClient, walletClient, account };
 }
 
@@ -68,8 +71,25 @@ export async function getBalance(publicClient: any, address: Address) {
   return Number(formatUnits(await publicClient.getBalance({ address }), 18));
 }
 
+export async function getTokenBalance(publicClient: any, token: Address, address: Address) {
+  return await publicClient.readContract({
+    address: token,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: [address]
+  }) as bigint;
+}
+
+export async function getTokenDecimals(publicClient: any, token: Address) {
+  return Number(await publicClient.readContract({
+    address: token,
+    abi: erc20Abi,
+    functionName: "decimals"
+  }));
+}
+
 export async function quoteBuy(publicClient: any, token: Address, amountMon: number) {
-  const amountIn = BigInt(Math.floor(amountMon * 1e18));
+  const amountIn = parseEther(amountMon.toFixed(18));
   const amountOut = await publicClient.readContract({
     address: ADDRESSES.ROUTER,
     abi: routerAbi,
@@ -93,9 +113,15 @@ export function minOut(amount: bigint, slippagePct: number) {
   return amount * (10000n - bps) / 10000n;
 }
 
-export async function buyNative(walletClient: any, token: Address, amountMon: number, slippagePct: number): Promise<Hex> {
+export async function buyNative(
+  walletClient: any,
+  publicClient: any,
+  token: Address,
+  amountMon: number,
+  slippagePct: number
+): Promise<Hex> {
   const account = walletClient.account;
-  const { amountIn, amountOut } = await quoteBuy(walletClient, token, amountMon);
+  const { amountIn, amountOut } = await quoteBuy(publicClient, token, amountMon);
   return walletClient.writeContract({
     account,
     chain: MONAD,
@@ -112,7 +138,13 @@ export async function buyNative(walletClient: any, token: Address, amountMon: nu
   });
 }
 
-export async function sellToNative(walletClient: any, publicClient: any, token: Address, amountRaw: bigint, slippagePct: number): Promise<Hex> {
+export async function sellToNative(
+  walletClient: any,
+  publicClient: any,
+  token: Address,
+  amountRaw: bigint,
+  slippagePct: number
+): Promise<Hex> {
   const account = walletClient.account;
   const allowance = await publicClient.readContract({
     address: token,

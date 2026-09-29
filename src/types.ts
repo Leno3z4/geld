@@ -27,6 +27,7 @@ export interface TokenSnapshot {
   peakPriceMon: number;
   localScore: number;
   lastCandidateAiAt?: number;
+  lastEnrichedAt?: number;
   aiAction?: DecisionAction;
   aiConfidence?: number;
   aiReason?: string;

@@ -3,19 +3,13 @@
   "name": "geld",
   "main": "worker.ts",
   "compatibility_date": "2026-09-29",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "vars": {
     "BOT_PORT": "8787",
     "GELD_LIVE_TRADING": "true",
     "GELD_AUTO_START": "true"
-  },
-  "secrets": {
-    "required": [
-      "GELD_API_SECRET",
-      "MONAD_PRIVATE_KEY",
-      "GEMINI_API_KEYS",
-      "STATE_SYNC_SECRET"
-    ]
   },
   "containers": [
     {
@@ -28,15 +22,29 @@
   ],
   "durable_objects": {
     "bindings": [
-      { "name": "GELD_CONTAINER", "class_name": "GeldContainer" },
-      { "name": "GELD_STATE", "class_name": "GeldState" }
+      {
+        "name": "GELD_CONTAINER",
+        "class_name": "GeldContainer"
+      },
+      {
+        "name": "GELD_STATE",
+        "class_name": "GeldState"
+      }
     ]
   },
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["GeldContainer", "GeldState"] }
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "GeldContainer",
+        "GeldState"
+      ]
+    }
   ],
   "triggers": {
-    "crons": ["* * * * *"]
+    "crons": [
+      "* * * * *"
+    ]
   },
   "observability": {
     "enabled": true

@@ -53,6 +53,7 @@ export class TradingEngine {
   private saveTimer?: NodeJS.Timeout;
   private lastBlock = 0n;
   private pendingCandidates = new Set<string>();
+  private reservedSpendMon = 0;
 
   constructor() {
     const c = clients();
@@ -394,11 +395,15 @@ export class TradingEngine {
     const perTrade = freeBalance * config.positionSizePct / 100;
     const maxExposure = Math.max(0, state.balanceMon * config.maxTotalExposurePct / 100);
     const capacity = Math.max(0, maxExposure - state.openExposureMon);
-    const spend = Math.min(perTrade, capacity, freeBalance) * aiSizePct;
+    const availableCapacity = Math.max(0, capacity - this.reservedSpendMon);
+    const spend = Math.min(perTrade, availableCapacity, freeBalance) * aiSizePct;
 
     if (spend <= 0.001) return;
 
-    let amountRaw: bigint;
+    this.reservedSpendMon += spend;
+
+    try {
+      let amountRaw: bigint;
     let decimals = 18;
     let tx = "PAPER";
 
@@ -465,7 +470,10 @@ export class TradingEngine {
       score: token.localScore,
       aiConfidence: token.aiConfidence
     });
-    this.emit();
+      this.emit();
+    } finally {
+      this.reservedSpendMon = Math.max(0, this.reservedSpendMon - spend);
+    }
   }
 
   private async managePositions() {

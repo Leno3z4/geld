@@ -31,5 +31,8 @@
         "service": "webapp"
       }
     }
+  ],
+  "alias": [
+    "geld-seven.vercel.app"
   ]
 }

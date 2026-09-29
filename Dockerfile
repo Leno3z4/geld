@@ -21,4 +21,4 @@ RUN adduser -D -u 10001 trader
 USER trader
 
 EXPOSE 8787
-CMD ["node", "dist/src/index.js"]
+CMD ["node", "dist/src/container.js"]

@@ -1,99 +1,150 @@
-# geld — Monad / Nad.fun AI meme trading bot
+# geld — MONAD / Nad.fun AI meme trading bot
 
-This repository replaces the old Solana/Rust application with a TypeScript/Node + React + Tailwind application built around Nad.fun V2 on Monad.
+geld is a TypeScript/Node + React system for autonomous meme-token trading on Monad/Nad.fun V2. The Vercel side is the dashboard/API proxy; the long-running trading engine runs in a Cloudflare Container.
 
-## Architecture
+## Current deployment shape
 
-- Monad mainnet, chain 143.
-- Nad.fun V2 lifecycle-aware router for native MON buys/sells.
-- Nad.fun V2 BondingCurve event stream with HTTP log polling fallback.
-- Optional Nad.fun API for token metadata and market enrichment.
-- Gemini Interactions API with strict structured JSON decisions.
-- Adaptive 168-bucket hour-of-week market-flow seasonality.
-- Local scoring before AI calls, so Gemini is not called for every event.
-- Aggressive sizing defaults that are configurable through environment variables.
-- React/Tailwind dashboard based on the supplied shadcn dashboard layout.
-- Cloudflare Container for the long-lived Node process and Cron Trigger to revive it.
-- Durable Object-backed state endpoint for restart-safe state synchronization.
+```
+Vercel browser
+   -> /api/*
+   -> Vercel Express proxy
+   -> Cloudflare Worker
+   -> singleton Cloudflare Container
+   -> Monad / Nad.fun V2
+```
 
-## Old fork audit
+The Worker uses a one-minute Cron Trigger to make sure the singleton container is started. The container itself runs the trading loop continuously and has a 24-hour idle timeout. The Cron expression is UTC.
 
-The original fork was Solana-specific: Solana RPC, Solana keypairs, Jupiter, Helius, Telegram and a large Rust trading stack. I inspected its repository metadata, local agent settings, CI, Dockerfile, wallet, web server/routes, Jupiter client and trading entrypoints. I did not find an obvious credential-exfiltration payload in those inspected files. A complete local dependency/binary audit was not possible because the environment could not clone external repositories directly.
+## Live environment setup
 
-The production master branch now contains the Monad rewrite. The legacy Solana runtime is not part of the active Node/React application path.
+Never paste your wallet private key into chat or commit it to git.
 
-## Nad.fun V2 mainnet contracts used
+### 1. Cloudflare plan
 
-- Chain: 143
-- WMON: 0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A
-- NadFunRouter: 0x8986C8fD44eb85294A725a7e61AF35E76bA26F91
-- BondingCurve: 0x9f3832732923252A21044F21eE6bd87F09514ae4
-- NadFunFactory: 0xA25b13127e63ddae6d0b35570FF3D39dBD621001
+Cloudflare Containers require the Workers Paid plan. The repo already contains the Container + Durable Object bindings and a `* * * * *` Cron Trigger.
 
-Re-verify official deployment docs before deploying after a protocol upgrade.
+### 2. Login and deploy
 
-## Run locally
+From the repository root:
 
-npm install
-cp .env.example .env
-edit .env
-npm run build
-npm start
-
-Dashboard: http://localhost:8787
-Tests: npm test
-
-## Live execution
-
-Set:
-LIVE_TRADING=true
-AUTO_START=true
-
-Then configure MONAD_PRIVATE_KEY, MONAD_RPC_URL, MONAD_WS_URL and GEMINI_API_KEYS.
-
-Use a dedicated hot wallet containing only the capital you intend to trade. Never commit the private key.
-
-Gemini is never given the private key and never signs transactions. It returns BUY/HOLD/SELL, confidence, suggested size fraction and invalidation text. The execution layer independently calculates quotes, slippage bounds, deadlines, approvals and signs the on-chain call.
-
-There is no guaranteed profit. With a small bankroll, gas, slippage and adverse price selection can dominate returns.
-
-## Gemini fallback behavior
-
-GEMINI_API_KEYS accepts comma-separated current Gemini auth keys. The bot advances to another key when the current key hits credential, transient or quota errors.
-
-This is a failure fallback, not a quota multiplier: Gemini documents that rate limits are project-scoped rather than API-key-scoped.
-
-Use the appropriate Google AI Studio/Gemini billing tier if higher throughput is needed.
-
-## Vercel Services
-
-The repository is configured for Vercel Services in the root vercel.json:
-
-- webapp is the public frontend service at /.
-- app is the API service exposed only through /api and /api/*.
-- The frontend uses same-origin browser requests (/api/state, /api/events, etc.), so no service binding is required.
-- The backend no longer serves webapp/dist; Vercel routes frontend traffic directly to the webapp service.
-- Run vercel dev from the repository root to exercise the multi-service routing locally.
-
-Important: the Express service is a Vercel Function/Fluid compute workload, not a guaranteed always-on 24/7 process. The trading engine's long-running event loop is still intended for the Cloudflare Container deployment described below. Vercel is appropriate for the dashboard and API surface, but should not be treated as the sole always-on trading-worker host.
-
-## Cloudflare
-
-Cloudflare Containers are available on the Workers Paid plan. The singleton container is configured with a 24-hour idle timeout and a one-minute Cron Trigger that calls startAndWaitForPorts.
-
-Container disk is ephemeral, so the process writes a compact JSON journal and can POST it to a Durable Object state endpoint using STATE_SYNC_URL + STATE_SYNC_SECRET.
-
-Deploy:
+```bash
 npx wrangler login
+npx wrangler deploy
+```
+
+The first deploy establishes the Worker and its Container/Durable Object resources.
+
+### 3. Add Worker secrets
+
+Use interactive prompts so secrets do not end up in shell history:
+
+```bash
+npx wrangler secret put GELD_API_SECRET
 npx wrangler secret put MONAD_PRIVATE_KEY
 npx wrangler secret put GEMINI_API_KEYS
 npx wrangler secret put STATE_SYNC_SECRET
+```
+
+Optional:
+
+```bash
 npx wrangler secret put MONAD_RPC_URL
 npx wrangler secret put MONAD_WS_URL
+npx wrangler secret put NADFUN_API_KEY
+```
+
+`GEMINI_API_KEYS` is a comma-separated list of Gemini keys. Multiple keys are used for failure fallback; Gemini rate limits are project-scoped, so additional keys are not an automatic quota multiplier.
+
+### 4. Configure state sync
+
+After the first deploy, Cloudflare gives you a Worker URL such as:
+
+```
+https://geld.<your-subdomain>.workers.dev
+```
+
+Set:
+
+```
+npx wrangler secret put STATE_SYNC_SECRET
 npx wrangler deploy
+```
 
-The Worker class passes the secrets to the Container at startup.
+and put this non-secret URL into the Worker's Variables:
 
-## Research basis
+```
+STATE_SYNC_URL=https://geld.<your-subdomain>.workers.dev/internal/state/singleton
+```
 
-Primary sources were the official Nad.fun V2 integration repository/API guide, the official Nad.fun TypeScript SDK repository, current Gemini API documentation, and current Cloudflare Containers documentation. Public meme-bot repositories were used as implementation references only; the rewrite intentionally does not implement wash-trading, stealth-volume or market-manipulation features.
+You can also put `STATE_SYNC_URL` in the `vars` object in `wrangler.jsonc` once you know the final Worker hostname.
+
+### 5. Vercel environment variables
+
+In the Vercel project `geld`, add these variables for Production:
+
+```
+GELD_CLOUDFLARE_URL=https://geld.<your-subdomain>.workers.dev
+GELD_CLOUDFLARE_SECRET=<same value as Cloudflare GELD_API_SECRET>
+```
+
+Do not put the wallet key or Gemini keys in Vercel. They belong on Cloudflare.
+
+### 6. Verify the live worker
+
+From your terminal:
+
+```bash
+curl -H "x-geld-api-secret: YOUR_GELD_API_SECRET" \
+  https://geld.<your-subdomain>.workers.dev/api/health
+```
+
+You want:
+
+```json
+{
+  "ok": true,
+  "running": true,
+  "liveTrading": true,
+  "chainId": 143
+}
+```
+
+For Cron/runtime logs:
+
+```bash
+npx wrangler tail geld
+```
+
+Watch for `geld container started`, followed by engine events / state updates. The Cron schedule is every minute in UTC.
+
+## Live trading configuration
+
+The current high-aggression defaults are:
+
+- 24% of current free balance per planned trade
+- 90% max portfolio exposure
+- up to 5 open positions
+- 0.58 minimum AI confidence
+- 6% quote slippage
+- 30% hard stop
+- 70% take profit
+- 20% trailing stop
+- 240-minute maximum hold
+- 800ms event polling fallback
+- 2.2s position management loop
+- 30s AI position review
+- candidates can be evaluated for 180 seconds after creation
+
+These settings are intentionally aggressive and can lose capital quickly. There is no guaranteed profit.
+
+## Vercel production promotion
+
+The GitHub -> Vercel integration for this project is currently staging the newer master deployments rather than automatically moving `geld-seven.vercel.app` to production. Promote the verified deployment to Production in Vercel before treating the dashboard as live.
+
+## Security model
+
+The Gemini layer only proposes BUY/HOLD/SELL decisions. It never receives the private key and never signs transactions. The execution layer gets the AI decision, re-quotes on-chain, applies slippage/deadline parameters, and signs the actual transaction.
+
+The API proxy requires a separate shared secret before forwarding requests to the Cloudflare Worker. State sync uses its own secret.
+
+Re-verify Nad.fun contract addresses/ABIs against the official integration docs after protocol upgrades.

@@ -87,7 +87,8 @@ export function shouldOpen(
   token: TokenSnapshot,
   confidence: number,
   minScore: number,
-  candidateMaxAgeSeconds: number
+  candidateMaxAgeSeconds: number,
+  minConfidence: number
 ) {
   const ageSeconds = (Date.now() - token.createdAt) / 1000;
   return (
@@ -95,7 +96,7 @@ export function shouldOpen(
     !token.locked &&
     ageSeconds <= candidateMaxAgeSeconds &&
     token.localScore >= minScore &&
-    confidence >= 0.62
+    confidence >= minConfidence
   );
 }
 

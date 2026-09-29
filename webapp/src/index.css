@@ -1,1 +1,45 @@
-@import "tailwindcss";@theme{--color-background:oklch(.08 0 0);--color-foreground:oklch(.96 0 0);--color-card:oklch(.11 0 0);--color-card-foreground:oklch(.96 0 0);--color-muted:oklch(.17 0 0);--color-muted-foreground:oklch(.64 0 0);--color-border:oklch(.24 0 0);--color-primary:oklch(.82 .18 145);--color-primary-foreground:oklch(.12 0 0);--color-destructive:oklch(.58 .22 25);--color-accent:oklch(.17 0 0);--color-accent-foreground:oklch(.96 0 0)}:root{color-scheme:dark}body{margin:0;min-width:320px;background:radial-gradient(circle at top right,#11200b 0,#050505 34%);color:#f4f4f5}*{box-sizing:border-box}
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@theme {
+  --color-background: oklch(.08 0 0);
+  --color-foreground: oklch(.96 0 0);
+  --color-card: oklch(.11 0 0);
+  --color-card-foreground: oklch(.96 0 0);
+  --color-muted: oklch(.17 0 0);
+  --color-muted-foreground: oklch(.64 0 0);
+  --color-border: oklch(.24 0 0);
+  --color-primary: oklch(.82 .18 145);
+  --color-primary-foreground: oklch(.12 0 0);
+  --color-destructive: oklch(.58 .22 25);
+  --color-accent: oklch(.17 0 0);
+  --color-accent-foreground: oklch(.96 0 0);
+}
+
+:root {
+  color-scheme: dark;
+  --chart-1: oklch(0.32 0 0);
+  --chart-2: oklch(0.88 0 0);
+  --chart-3: oklch(0.55 0 0);
+  --chart-4: oklch(0.15 0 0);
+  --chart-5: oklch(0.72 0 0);
+}
+
+.dark {
+  --chart-1: oklch(0.75 0 0);
+  --chart-2: oklch(0.45 0 0);
+  --chart-3: oklch(0.6 0 0);
+  --chart-4: oklch(0.9 0 0);
+  --chart-5: oklch(0.35 0 0);
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: radial-gradient(circle at top right, #11200b 0, #050505 34%);
+  color: #f4f4f5;
+}
+
+* {
+  box-sizing: border-box;
+}

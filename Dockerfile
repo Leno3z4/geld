@@ -17,7 +17,7 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/dist ./dist
 
-RUN adduser -D -u 10001 trader
+RUN mkdir -p /app/data && adduser -D -u 10001 trader && chown -R trader:trader /app
 USER trader
 
 EXPOSE 8787

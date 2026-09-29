@@ -46,7 +46,7 @@ async function proxy(req: any, res: any) {
     const remote = await fetch(target, {
       method: req.method,
       headers,
-      body,
+      body: body as any,
       redirect: "manual"
     });
 

@@ -10,7 +10,9 @@ function getBackendUrl() {
 function copyRequestBody(req: express.Request) {
   return new Promise<Buffer>((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer | string) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    req.on("data", (chunk: Buffer | string) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
@@ -26,7 +28,13 @@ export function createProxyApp(existingApp?: Express) {
 
       const headers = new Headers();
       for (const [key, value] of Object.entries(req.headers)) {
-        if (value == null || key === "host" || key === "content-length" || key === "connection") continue;
+        if (
+          value == null ||
+          key === "host" ||
+          key === "content-length" ||
+          key === "connection"
+        ) continue;
+
         headers.set(key, Array.isArray(value) ? value.join(",") : value);
       }
 
@@ -34,7 +42,11 @@ export function createProxyApp(existingApp?: Express) {
       if (!secret) throw new Error("GELD_CLOUDFLARE_SECRET is not configured");
       headers.set("x-geld-api-secret", secret);
 
-      const body = req.method === "GET" || req.method === "HEAD" ? undefined : await copyRequestBody(req);
+      const body =
+        req.method === "GET" || req.method === "HEAD"
+          ? undefined
+          : await copyRequestBody(req);
+
       const remote = await fetch(target, {
         method: req.method,
         headers,
@@ -43,8 +55,13 @@ export function createProxyApp(existingApp?: Express) {
       });
 
       res.status(remote.status);
+
       remote.headers.forEach((value, key) => {
-        if (key !== "content-length" && key !== "connection" && key !== "transfer-encoding") {
+        if (
+          key !== "content-length" &&
+          key !== "connection" &&
+          key !== "transfer-encoding"
+        ) {
           res.setHeader(key, value);
         }
       });
@@ -65,12 +82,20 @@ export function createProxyApp(existingApp?: Express) {
   });
 
   app.get("/health", (_req, res) => {
-    res.json({ ok: true, service: "geld-vercel-proxy", backendConfigured: Boolean(process.env.GELD_CLOUDFLARE_URL) });
+    res.json({
+      ok: true,
+      service: "geld-vercel-proxy",
+      backendConfigured: Boolean(process.env.GELD_CLOUDFLARE_URL)
+    });
   });
 
   return app;
 }
 
 const app = createProxyApp();
-app.listen(process.env.PORT ? Number(process.env.PORT) : 8787, "0.0.0.0");
+
+if (process.env.VERCEL !== "1") {
+  app.listen(process.env.PORT ? Number(process.env.PORT) : 8787, "0.0.0.0");
+}
+
 export default app;

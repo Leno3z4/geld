@@ -6,6 +6,11 @@ export interface TokenSnapshot {
   name: string;
   creator: string;
   pair: string;
+  quoteToken?: string;
+  createdBlock?: string;
+  virtualTokenStart?: string;
+  virtualTokenReserve?: string;
+  minTokenReserve?: string;
   createdAt: number;
   lastEventAt: number;
   buys: number;
@@ -21,6 +26,7 @@ export interface TokenSnapshot {
   priceMon: number;
   peakPriceMon: number;
   localScore: number;
+  lastCandidateAiAt?: number;
   aiAction?: DecisionAction;
   aiConfidence?: number;
   aiReason?: string;

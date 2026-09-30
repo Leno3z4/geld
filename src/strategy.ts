@@ -192,6 +192,8 @@ export function updateMarketMetrics(token: TokenSnapshot) {
   const metrics = historyMetrics(token);
   const flow = flowMetrics(token);
   token.dipPct = metrics.dipPct;
+  token.drawdownFromRecentPeakPct = metrics.drawdownFromRecentPeakPct;
+  token.drawdownFromAthPct = metrics.drawdownFromAthPct;
   token.trendPct1h = metrics.trend1hPct;
   token.trendPct4h = metrics.trend4hPct;
   token.reboundPct1h = metrics.rebound1hPct;
@@ -401,6 +403,7 @@ export function shouldOpen(
     {
       minEstablishedAgeMinutes,
       minLiquidityUsd,
+      minMarketCapUsd,
       minHolders,
       minVolumeMon,
       dipMinPct,

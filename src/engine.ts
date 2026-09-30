@@ -106,6 +106,46 @@ export class TradingEngine {
     await this.persist();
   }
 
+  async startScheduled() {
+    assertLiveConfig();
+
+    if (!this.store.get().running) {
+      this.store.update((s) => {
+        s.running = true;
+        s.stats.startedAt ??= Date.now();
+      });
+      this.emit();
+    }
+
+    await this.runScheduledCycle();
+  }
+
+  async runScheduledCycle() {
+    if (!this.store.get().running) return;
+
+    assertLiveConfig();
+
+    const persistedBlock = this.store.get().stats.lastProcessedBlock;
+    if (this.lastBlock === 0n && persistedBlock) {
+      this.lastBlock = BigInt(persistedBlock);
+    }
+
+    if (this.lastBlock === 0n) {
+      this.lastBlock = await this.publicClient.getBlockNumber();
+    }
+
+    await this.pollLogs();
+    await this.managePositions();
+    await this.reviewOpenPositions();
+
+    this.store.update((s) => {
+      s.stats.lastCycleAt = Date.now();
+      s.stats.lastProcessedBlock = this.lastBlock.toString();
+    });
+
+    await this.persist();
+  }
+
   async stop() {
     this.store.update((s) => {
       s.running = false;
@@ -133,6 +173,7 @@ export class TradingEngine {
     for (const position of Object.values(this.store.get().positions).filter((p) => p.status === "OPEN")) {
       await this.closePosition(position, "MANUAL_SELL_ALL");
     }
+    await this.persist();
   }
 
   private async startEventSource() {
@@ -168,6 +209,9 @@ export class TradingEngine {
 
       for (const log of logs) await this.handleLog(log);
       this.lastBlock = to;
+      this.store.update((s) => {
+        s.stats.lastProcessedBlock = this.lastBlock.toString();
+      });
     } catch (error) {
       this.store.update((s) => {
         s.stats.lastError = error instanceof Error ? error.message : String(error);

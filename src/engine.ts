@@ -204,6 +204,14 @@ export class TradingEngine {
         const liquidityMon = reserveNative > 0 ? reserveNative / 1e18 : 0;
         const volumeMonRaw = numeric(market.volume);
         const volumeMon = volumeMonRaw > 0 ? volumeMonRaw / 1e18 : 0;
+        const marketPriceMon = numeric(market.price_native ?? market.price_mon ?? market.token_price);
+        const marketPriceUsd = numeric(market.price_usd);
+        const impliedMonUsd = marketPriceMon > 0 && marketPriceUsd > 0
+          ? marketPriceUsd / marketPriceMon
+          : 0;
+        const liquidityUsd = liquidityMon > 0 && impliedMonUsd > 0
+          ? liquidityMon * impliedMonUsd
+          : 0;
         const holders = Math.max(0, Math.floor(numeric(market.holder_count ?? market.holders)));
         const graduated = boolish(info.is_graduated, market.market_type === "DEX");
 
@@ -234,7 +242,9 @@ export class TradingEngine {
           priceUsd: 0,
           priceMon: 0,
           peakPriceMon: 0,
-          localScore: 0
+          localScore: 0,
+          liquidityUsd: 0,
+          monUsdPrice: 0
         };
 
         if (createdAt > 0) token.createdAt = createdAt;
@@ -245,6 +255,8 @@ export class TradingEngine {
         token.locked = boolish(info.is_locked, boolish(market.is_locked, token.locked));
         token.marketType = market.market_type === "DEX" || graduated ? "DEX" : "BONDING_CURVE";
         token.liquidityMon = liquidityMon || token.liquidityMon || 0;
+        token.monUsdPrice = impliedMonUsd || token.monUsdPrice || 0;
+        token.liquidityUsd = liquidityUsd || token.liquidityUsd || 0;
         token.volumeMon = volumeMon || token.volumeMon || 0;
         token.holders = holders || token.holders || 0;
         token.changePct = numeric(row?.percent ?? market.percent ?? token.changePct);
@@ -271,7 +283,7 @@ export class TradingEngine {
 
         const watchable = shouldWatch(
           token,
-          config.minLiquidityMon,
+          config.minLiquidityUsd,
           config.minHolders,
           config.minVolumeMon
         );
@@ -281,7 +293,7 @@ export class TradingEngine {
         const hasRecovery = (token.trendPct1h ?? 0) > -8 && (token.dipPct ?? 0) <= config.dipMaxPct;
 
         if (!watchable) {
-          token.watchReason = "Watching: below established liquidity/holder/volume floor";
+          token.watchReason = "Watching: below $100k MON-side liquidity / holder / volume floor";
         } else if (age < config.minEstablishedAgeMinutes) {
           token.watchReason = "Watching: too new; launch buys are disabled";
         } else if (!isDip) {
@@ -622,6 +634,15 @@ export class TradingEngine {
       const reserveToken = numeric(payload.market_info?.reserve_token);
       if (reserveNative > 0) token.liquidityMon = reserveNative / 1e18;
       if (reserveToken > 0 && reserveNative > 0) token.priceMon = reserveNative / reserveToken;
+
+      const impliedMonUsd =
+        token.priceMon > 0 && token.priceUsd > 0
+          ? token.priceUsd / token.priceMon
+          : 0;
+      if (impliedMonUsd > 0) token.monUsdPrice = impliedMonUsd;
+      if ((token.liquidityMon ?? 0) > 0 && (token.monUsdPrice ?? 0) > 0) {
+        token.liquidityUsd = token.liquidityMon! * token.monUsdPrice!;
+      }
       token.volumeMon = Number.isFinite(Number(payload.market_info?.volume))
         ? Number(payload.market_info?.volume) / 1e18
         : token.volumeMon;
@@ -728,7 +749,9 @@ export class TradingEngine {
     const ageMinutes = (Date.now() - token.createdAt) / 60000;
     if (
       config.establishedOnly &&
-      (!token.graduated || ageMinutes < config.minEstablishedAgeMinutes)
+      (!token.graduated ||
+        ageMinutes < config.minEstablishedAgeMinutes ||
+        (token.liquidityUsd ?? 0) < config.minLiquidityUsd)
     ) {
       return;
     }

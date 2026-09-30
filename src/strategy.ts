@@ -9,7 +9,11 @@ export function hourOfWeek(ts = Date.now()) {
   return d.getUTCDay() * 24 + d.getUTCHours();
 }
 
-export interface MarketBucket { buyMon: number; sellMon: number; events: number; }
+export interface MarketBucket {
+  buyMon: number;
+  sellMon: number;
+  events: number;
+}
 
 export class SeasonalityModel {
   private buckets = new Map<number, MarketBucket>();
@@ -59,42 +63,131 @@ export function curveProgressPct(token: TokenSnapshot) {
   return clamp(token.progressPct, 0, 100);
 }
 
+function ageMinutes(token: TokenSnapshot) {
+  return Math.max(0, (Date.now() - token.createdAt) / 60000);
+}
+
+function historyMetrics(token: TokenSnapshot) {
+  const history = (token.priceHistory ?? [])
+    .filter((x) => Number.isFinite(x.priceMon) && x.priceMon > 0)
+    .sort((a, b) => a.ts - b.ts);
+
+  if (!history.length || !(token.priceMon > 0)) {
+    return { peak4h: token.priceMon, dipPct: 0, trend1hPct: 0, trend4hPct: 0, rebound1hPct: 0 };
+  }
+
+  const now = Date.now();
+  const oneHourAgo = now - 60 * 60 * 1000;
+  const fourHoursAgo = now - 4 * 60 * 60 * 1000;
+  const recent = history.filter((x) => x.ts >= oneHourAgo);
+  const fourHour = history.filter((x) => x.ts >= fourHoursAgo);
+
+  const peak4h = Math.max(token.priceMon, ...fourHour.map((x) => x.priceMon));
+  const dipPct = peak4h > 0 ? Math.max(0, (1 - token.priceMon / peak4h) * 100) : 0;
+
+  const nearest = (samples: typeof history, target: number) =>
+    samples.reduce((best, x) =>
+      Math.abs(x.ts - target) < Math.abs(best.ts - target) ? x : best
+    );
+
+  const oneHourBase = history.find((x) => x.ts <= oneHourAgo) ?? (recent[0] ? nearest(recent, oneHourAgo) : history[0]);
+  const fourHourBase = history.find((x) => x.ts <= fourHoursAgo) ?? (fourHour[0] ? nearest(fourHour, fourHoursAgo) : history[0]);
+
+  const trend1hPct = oneHourBase?.priceMon > 0
+    ? (token.priceMon / oneHourBase.priceMon - 1) * 100
+    : 0;
+  const trend4hPct = fourHourBase?.priceMon > 0
+    ? (token.priceMon / fourHourBase.priceMon - 1) * 100
+    : 0;
+
+  const oneHourLow = Math.min(token.priceMon, ...recent.map((x) => x.priceMon));
+  const rebound1hPct = oneHourLow > 0
+    ? (token.priceMon / oneHourLow - 1) * 100
+    : 0;
+
+  return { peak4h, dipPct, trend1hPct, trend4hPct, rebound1hPct };
+}
+
 export function scoreToken(token: TokenSnapshot, seasonality: SeasonalityModel) {
-  const age = Math.max(0, (Date.now() - token.createdAt) / 1000);
-  const freshness = age <= 15 ? 20 : age <= 45 ? 17 : age <= 90 ? 12 : age <= 180 ? 6 : 0;
+  const age = ageMinutes(token);
+  const liquidity = token.liquidityMon ?? 0;
+  const holders = token.holders ?? 0;
+  const volume = token.volumeMon ?? 0;
+  const change = token.changePct ?? 0;
+  const metrics = historyMetrics(token);
 
-  const flowDenom = token.buyMon + token.sellMon;
-  const flow = flowDenom ? (token.buyMon - token.sellMon) / flowDenom : 0;
-  const flowScore = clamp(24 + flow * 26, 0, 50) * 0.60;
+  const liquidityScore = clamp(Math.log10(Math.max(1, liquidity)) * 28, 0, 30);
+  const holderScore = clamp(Math.log10(Math.max(1, holders)) * 18, 0, 20);
+  const volumeScore = clamp(Math.log10(Math.max(1, volume)) * 14, 0, 20);
 
-  const tx = token.buys + token.sells;
-  const buyRate = tx / Math.max(1, age / 60);
-  const velocity = clamp(buyRate * 1.4, 0, 16);
+  // Favor established tokens with a healthy longer-term trend, not fresh launches.
+  const momentumScore = clamp(10 + change * 0.35 + metrics.trend4hPct * 0.45, 0, 15);
 
-  const p = curveProgressPct(token);
-  const curveStage = p < 2 ? 2 : p < 15 ? 10 : p < 40 ? 15 : p < 70 ? 10 : p < 92 ? 5 : -6;
-  const liquidity = clamp(Math.log10(Math.max(1, token.buyMon + token.sellMon)) * 3.2, 0, 10);
-  const lifecycle = token.graduated ? -20 : token.locked ? -30 : 0;
+  // Reward a real pullback, especially inside the aggressive 8-35% dip band.
+  const dip = metrics.dipPct;
+  const dipScore =
+    dip < 4 ? 0 :
+    dip < 8 ? 5 :
+    dip <= 18 ? 15 :
+    dip <= 28 ? 20 :
+    dip <= 35 ? 14 :
+    4;
+
+  // A small rebound is preferable to catching a straight falling knife.
+  const reboundScore = clamp(metrics.rebound1hPct * 2.5, 0, 10);
+  const seasonalityAdjustment = seasonality.adjustment();
 
   return Math.round(clamp(
-    freshness + flowScore + velocity + curveStage + liquidity + seasonality.adjustment() + lifecycle,
+    liquidityScore +
+    holderScore +
+    volumeScore +
+    momentumScore +
+    dipScore +
+    reboundScore +
+    seasonalityAdjustment,
     0,
     100
   ));
+}
+
+export function shouldWatch(token: TokenSnapshot, minLiquidityMon: number, minHolders: number, minVolumeMon: number) {
+  return (
+    token.graduated &&
+    !token.locked &&
+    (token.liquidityMon ?? 0) >= minLiquidityMon &&
+    (token.holders ?? 0) >= minHolders &&
+    (token.volumeMon ?? 0) >= minVolumeMon
+  );
 }
 
 export function shouldOpen(
   token: TokenSnapshot,
   confidence: number,
   minScore: number,
-  candidateMaxAgeSeconds: number,
-  minConfidence: number
+  minConfidence: number,
+  minEstablishedAgeMinutes: number,
+  minLiquidityMon: number,
+  minHolders: number,
+  minVolumeMon: number,
+  dipMinPct: number,
+  dipMaxPct: number,
+  recoveryMinPct: number,
+  trendMax1hPct: number
 ) {
-  const ageSeconds = (Date.now() - token.createdAt) / 1000;
+  const age = ageMinutes(token);
+  const metrics = historyMetrics(token);
+
   return (
-    !token.graduated &&
+    token.graduated &&
     !token.locked &&
-    ageSeconds <= candidateMaxAgeSeconds &&
+    age >= minEstablishedAgeMinutes &&
+    (token.liquidityMon ?? 0) >= minLiquidityMon &&
+    (token.holders ?? 0) >= minHolders &&
+    (token.volumeMon ?? 0) >= minVolumeMon &&
+    metrics.dipPct >= dipMinPct &&
+    metrics.dipPct <= dipMaxPct &&
+    metrics.rebound1hPct >= recoveryMinPct &&
+    metrics.trend1hPct <= trendMax1hPct &&
     token.localScore >= minScore &&
     confidence >= minConfidence
   );

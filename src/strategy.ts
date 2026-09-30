@@ -91,9 +91,9 @@ function ageMinutes(token: TokenSnapshot) {
 function historyMetrics(token: TokenSnapshot) {
   const history = (token.priceHistory ?? [])
     .filter((x) => Number.isFinite(x.priceMon) && x.priceMon > 0)
-    .sort((a, b) => a.ts - b.ts);
+    .sort((x, y) => x.ts - y.ts);
 
-  if (!history.length || !(token.priceMon > 0)) {
+  if (!(token.priceMon > 0)) {
     return { peak4h: token.priceMon, dipPct: 0, trend1hPct: 0, trend4hPct: 0, rebound1hPct: 0 };
   }
 
@@ -103,65 +103,40 @@ function historyMetrics(token: TokenSnapshot) {
   const recent = history.filter((x) => x.ts >= oneHourAgo);
   const fourHour = history.filter((x) => x.ts >= fourHoursAgo);
 
-  const peak4h = Math.max(token.priceMon, ...fourHour.map((x) => x.priceMon));
-  const dipPct = peak4h > 0 ? Math.max(0, (1 - token.priceMon / peak4h) * 100) : 0;
+  const observedPeak4h = Math.max(token.priceMon, ...fourHour.map((x) => x.priceMon));
+  const observedDipPct = observedPeak4h > 0
+    ? Math.max(0, (1 - token.priceMon / observedPeak4h) * 100)
+    : 0;
 
-  const nearest = (samples: typeof history, target: number) =>
-    samples.reduce((best, x) =>
-      Math.abs(x.ts - target) < Math.abs(best.ts - target) ? x : best
-    );
+  const oneHourBase = history.find((x) => x.ts <= oneHourAgo);
+  const fourHourBase = history.find((x) => x.ts <= fourHoursAgo);
 
-  const oneHourBase = history.find((x) => x.ts <= oneHourAgo) ?? (recent[0] ? nearest(recent, oneHourAgo) : history[0]);
-  const fourHourBase = history.find((x) => x.ts <= fourHoursAgo) ?? (fourHour[0] ? nearest(fourHour, fourHoursAgo) : history[0]);
+  // Never relabel a short warm-up window as "1h" or "4h" history.
+  // Established tokens can enter after launch, so use the market snapshot
+  // change as a conservative fallback until enough local samples exist.
+  const marketChangePct = Number.isFinite(token.changePct) ? token.changePct! : 0;
+  const fallbackPullbackPct = marketChangePct < 0 ? Math.min(50, -marketChangePct) : 0;
 
   const trend1hPct = oneHourBase?.priceMon > 0
     ? (token.priceMon / oneHourBase.priceMon - 1) * 100
-    : 0;
+    : marketChangePct;
   const trend4hPct = fourHourBase?.priceMon > 0
     ? (token.priceMon / fourHourBase.priceMon - 1) * 100
-    : 0;
+    : marketChangePct;
 
-  const oneHourLow = Math.min(token.priceMon, ...recent.map((x) => x.priceMon));
+  const oneHourLow = recent.length
+    ? Math.min(token.priceMon, ...recent.map((x) => x.priceMon))
+    : token.priceMon;
   const rebound1hPct = oneHourLow > 0
     ? (token.priceMon / oneHourLow - 1) * 100
     : 0;
 
-  return { peak4h, dipPct, trend1hPct, trend4hPct, rebound1hPct };
-}
-
-function flowMetrics(token: TokenSnapshot) {
-  const now = Date.now();
-  const history = (token.flowHistory ?? [])
-    .filter((x) => x.ts > now - 10 * 60 * 1000)
-    .sort((a, b) => a.ts - b.ts);
-
-  const recent = history.filter((x) => x.ts > now - 5 * 60 * 1000);
-  const previous = history.filter((x) => x.ts <= now - 5 * 60 * 1000);
-
-  const sum = (items: typeof history) => items.reduce(
-    (acc, x) => ({
-      buy: acc.buy + Math.max(0, x.buyMon),
-      sell: acc.sell + Math.max(0, x.sellMon)
-    }),
-    { buy: 0, sell: 0 }
-  );
-
-  const recentSum = sum(recent);
-  const previousSum = sum(previous);
-  const volume5mMon = recentSum.buy + recentSum.sell;
-  const volumePrev5mMon = previousSum.buy + previousSum.sell;
-  const buySellRatio5m = volume5mMon > 0
-    ? recentSum.buy / Math.max(0.01, recentSum.sell)
-    : 0;
-  const volumeAcceleration5m = volumePrev5mMon > 0
-    ? volume5mMon / volumePrev5mMon
-    : volume5mMon > 0 ? 2 : 0;
-
   return {
-    buySellRatio5m,
-    volume5mMon,
-    volumePrev5mMon,
-    volumeAcceleration5m
+    peak4h: observedPeak4h,
+    dipPct: Math.max(observedDipPct, fallbackPullbackPct),
+    trend1hPct,
+    trend4hPct,
+    rebound1hPct
   };
 }
 

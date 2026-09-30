@@ -128,7 +128,7 @@ function historyMetrics(token: TokenSnapshot) {
 
   // Never relabel a short warm-up window as "1h" or "4h" history.
   // Established tokens can enter after launch, so use the market snapshot
-  // change as a conservative fallback until enough local samples exist.
+  // change only for trend fallback; do not manufacture a dip without observed history.
   const marketChangePct = Number.isFinite(token.changePct) ? token.changePct! : 0;
 
   const trend1hPct = oneHourBase && oneHourBase.priceMon > 0
@@ -149,7 +149,7 @@ function historyMetrics(token: TokenSnapshot) {
     peak4h: observedPeak4h,
     // Keep the current/setup dip separate from all-time drawdown. An old ATH
     // must not be mistaken for a fresh entry signal.
-    dipPct: oneHourBase ? observedDipPct : fallbackPullbackPct,
+    dipPct: observedDipPct,
     drawdownFromRecentPeakPct: observedDipPct,
     drawdownFromAthPct,
     trend1hPct,

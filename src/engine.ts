@@ -126,9 +126,6 @@ export class TradingEngine {
     assertLiveConfig();
 
     const persistedBlock = this.store.get().stats.lastProcessedBlock;
-    if (this.lastBlock === 0n && persistedBlock) {
-      this.lastBlock = BigInt(persistedBlock);
-    }
 
     if (this.lastBlock === 0n) {
       const latest = await this.publicClient.getBlockNumber();
@@ -247,7 +244,6 @@ export class TradingEngine {
       }
 
       this.store.update((s) => {
-        s.stats.eventCount = s.stats.eventCount;
         s.stats.lastProcessedBlock = this.lastBlock.toString();
         s.stats.lastLogCount = totalLogs;
         s.stats.lastLogPollAt = Date.now();

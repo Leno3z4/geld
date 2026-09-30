@@ -1,16 +1,19 @@
  # geld — MONAD / Nad.fun AI meme trading bot  
 
-geld is a TypeScript/Node + React system for autonomous meme-token trading on Monad/Nad.fun V2. The Vercel side is the dashboard/API proxy; the long-running trading engine runs in a Cloudflare Container.
+geld is a TypeScript/Node + React system for autonomous meme-token trading on Monad/Nad.fun V2. The dashboard is hosted on Vercel, while the trading API and long-running engine run on Cloudflare. Read-only dashboard telemetry comes directly from the Cloudflare Worker. Protected operator actions still use the Vercel proxy so the API secret never ships to the browser.
 
 ## Current deployment shape
 
 ```
 Vercel browser
-   -> /api/*
-   -> Vercel Express proxy
-   -> Cloudflare Worker
-   -> singleton Cloudflare Container
+   -> Cloudflare Worker /api/* (read-only telemetry)
+   -> singleton Cloudflare Durable Object
    -> Monad / Nad.fun V2
+
+Operator POST actions
+   -> Vercel /api/*
+   -> Cloudflare Worker (secret injected server-side)
+   -> singleton Durable Object
 ```
 
 The Worker uses a one-minute Cron Trigger to make sure the singleton container is started. The container itself runs the trading loop continuously and has a 24-hour idle timeout. The Cron expression is UTC.
@@ -108,8 +111,7 @@ Cloudflare's current GitHub Actions guidance uses the official `cloudflare/wrang
 From your terminal:
 
 ```bash
-curl -H "x-geld-api-secret: YOUR_GELD_API_SECRET" \
-  https://geld.<your-subdomain>.workers.dev/api/health
+curl https://geld.mahoraga6190.workers.dev/api/health
 ```
 
 You want:
@@ -136,7 +138,8 @@ Watch for `geld container started`, followed by engine events / state updates. T
 The current high-aggression defaults are:
 
 - established-token DEX trading only; new-token launch buys are disabled
-- $100,000 minimum MON-side liquidity before a token can become an entry candidate
+- $5,000 minimum liquidity before a token can become an entry candidate
+- $50,000 minimum market cap before a token can become an entry candidate
 - 30-minute minimum token age
 - 25 minimum holders
 - 100 MON minimum tracked volume
@@ -154,15 +157,27 @@ The current high-aggression defaults are:
 
 These settings are intentionally aggressive and can lose capital quickly. There is no guaranteed profit.
 
-## Vercel production promotion
+## API endpoints
 
-The GitHub -> Vercel integration for this project is currently staging the newer master deployments rather than automatically moving `geld-seven.vercel.app` to production. Promote the verified deployment to Production in Vercel before treating the dashboard as live.
+The Cloudflare Worker is the canonical read-only API for the dashboard:
+
+```
+https://geld.mahoraga6190.workers.dev/api/health
+https://geld.mahoraga6190.workers.dev/api/config
+https://geld.mahoraga6190.workers.dev/api/state
+```
+
+GET requests to the dashboard telemetry endpoints are public and CORS-enabled. Start/stop/liquidate POST actions remain protected by `GELD_API_SECRET` and continue through the server-side Vercel proxy, so that secret is never exposed to the browser.
+
+## Vercel production
+
+Vercel still hosts the React dashboard. Its Express service remains only as the protected operator-action proxy.
 
 ## Security model
 
 The Gemini layer only proposes BUY/HOLD/SELL decisions. It never receives the private key and never signs transactions. The execution layer gets the AI decision, re-quotes on-chain, applies slippage/deadline parameters, and signs the actual transaction.
 
-The API proxy requires a separate shared secret before forwarding requests to the Cloudflare Worker. State sync uses its own secret.
+Protected operator API calls require a separate shared secret before the Vercel proxy forwards them to the Cloudflare Worker. Read-only telemetry is intentionally public. State sync uses its own secret.
 
 Re-verify Nad.fun contract addresses/ABIs against the official integration docs after protocol upgrades.
 

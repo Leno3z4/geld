@@ -55,6 +55,8 @@ export function useBot() {
   return useContext(C);
 }
 
+const CLOUDFLARE_API_BASE = "https://geld.mahoraga6190.workers.dev";
+
 export function DashboardProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<DashboardState>(initialState);
   const [apiError, setApiError] = useState<string>("");
@@ -81,7 +83,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
 
     const refresh = async () => {
       try {
-        const response = await fetch("/api/state", {
+        const response = await fetch(CLOUDFLARE_API_BASE + "/api/state", {
           headers: { accept: "application/json" },
           cache: "no-store"
         });

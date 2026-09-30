@@ -77,9 +77,39 @@ function isTrue(value?: string) {
   return ["1", "true", "yes", "on"].includes((value ?? "").toLowerCase());
 }
 
+const PUBLIC_API_GET_PATHS = new Set([
+  "/api/health",
+  "/api/state",
+  "/api/config",
+  "/api/positions",
+  "/api/tokens",
+  "/api/trades",
+  "/api/events"
+]);
+
 function isAuthorized(request: Request, env: Env) {
   const expected = env.GELD_API_SECRET;
   return Boolean(expected && request.headers.get("x-geld-api-secret") === expected);
+}
+
+function isPublicApiRead(request: Request) {
+  return request.method === "GET" && PUBLIC_API_GET_PATHS.has(new URL(request.url).pathname);
+}
+
+function withCors(response: Response, request: Request) {
+  if (!isPublicApiRead(request) && request.method !== "OPTIONS") return response;
+
+  const headers = new Headers(response.headers);
+  headers.set("Access-Control-Allow-Origin", "*");
+  headers.set("Access-Control-Allow-Methods", "GET, OPTIONS");
+  headers.set("Access-Control-Allow-Headers", "Content-Type, Accept");
+  headers.set("Cache-Control", "no-store");
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
 }
 
 function hydrateProcessEnv(env: Env) {
@@ -217,7 +247,7 @@ export class GeldBot extends DurableObject<Env> {
       return Response.json(engine.snapshot());
     }
 
-    if (!isAuthorized(request, this.env)) {
+    if (!isPublicApiRead(request) && !isAuthorized(request, this.env)) {
       return new Response("Unauthorized", { status: 401 });
     }
 
@@ -328,12 +358,18 @@ export default {
       return env.GELD_STATE.get(id).fetch(new Request(new URL(innerPath, url), request));
     }
 
-    if (!isAuthorized(request, env)) {
+    if (request.method === "OPTIONS" && request.url.includes("/api/")) {
+      return withCors(new Response(null, { status: 204 }), request);
+    }
+
+    const publicRead = isPublicApiRead(request);
+    if (!publicRead && !isAuthorized(request, env)) {
       return new Response("Unauthorized", { status: 401 });
     }
 
     const id = env.GELD_BOT.idFromName("singleton");
-    return env.GELD_BOT.get(id).fetch(request);
+    const response = await env.GELD_BOT.get(id).fetch(request);
+    return publicRead ? withCors(response, request) : response;
   },
 
   async scheduled(_event: ScheduledEvent, env: Env) {

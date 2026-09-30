@@ -129,13 +129,55 @@ function historyMetrics(token: TokenSnapshot) {
   return { peak4h, dipPct, trend1hPct, trend4hPct, rebound1hPct };
 }
 
+function flowMetrics(token: TokenSnapshot) {
+  const now = Date.now();
+  const history = (token.flowHistory ?? [])
+    .filter((x) => x.ts > now - 10 * 60 * 1000)
+    .sort((a, b) => a.ts - b.ts);
+
+  const recent = history.filter((x) => x.ts > now - 5 * 60 * 1000);
+  const previous = history.filter((x) => x.ts <= now - 5 * 60 * 1000);
+
+  const sum = (items: typeof history) => items.reduce(
+    (acc, x) => ({
+      buy: acc.buy + Math.max(0, x.buyMon),
+      sell: acc.sell + Math.max(0, x.sellMon)
+    }),
+    { buy: 0, sell: 0 }
+  );
+
+  const recentSum = sum(recent);
+  const previousSum = sum(previous);
+  const volume5mMon = recentSum.buy + recentSum.sell;
+  const volumePrev5mMon = previousSum.buy + previousSum.sell;
+  const buySellRatio5m = volume5mMon > 0
+    ? recentSum.buy / Math.max(0.01, recentSum.sell)
+    : 0;
+  const volumeAcceleration5m = volumePrev5mMon > 0
+    ? volume5mMon / volumePrev5mMon
+    : volume5mMon > 0 ? 2 : 0;
+
+  return {
+    buySellRatio5m,
+    volume5mMon,
+    volumePrev5mMon,
+    volumeAcceleration5m
+  };
+}
+
 export function updateMarketMetrics(token: TokenSnapshot) {
   const metrics = historyMetrics(token);
+  const flow = flowMetrics(token);
   token.dipPct = metrics.dipPct;
   token.trendPct1h = metrics.trend1hPct;
   token.trendPct4h = metrics.trend4hPct;
+  token.reboundPct1h = metrics.rebound1hPct;
+  token.buySellRatio5m = flow.buySellRatio5m;
+  token.volume5mMon = flow.volume5mMon;
+  token.volumePrev5mMon = flow.volumePrev5mMon;
+  token.volumeAcceleration5m = flow.volumeAcceleration5m;
   token.peakPriceMon = Math.max(token.peakPriceMon, metrics.peak4h || 0);
-  return metrics;
+  return { ...metrics, ...flow };
 }
 
 export function scoreToken(token: TokenSnapshot, seasonality: SeasonalityModel) {
@@ -165,6 +207,10 @@ export function scoreToken(token: TokenSnapshot, seasonality: SeasonalityModel) 
 
   // A small rebound is preferable to catching a straight falling knife.
   const reboundScore = clamp(metrics.rebound1hPct * 2.5, 0, 10);
+  const flow = flowMetrics(token);
+  const flowScore = flow.volume5mMon <= 0
+    ? 0
+    : clamp((flow.buySellRatio5m - 1) * 4 + (flow.volumeAcceleration5m - 1) * 3, -5, 5);
   const seasonalityAdjustment = seasonality.adjustment();
 
   return Math.round(clamp(
@@ -174,6 +220,7 @@ export function scoreToken(token: TokenSnapshot, seasonality: SeasonalityModel) 
     momentumScore +
     dipScore +
     reboundScore +
+    flowScore +
     seasonalityAdjustment,
     0,
     100
@@ -203,7 +250,8 @@ export function shouldOpen(
   dipMinPct: number,
   dipMaxPct: number,
   recoveryMinPct: number,
-  trendMax1hPct: number
+  trendMax1hPct: number,
+  minTrend4hPct: number
 ) {
   const age = ageMinutes(token);
   const metrics = historyMetrics(token);
@@ -223,6 +271,134 @@ export function shouldOpen(
     token.localScore >= minScore &&
     confidence >= minConfidence
   );
+}
+
+export interface PositionExitRules {
+  hardStopPct: number;
+  takeProfitPct: number;
+  trailingPct: number;
+  maxHoldMinutes: number;
+  minLiquidityUsd: number;
+  liquidityExitRatio: number;
+  earlyExitLossPct: number;
+  earlyExitTrend1hPct: number;
+  momentumExitProfitPct: number;
+  momentumExitTrend1hPct: number;
+  momentumExitReboundPct: number;
+  sellPressureExitRatio: number;
+  sellPressureMinVolumeMon: number;
+  profitTake1Pct: number;
+  profitTake1SellPct: number;
+  profitTake2Pct: number;
+  profitTake2SellPct: number;
+  profitTake3Pct: number;
+  profitTake3SellPct: number;
+  profitProtectionStartPct: number;
+  profitProtectionFloorPct: number;
+  profitProtectionRatio: number;
+}
+
+export interface PositionExitSignal {
+  kind: "FULL" | "PARTIAL";
+  sellPct: number;
+  reason: string;
+}
+
+export function positionExitSignal(
+  position: Position,
+  token: TokenSnapshot | undefined,
+  rules: PositionExitRules
+): PositionExitSignal | null {
+  const pnlPct = position.pnlPct;
+  const peakPnlPct = Math.max(position.peakPnlPct ?? pnlPct, pnlPct);
+  const heldMinutes = (Date.now() - position.openedAt) / 60000;
+  const trend1h = token?.trendPct1h ?? 0;
+  const rebound1h = token?.reboundPct1h ?? 0;
+  const dipPct = token?.dipPct ?? 0;
+  const flowRatio = token?.buySellRatio5m ?? 0;
+  const flowVolume = token?.volume5mMon ?? 0;
+
+  // Protective conditions always win over profit-seeking AI guidance.
+  if (pnlPct <= -rules.hardStopPct) {
+    return { kind: "FULL", sellPct: 100, reason: "HARD_STOP" };
+  }
+
+  if (token) {
+    const liquidity = token.liquidityUsd ?? 0;
+    const liquidityCollapsed = liquidity > 0 && (
+      liquidity < rules.minLiquidityUsd ||
+      (
+        (position.entryLiquidityUsd ?? 0) > 0 &&
+        liquidity < (position.entryLiquidityUsd ?? 0) * rules.liquidityExitRatio
+      )
+    );
+    if (liquidityCollapsed) {
+      return { kind: "FULL", sellPct: 100, reason: "LIQUIDITY_BREAK" };
+    }
+
+    if (
+      pnlPct <= rules.earlyExitLossPct &&
+      trend1h <= rules.earlyExitTrend1hPct &&
+      dipPct >= 20
+    ) {
+      return { kind: "FULL", sellPct: 100, reason: "EARLY_MOMENTUM_STOP" };
+    }
+
+    if (
+      flowVolume >= rules.sellPressureMinVolumeMon &&
+      flowRatio > 0 &&
+      flowRatio <= rules.sellPressureExitRatio &&
+      trend1h < 0
+    ) {
+      return { kind: "FULL", sellPct: 100, reason: "ACCELERATING_SELL_PRESSURE" };
+    }
+
+    if (
+      pnlPct >= rules.momentumExitProfitPct &&
+      trend1h <= rules.momentumExitTrend1hPct &&
+      rebound1h <= rules.momentumExitReboundPct
+    ) {
+      return { kind: "FULL", sellPct: 100, reason: "MOMENTUM_FAILURE" };
+    }
+  }
+
+  // Once the trade has made real money, protect part of that profit instead
+  // of letting a winner turn into a loser.
+  if (peakPnlPct >= rules.profitProtectionStartPct) {
+    const lockedProfit = Math.max(
+      rules.profitProtectionFloorPct,
+      peakPnlPct * rules.profitProtectionRatio
+    );
+    if (pnlPct <= lockedProfit && pnlPct < peakPnlPct) {
+      return { kind: "FULL", sellPct: 100, reason: "PROFIT_PROTECTION" };
+    }
+  }
+
+  if (!position.profitTake1Done && pnlPct >= rules.profitTake1Pct) {
+    return { kind: "PARTIAL", sellPct: rules.profitTake1SellPct, reason: "PROFIT_TAKE_1" };
+  }
+
+  if (!position.profitTake2Done && pnlPct >= rules.profitTake2Pct) {
+    return { kind: "PARTIAL", sellPct: rules.profitTake2SellPct, reason: "PROFIT_TAKE_2" };
+  }
+
+  if (!position.profitTake3Done && pnlPct >= rules.profitTake3Pct) {
+    return { kind: "PARTIAL", sellPct: rules.profitTake3SellPct, reason: "PROFIT_TAKE_3" };
+  }
+
+  if (pnlPct >= rules.takeProfitPct) {
+    return { kind: "FULL", sellPct: 100, reason: "TAKE_PROFIT" };
+  }
+
+  if (position.peakMon > position.entryMon && position.currentMon <= position.peakMon * (1 - rules.trailingPct / 100)) {
+    return { kind: "FULL", sellPct: 100, reason: "TRAILING_STOP" };
+  }
+
+  if (heldMinutes >= rules.maxHoldMinutes) {
+    return { kind: "FULL", sellPct: 100, reason: "MAX_HOLD" };
+  }
+
+  return null;
 }
 
 export function shouldClose(

@@ -16,7 +16,7 @@ import {
 } from "./nadfun.js";
 import { StateStore } from "./store.js";
 import { GeminiBrain } from "./ai.js";
-import { SeasonalityModel, positionExitSignal, scoreToken, shouldClose, shouldOpen, shouldWatch, updateMarketMetrics, curveProgressPct, type PositionExitRules } from "./strategy.js";
+import { SeasonalityModel, entryGateDiagnostics, positionExitSignal, scoreToken, shouldClose, shouldOpen, shouldWatch, updateMarketMetrics, curveProgressPct, type EntryGateRules, type PositionExitRules } from "./strategy.js";
 import type { BotState, Position, TokenSnapshot } from "./types.js";
 import { formatUnits } from "viem";
 
@@ -289,20 +289,25 @@ export class TradingEngine {
           config.minVolumeMon
         );
 
-        const age = (Date.now() - token.createdAt) / 60000;
-        const isDip = (token.dipPct ?? 0) >= config.dipMinPct && (token.dipPct ?? 0) <= config.dipMaxPct;
-        const hasRecovery = (token.trendPct1h ?? 0) > -8 && (token.dipPct ?? 0) <= config.dipMaxPct;
+        const entryRules: EntryGateRules = {
+          minEstablishedAgeMinutes: config.minEstablishedAgeMinutes,
+          minLiquidityUsd: config.minLiquidityUsd,
+          minHolders: config.minHolders,
+          minVolumeMon: config.minVolumeMon,
+          dipMinPct: config.dipMinPct,
+          dipMaxPct: config.dipMaxPct,
+          recoveryMinPct: config.recoveryMinPct,
+          trendMax1hPct: config.trendMax1hPct,
+          minTrend4hPct: config.minTrend4hPct,
+          minLocalScore: config.minLocalScore
+        };
+        const diagnostics = entryGateDiagnostics(token, entryRules);
+        token.entryDiagnostics = diagnostics;
 
         if (!watchable) {
-          token.watchReason = "Watching: below $100k MON-side liquidity / holder / volume floor";
-        } else if (age < config.minEstablishedAgeMinutes) {
-          token.watchReason = "Watching: too new; launch buys are disabled";
-        } else if (!isDip) {
-          token.watchReason = "Watching: no qualifying pullback";
-        } else if (!hasRecovery) {
-          token.watchReason = "Watching: falling without stabilization";
-        } else if (token.localScore < config.minLocalScore) {
-          token.watchReason = "Watching: quality score below entry floor";
+          token.watchReason = `Watching: ${diagnostics.primary}`;
+        } else if (diagnostics.blockers.length > 0) {
+          token.watchReason = `Watching: ${diagnostics.primary}`;
         } else {
           token.watchReason = "ENTRY SETUP: established dip candidate; awaiting AI";
           eligible += 1;
@@ -312,7 +317,7 @@ export class TradingEngine {
 
         this.store.upsertToken(token);
 
-        const entrySetup = token.watchReason === "ENTRY SETUP: established dip candidate; awaiting AI";
+        const entrySetup = diagnostics.blockers.length === 0;
         if (entrySetup) candidates.push(token);
       }
 
@@ -718,6 +723,26 @@ export class TradingEngine {
       });
 
       token.lastCandidateAiAt = Date.now();
+      const aiDiagnostics = entryGateDiagnostics(
+        token,
+        {
+          minEstablishedAgeMinutes: config.minEstablishedAgeMinutes,
+          minLiquidityUsd: config.minLiquidityUsd,
+          minHolders: config.minHolders,
+          minVolumeMon: config.minVolumeMon,
+          dipMinPct: config.dipMinPct,
+          dipMaxPct: config.dipMaxPct,
+          recoveryMinPct: config.recoveryMinPct,
+          trendMax1hPct: config.trendMax1hPct,
+          minTrend4hPct: config.minTrend4hPct,
+          minLocalScore: config.minLocalScore,
+          minAiConfidence: config.aiMinConfidence
+        },
+        decision.confidence
+      );
+      aiDiagnostics.aiAction = decision.action;
+      aiDiagnostics.aiConfidence = decision.confidence;
+      token.entryDiagnostics = aiDiagnostics;
 
       this.store.update((s) => {
         s.stats.aiCalls += 1;
@@ -727,6 +752,7 @@ export class TradingEngine {
           current.aiConfidence = decision.confidence;
           current.aiReason = decision.reason;
           current.lastCandidateAiAt = token.lastCandidateAiAt;
+          current.entryDiagnostics = aiDiagnostics;
         }
       });
 

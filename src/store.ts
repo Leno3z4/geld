@@ -37,6 +37,9 @@ export class StateStore {
 
     if (local) this.state = local;
 
+    // Migrate state written by older builds before pending execution tracking.
+    this.state.pendingExecutions ??= {};
+
     if (config.stateSyncUrl) {
       try {
         const response = await fetch(config.stateSyncUrl, {
@@ -47,6 +50,7 @@ export class StateStore {
           const remote = await response.json() as BotState | null;
 
           if (remote?.version === 1) {
+            remote.pendingExecutions ??= {};
             const remoteAge = Math.max(
               remote.stats.startedAt ?? 0,
               remote.trades[0]?.ts ?? 0,

@@ -17,6 +17,7 @@ function initialState(): BotState {
     tokens: {},
     positions: {},
     trades: [],
+    pendingExecutions: {},
     equity: [],
     stats: { aiCalls: 0, aiFailures: 0, eventCount: 0, wins: 0, losses: 0 }
   };

@@ -108,6 +108,13 @@ function historyMetrics(token: TokenSnapshot) {
     ? Math.max(0, (1 - token.priceMon / observedPeak4h) * 100)
     : 0;
 
+  const athPriceMon = token.athPriceMon && token.athPriceMon > 0
+    ? token.athPriceMon
+    : observedPeak4h;
+  const drawdownFromAthPct = athPriceMon > 0
+    ? Math.max(0, (1 - token.priceMon / athPriceMon) * 100)
+    : 0;
+
   const oneHourBase = history.find((x) => x.ts <= oneHourAgo);
   const fourHourBase = history.find((x) => x.ts <= fourHoursAgo);
 
@@ -133,7 +140,11 @@ function historyMetrics(token: TokenSnapshot) {
 
   return {
     peak4h: observedPeak4h,
-    dipPct: Math.max(observedDipPct, fallbackPullbackPct),
+    // Keep the current/setup dip separate from all-time drawdown. An old ATH
+    // must not be mistaken for a fresh entry signal.
+    dipPct: oneHourBase ? observedDipPct : fallbackPullbackPct,
+    drawdownFromRecentPeakPct: observedDipPct,
+    drawdownFromAthPct,
     trend1hPct,
     trend4hPct,
     rebound1hPct
@@ -242,6 +253,7 @@ export function scoreToken(token: TokenSnapshot, seasonality: SeasonalityModel) 
 export interface EntryGateRules {
   minEstablishedAgeMinutes: number;
   minLiquidityUsd: number;
+  minMarketCapUsd: number;
   minHolders: number;
   minVolumeMon: number;
   dipMinPct: number;
@@ -276,6 +288,11 @@ export function entryGateDiagnostics(
   const liquidity = token.liquidityUsd ?? 0;
   if (liquidity < rules.minLiquidityUsd) {
     blockers.push(`liquidity ${money(liquidity)} < ${money(rules.minLiquidityUsd)}`);
+  }
+
+  const marketCapUsd = token.marketCapUsd ?? 0;
+  if (marketCapUsd < rules.minMarketCapUsd) {
+    blockers.push(`market cap ${money(marketCapUsd)} < ${money(rules.minMarketCapUsd)}`);
   }
 
   const holders = token.holders ?? 0;
@@ -330,9 +347,12 @@ export function entryGateDiagnostics(
     metrics: {
       ageMinutes: age,
       liquidityUsd: liquidity,
+      marketCapUsd,
       holders,
       volumeMon,
       dipPct: metrics.dipPct,
+      drawdownFromRecentPeakPct: metrics.drawdownFromRecentPeakPct,
+      drawdownFromAthPct: metrics.drawdownFromAthPct,
       rebound1hPct: metrics.rebound1hPct,
       trend1hPct: metrics.trend1hPct,
       trend4hPct: metrics.trend4hPct,
@@ -342,12 +362,19 @@ export function entryGateDiagnostics(
   };
 }
 
-export function shouldWatch(token: TokenSnapshot, minLiquidityUsd: number, minHolders: number, minVolumeMon: number) {
+export function shouldWatch(
+  token: TokenSnapshot,
+  minLiquidityUsd: number,
+  minMarketCapUsd: number,
+  minHolders: number,
+  minVolumeMon: number
+) {
   return (
     token.createdAt > 0 &&
     token.graduated &&
     !token.locked &&
     (token.liquidityUsd ?? 0) >= minLiquidityUsd &&
+    (token.marketCapUsd ?? 0) >= minMarketCapUsd &&
     (token.holders ?? 0) >= minHolders &&
     (token.volumeMon ?? 0) >= minVolumeMon
   );
@@ -360,6 +387,7 @@ export function shouldOpen(
   minConfidence: number,
   minEstablishedAgeMinutes: number,
   minLiquidityUsd: number,
+  minMarketCapUsd: number,
   minHolders: number,
   minVolumeMon: number,
   dipMinPct: number,

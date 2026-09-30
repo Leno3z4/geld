@@ -75,6 +75,7 @@ interface MarketResponse {
     holder_count?: number;
     price_native?: string;
     price_mon?: string;
+    price?: string;
     price_usd?: string;
     token_price?: string;
     reserve_native?: string;
@@ -204,7 +205,7 @@ export class TradingEngine {
         const liquidityMon = reserveNative > 0 ? reserveNative / 1e18 : 0;
         const volumeMonRaw = numeric(market.volume);
         const volumeMon = volumeMonRaw > 0 ? volumeMonRaw / 1e18 : 0;
-        const marketPriceMon = numeric(market.price_native ?? market.price_mon ?? market.token_price);
+        const marketPriceMon = numeric(market.price_native ?? market.price_mon ?? market.price);
         const marketPriceUsd = numeric(market.price_usd);
         const impliedMonUsd = marketPriceMon > 0 && marketPriceUsd > 0
           ? marketPriceUsd / marketPriceMon
@@ -260,7 +261,7 @@ export class TradingEngine {
         token.volumeMon = volumeMon || token.volumeMon || 0;
         token.holders = holders || token.holders || 0;
         token.changePct = numeric(row?.percent ?? market.percent ?? token.changePct);
-        token.priceMon = priceMon || token.priceMon || 0;
+        token.priceMon = priceMon || marketPriceMon || token.priceMon || 0;
         token.priceUsd = numeric(market.price_usd ?? token.priceUsd);
         token.athPriceMon = numeric(market.ath_price ?? token.athPriceMon);
         token.lastMarketAt = Date.now();

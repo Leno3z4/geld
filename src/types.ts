@@ -38,6 +38,12 @@ export interface TokenSnapshot {
   dipPct?: number;
   trendPct1h?: number;
   trendPct4h?: number;
+  reboundPct1h?: number;
+  buySellRatio5m?: number;
+  volume5mMon?: number;
+  volumePrev5mMon?: number;
+  volumeAcceleration5m?: number;
+  flowHistory?: Array<{ ts: number; buyMon: number; sellMon: number }>;
   lastMarketAt?: number;
   priceHistory?: Array<{ ts: number; priceMon: number }>;
   watchReason?: string;
@@ -60,6 +66,11 @@ export interface Position {
   pnlMon: number;
   pnlPct: number;
   peakMon: number;
+  peakPnlPct?: number;
+  entryLiquidityUsd?: number;
+  profitTake1Done?: boolean;
+  profitTake2Done?: boolean;
+  profitTake3Done?: boolean;
   openedAt: number;
   lastAiAt: number;
   lastAiAction?: DecisionAction;

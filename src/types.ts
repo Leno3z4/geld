@@ -83,6 +83,8 @@ export interface BotStats {
   eventCount: number;
   wins: number;
   losses: number;
+  lastProcessedBlock?: string;
+  lastCycleAt?: number;
   lastError?: string;
   startedAt?: number;
 }

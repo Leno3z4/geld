@@ -88,6 +88,59 @@ export async function getBalance(publicClient: any, address: Address) {
   return Number(formatUnits(await publicClient.getBalance({ address }), 18));
 }
 
+export async function getTokenBalances(
+  publicClient: any,
+  tokens: Address[],
+  owner: Address
+): Promise<Map<string, bigint>> {
+  if (tokens.length === 0) return new Map();
+
+  const results = await publicClient.multicall({
+    contracts: tokens.map((token) => ({
+      address: token,
+      abi: erc20Abi,
+      functionName: "balanceOf",
+      args: [owner]
+    })),
+    allowFailure: true
+  });
+
+  const balances = new Map<string, bigint>();
+  tokens.forEach((token, i) => {
+    const result = results[i];
+    if (result?.status === "success" && typeof result.result === "bigint") {
+      balances.set(token.toLowerCase(), result.result);
+    }
+  });
+  return balances;
+}
+
+export async function quoteSells(
+  publicClient: any,
+  requests: Array<{ token: Address; amountRaw: bigint }>
+): Promise<Map<string, bigint>> {
+  if (requests.length === 0) return new Map();
+
+  const results = await publicClient.multicall({
+    contracts: requests.map(({ token, amountRaw }) => ({
+      address: ADDRESSES.ROUTER,
+      abi: routerAbi,
+      functionName: "getAmountOut",
+      args: [token, amountRaw, false]
+    })),
+    allowFailure: true
+  });
+
+  const quotes = new Map<string, bigint>();
+  requests.forEach(({ token }, i) => {
+    const result = results[i];
+    if (result?.status === "success" && typeof result.result === "bigint") {
+      quotes.set(token.toLowerCase(), result.result);
+    }
+  });
+  return quotes;
+}
+
 export async function getTokenBalance(publicClient: any, token: Address, address: Address) {
   return await publicClient.readContract({
     address: token,

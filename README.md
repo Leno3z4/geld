@@ -167,3 +167,5 @@ The API proxy requires a separate shared secret before forwarding requests to th
 Re-verify Nad.fun contract addresses/ABIs against the official integration docs after protocol upgrades.
 
 <!-- vercel-main-deploy-check -->
+
+<!-- production-deploy-sync-2026-10-01 -->

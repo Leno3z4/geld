@@ -7,25 +7,15 @@
     "nodejs_compat"
   ],
   "vars": {
-    "BOT_PORT": "8787",
     "GELD_LIVE_TRADING": "true",
     "GELD_AUTO_START": "true",
     "STATE_SYNC_URL": "https://geld.mahoraga6190.workers.dev/internal/state/singleton"
   },
-  "containers": [
-    {
-      "class_name": "GeldContainer",
-      "image": "./Dockerfile",
-      "max_instances": 1,
-      "instance_type": "basic",
-      "rollout_active_grace_period": 300
-    }
-  ],
   "durable_objects": {
     "bindings": [
       {
-        "name": "GELD_CONTAINER",
-        "class_name": "GeldContainer"
+        "name": "GELD_BOT",
+        "class_name": "GeldBot"
       },
       {
         "name": "GELD_STATE",
@@ -39,6 +29,15 @@
       "new_sqlite_classes": [
         "GeldContainer",
         "GeldState"
+      ]
+    },
+    {
+      "tag": "v2-free-workers",
+      "new_sqlite_classes": [
+        "GeldBot"
+      ],
+      "deleted_classes": [
+        "GeldContainer"
       ]
     }
   ],

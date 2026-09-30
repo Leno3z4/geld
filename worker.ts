@@ -299,20 +299,21 @@ export class GeldBot extends DurableObject<Env> {
     }
 
     if (path === "/api/config") {
+      const runtimeConfig = await getRuntimeConfig(this.env);
       return Response.json({
-        network: config.network,
-        chainId: config.chainId,
-        liveTrading: config.liveTrading,
-        autoStart: config.autoStart,
-        minLiquidityUsd: config.minLiquidityUsd,
-        minMarketCapUsd: config.minMarketCapUsd,
-        minEstablishedAgeMinutes: config.minEstablishedAgeMinutes,
-        minHolders: config.minHolders,
-        minVolumeMon: config.minVolumeMon,
-        dipMinPct: config.dipMinPct,
-        dipMaxPct: config.dipMaxPct,
-        trendMax1hPct: config.trendMax1hPct,
-        minTrend4hPct: config.minTrend4hPct
+        network: runtimeConfig.network,
+        chainId: runtimeConfig.chainId,
+        liveTrading: runtimeConfig.liveTrading,
+        autoStart: runtimeConfig.autoStart,
+        minLiquidityUsd: runtimeConfig.minLiquidityUsd,
+        minMarketCapUsd: runtimeConfig.minMarketCapUsd,
+        minEstablishedAgeMinutes: runtimeConfig.minEstablishedAgeMinutes,
+        minHolders: runtimeConfig.minHolders,
+        minVolumeMon: runtimeConfig.minVolumeMon,
+        dipMinPct: runtimeConfig.dipMinPct,
+        dipMaxPct: runtimeConfig.dipMaxPct,
+        trendMax1hPct: runtimeConfig.trendMax1hPct,
+        minTrend4hPct: runtimeConfig.minTrend4hPct
       });
     }
 

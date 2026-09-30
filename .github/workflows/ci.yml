@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["master","feat/monad-ai-live-rewrite"]
+    branches: ["main","feat/monad-ai-live-rewrite"]
   pull_request:
 
 jobs:

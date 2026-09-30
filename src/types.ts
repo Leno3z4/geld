@@ -26,6 +26,18 @@ export interface TokenSnapshot {
   priceMon: number;
   peakPriceMon: number;
   localScore: number;
+  marketType?: "BONDING_CURVE" | "DEX";
+  liquidityMon?: number;
+  marketCapMon?: number;
+  volumeMon?: number;
+  changePct?: number;
+  athPriceMon?: number;
+  dipPct?: number;
+  trendPct1h?: number;
+  trendPct4h?: number;
+  lastMarketAt?: number;
+  priceHistory?: Array<{ ts: number; priceMon: number }>;
+  watchReason?: string;
   lastCandidateAiAt?: number;
   lastEnrichedAt?: number;
   aiAction?: DecisionAction;

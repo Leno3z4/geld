@@ -83,6 +83,8 @@ interface MarketResponse {
     reserve_native?: string;
     reserve_token?: string;
     volume?: string;
+    market_cap_usd?: string | number;
+    marketCapUsd?: string | number;
     ath_price?: string;
     market_type?: string;
     pair?: string;
@@ -218,6 +220,24 @@ export class TradingEngine {
         const liquidityUsd = liquidityMon > 0 && impliedMonUsd > 0
           ? liquidityMon * impliedMonUsd
           : 0;
+        // NadFun tokens use a fixed 1B total supply; when the market API does
+        // not provide an explicit market cap, derive FDV/market cap from price.
+        const explicitMarketCapUsd = numeric(
+          market.market_cap_usd ??
+          market.marketCapUsd ??
+          row?.market_cap_usd ??
+          row?.marketCapUsd
+        );
+        const marketCapUsd = explicitMarketCapUsd > 0
+          ? explicitMarketCapUsd
+          : marketPriceUsd > 0
+            ? marketPriceUsd * 1_000_000_000
+            : 0;
+        const marketCapMon = impliedMonUsd > 0
+          ? marketCapUsd / impliedMonUsd
+          : priceMon > 0
+            ? priceMon * 1_000_000_000
+            : 0;
         const holders = Math.max(0, Math.floor(numeric(market.holder_count ?? market.holders)));
         const graduated = boolish(info.is_graduated, market.market_type === "DEX");
 
@@ -265,6 +285,8 @@ export class TradingEngine {
         token.liquidityUsd = liquidityUsd || token.liquidityUsd || 0;
         token.volumeMon = volumeMon || token.volumeMon || 0;
         token.holders = holders || token.holders || 0;
+        token.marketCapUsd = marketCapUsd || token.marketCapUsd || 0;
+        token.marketCapMon = marketCapMon || token.marketCapMon || 0;
         token.changePct = numeric(row?.percent ?? market.percent ?? token.changePct);
         token.priceMon = priceMon || marketPriceMon || token.priceMon || 0;
         token.priceUsd = numeric(market.price_usd ?? token.priceUsd);
@@ -309,6 +331,7 @@ export class TradingEngine {
         const watchable = shouldWatch(
           token,
           config.minLiquidityUsd,
+          config.minMarketCapUsd,
           config.minHolders,
           config.minVolumeMon
         );
@@ -316,6 +339,7 @@ export class TradingEngine {
         const entryRules: EntryGateRules = {
           minEstablishedAgeMinutes: config.minEstablishedAgeMinutes,
           minLiquidityUsd: config.minLiquidityUsd,
+          minMarketCapUsd: config.minMarketCapUsd,
           minHolders: config.minHolders,
           minVolumeMon: config.minVolumeMon,
           dipMinPct: config.dipMinPct,
@@ -830,6 +854,20 @@ export class TradingEngine {
         ? Number(payload.market_info?.volume) / 1e18
         : token.volumeMon;
 
+      const enrichedMarketCapUsd = numeric(
+        payload.market_info?.market_cap_usd ??
+        payload.market_info?.marketCapUsd ??
+        token.marketCapUsd
+      );
+      if (enrichedMarketCapUsd > 0) {
+        token.marketCapUsd = enrichedMarketCapUsd;
+      } else if (token.priceUsd > 0) {
+        token.marketCapUsd = token.priceUsd * 1_000_000_000;
+      }
+      if (token.marketCapUsd > 0 && (token.monUsdPrice ?? 0) > 0) {
+        token.marketCapMon = token.marketCapUsd / token.monUsdPrice!;
+      }
+
       const enrichedPair = String(
         payload.market_info?.pair ??
         payload.market_info?.pair_address ??
@@ -979,6 +1017,7 @@ export class TradingEngine {
         {
           minEstablishedAgeMinutes: config.minEstablishedAgeMinutes,
           minLiquidityUsd: config.minLiquidityUsd,
+          minMarketCapUsd: config.minMarketCapUsd,
           minHolders: config.minHolders,
           minVolumeMon: config.minVolumeMon,
           dipMinPct: config.dipMinPct,
@@ -1016,6 +1055,7 @@ export class TradingEngine {
           config.aiMinConfidence,
           config.minEstablishedAgeMinutes,
           config.minLiquidityUsd,
+          config.minMarketCapUsd,
           config.minHolders,
           config.minVolumeMon,
           config.dipMinPct,
@@ -1044,7 +1084,8 @@ export class TradingEngine {
       config.establishedOnly &&
       (!token.graduated ||
         ageMinutes < config.minEstablishedAgeMinutes ||
-        (token.liquidityUsd ?? 0) < config.minLiquidityUsd)
+        (token.liquidityUsd ?? 0) < config.minLiquidityUsd ||
+        (token.marketCapUsd ?? 0) < config.minMarketCapUsd)
     ) {
       return;
     }

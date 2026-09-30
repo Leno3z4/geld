@@ -1,5 +1,4 @@
 import { DurableObject } from "cloudflare:workers";
-import { config } from "./src/config.js";
 
 interface Env {
   GELD_BOT: DurableObjectNamespace<GeldBot>;
@@ -186,6 +185,11 @@ function hydrateProcessEnv(env: Env) {
   }
 }
 
+async function getRuntimeConfig(env: Env) {
+  hydrateProcessEnv(env);
+  return (await import("./src/config.js")).config;
+}
+
 export class GeldState extends DurableObject<Env> {
   async fetch(request: Request) {
     const secret = this.env.STATE_SYNC_SECRET;
@@ -257,6 +261,7 @@ export class GeldBot extends DurableObject<Env> {
 
     if (path === "/api/health" || path === "/api/state") {
       const state = engine.snapshot();
+      const runtimeConfig = await getRuntimeConfig(this.env);
 
       if (path === "/api/health") {
         return Response.json({
@@ -268,27 +273,27 @@ export class GeldBot extends DurableObject<Env> {
           openPositions: Object.values(state.positions).filter((p: any) => p.status === "OPEN").length,
           chainId: 143,
           lastCycleAt: state.stats.lastCycleAt ?? 0,
-          minLiquidityUsd: config.minLiquidityUsd,
-          minMarketCapUsd: config.minMarketCapUsd
+          minLiquidityUsd: runtimeConfig.minLiquidityUsd,
+          minMarketCapUsd: runtimeConfig.minMarketCapUsd
         });
       }
 
       return Response.json({
         ...state,
         effectiveConfig: {
-          network: config.network,
-          chainId: config.chainId,
-          liveTrading: config.liveTrading,
-          autoStart: config.autoStart,
-          minLiquidityUsd: config.minLiquidityUsd,
-          minMarketCapUsd: config.minMarketCapUsd,
-          minEstablishedAgeMinutes: config.minEstablishedAgeMinutes,
-          minHolders: config.minHolders,
-          minVolumeMon: config.minVolumeMon,
-          dipMinPct: config.dipMinPct,
-          dipMaxPct: config.dipMaxPct,
-          trendMax1hPct: config.trendMax1hPct,
-          minTrend4hPct: config.minTrend4hPct
+          network: runtimeConfig.network,
+          chainId: runtimeConfig.chainId,
+          liveTrading: runtimeConfig.liveTrading,
+          autoStart: runtimeConfig.autoStart,
+          minLiquidityUsd: runtimeConfig.minLiquidityUsd,
+          minMarketCapUsd: runtimeConfig.minMarketCapUsd,
+          minEstablishedAgeMinutes: runtimeConfig.minEstablishedAgeMinutes,
+          minHolders: runtimeConfig.minHolders,
+          minVolumeMon: runtimeConfig.minVolumeMon,
+          dipMinPct: runtimeConfig.dipMinPct,
+          dipMaxPct: runtimeConfig.dipMaxPct,
+          trendMax1hPct: runtimeConfig.trendMax1hPct,
+          minTrend4hPct: runtimeConfig.minTrend4hPct
         }
       });
     }

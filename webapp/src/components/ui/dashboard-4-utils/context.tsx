@@ -21,6 +21,10 @@ type DashboardState = {
     lastProcessedBlock?: string;
     lastCycleAt?: number;
     lastError?: string;
+    lastDiscoveryAt?: number;
+    discoveredTokens?: number;
+    watchedTokens?: number;
+    eligibleCandidates?: number;
   };
 };
 

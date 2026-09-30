@@ -146,12 +146,38 @@ test("uses market change fallback until enough local history exists", () => {
     changePct: -12
   };
   const d = entryGateDiagnostics(token, {
-    minEstablishedAgeMinutes: 30, minLiquidityUsd: 30000,
+    minEstablishedAgeMinutes: 30, minLiquidityUsd: 5000,
+    minMarketCapUsd: 60000,
     minHolders: 25, minVolumeMon: 100,
     dipMinPct: 8, dipMaxPct: 35, recoveryMinPct: -4,
     trendMax1hPct: 8, minTrend4hPct: -12, minLocalScore: 50
   });
   assert.equal(d.metrics.dipPct, 12);
+  assert.equal(d.metrics.drawdownFromRecentPeakPct, 0);
+  assert.equal(d.metrics.drawdownFromAthPct, 0);
+  assert.equal(d.metrics.marketCapUsd, 1_000_000);
   assert.equal(d.metrics.trend1hPct, -12);
   assert.equal(d.metrics.trend4hPct, -12);
+});
+
+test("blocks established tokens below the $60k market cap floor", () => {
+  const now = Date.now();
+  const token = {
+    token: "0x" + "a".repeat(40), symbol: "SMALL", name: "Small",
+    creator: "", pair: "",
+    createdAt: now - 3 * 60 * 60 * 1000, lastEventAt: now,
+    buys: 20, sells: 10, buyMon: 100, sellMon: 50, progressPct: 100,
+    graduated: true, locked: false, holders: 100, volumeUsd: 0,
+    priceUsd: 0.00005, priceMon: 0.002, peakPriceMon: 0.002,
+    localScore: 80, liquidityUsd: 20000, marketCapUsd: 50000,
+    volumeMon: 500, changePct: -10
+  };
+  const d = entryGateDiagnostics(token, {
+    minEstablishedAgeMinutes: 30, minLiquidityUsd: 5000,
+    minMarketCapUsd: 60000,
+    minHolders: 25, minVolumeMon: 100,
+    dipMinPct: 8, dipMaxPct: 35, recoveryMinPct: -4,
+    trendMax1hPct: 8, minTrend4hPct: -12, minLocalScore: 50
+  });
+  assert.ok(d.blockers.some((x) => x.includes("market cap $50.0k < $60.0k")));
 });

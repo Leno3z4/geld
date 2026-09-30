@@ -1,4 +1,4 @@
-import type { Position, TokenSnapshot } from "./types.js";
+import type { EntryGateDiagnostics, Position, TokenSnapshot } from "./types.js";
 
 export function clamp(v: number, min: number, max: number) {
   return Math.max(min, Math.min(max, v));
@@ -227,6 +227,109 @@ export function scoreToken(token: TokenSnapshot, seasonality: SeasonalityModel) 
   ));
 }
 
+export interface EntryGateRules {
+  minEstablishedAgeMinutes: number;
+  minLiquidityUsd: number;
+  minHolders: number;
+  minVolumeMon: number;
+  dipMinPct: number;
+  dipMaxPct: number;
+  recoveryMinPct: number;
+  trendMax1hPct: number;
+  minTrend4hPct: number;
+  minLocalScore: number;
+  minAiConfidence?: number;
+}
+
+function money(value: number) {
+  if (!Number.isFinite(value)) return "0";
+  if (value >= 1000000) return "$" + (value / 1000000).toFixed(2) + "m";
+  if (value >= 1000) return "$" + (value / 1000).toFixed(1) + "k";
+  return "$" + value.toFixed(0);
+}
+
+export function entryGateDiagnostics(
+  token: TokenSnapshot,
+  rules: EntryGateRules,
+  aiConfidence?: number
+): EntryGateDiagnostics {
+  const age = ageMinutes(token);
+  const metrics = historyMetrics(token);
+  const blockers: string[] = [];
+
+  if (!(token.createdAt > 0)) blockers.push("missing creation time");
+  if (!token.graduated) blockers.push("not graduated");
+  if (token.locked) blockers.push("token is locked");
+
+  const liquidity = token.liquidityUsd ?? 0;
+  if (liquidity < rules.minLiquidityUsd) {
+    blockers.push(`liquidity ${money(liquidity)} < ${money(rules.minLiquidityUsd)}`);
+  }
+
+  const holders = token.holders ?? 0;
+  if (holders < rules.minHolders) {
+    blockers.push(`holders ${holders} < ${rules.minHolders}`);
+  }
+
+  const volumeMon = token.volumeMon ?? 0;
+  if (volumeMon < rules.minVolumeMon) {
+    blockers.push(`volume ${volumeMon.toFixed(1)} MON < ${rules.minVolumeMon.toFixed(1)} MON`);
+  }
+
+  if (age < rules.minEstablishedAgeMinutes) {
+    blockers.push(`age ${age.toFixed(0)}m < ${rules.minEstablishedAgeMinutes}m`);
+  }
+
+  if (metrics.dipPct < rules.dipMinPct) {
+    blockers.push(`dip ${metrics.dipPct.toFixed(1)}% < ${rules.dipMinPct}%`);
+  } else if (metrics.dipPct > rules.dipMaxPct) {
+    blockers.push(`dip ${metrics.dipPct.toFixed(1)}% > ${rules.dipMaxPct}%`);
+  }
+
+  if (metrics.rebound1hPct < rules.recoveryMinPct) {
+    blockers.push(`rebound ${metrics.rebound1hPct.toFixed(1)}% < ${rules.recoveryMinPct}%`);
+  }
+
+  if (metrics.trend1hPct > rules.trendMax1hPct) {
+    blockers.push(`1h trend +${metrics.trend1hPct.toFixed(1)}% > +${rules.trendMax1hPct}%`);
+  }
+
+  if (metrics.trend4hPct < rules.minTrend4hPct) {
+    blockers.push(`4h trend ${metrics.trend4hPct.toFixed(1)}% < ${rules.minTrend4hPct}%`);
+  }
+
+  if (token.localScore < rules.minLocalScore) {
+    blockers.push(`score ${token.localScore} < ${rules.minLocalScore}`);
+  }
+
+  if (aiConfidence !== undefined && rules.minAiConfidence !== undefined && aiConfidence < rules.minAiConfidence) {
+    blockers.push(`AI confidence ${(aiConfidence * 100).toFixed(0)}% < ${(rules.minAiConfidence * 100).toFixed(0)}%`);
+  }
+
+  return {
+    checkedAt: Date.now(),
+    readyForAi: blockers.length === 0 || (
+      blockers.length === 1 &&
+      aiConfidence !== undefined &&
+      blockers[0].startsWith("AI confidence ")
+    ),
+    primary: blockers[0] ?? "ready for AI evaluation",
+    blockers,
+    metrics: {
+      ageMinutes: age,
+      liquidityUsd: liquidity,
+      holders,
+      volumeMon,
+      dipPct: metrics.dipPct,
+      rebound1hPct: metrics.rebound1hPct,
+      trend1hPct: metrics.trend1hPct,
+      trend4hPct: metrics.trend4hPct,
+      localScore: token.localScore
+    },
+    aiConfidence
+  };
+}
+
 export function shouldWatch(token: TokenSnapshot, minLiquidityUsd: number, minHolders: number, minVolumeMon: number) {
   return (
     token.createdAt > 0 &&
@@ -253,25 +356,24 @@ export function shouldOpen(
   trendMax1hPct: number,
   minTrend4hPct: number
 ) {
-  const age = ageMinutes(token);
-  const metrics = historyMetrics(token);
-
-  return (
-    token.createdAt > 0 &&
-    token.graduated &&
-    !token.locked &&
-    age >= minEstablishedAgeMinutes &&
-    (token.liquidityUsd ?? 0) >= minLiquidityUsd &&
-    (token.holders ?? 0) >= minHolders &&
-    (token.volumeMon ?? 0) >= minVolumeMon &&
-    metrics.dipPct >= dipMinPct &&
-    metrics.dipPct <= dipMaxPct &&
-    metrics.rebound1hPct >= recoveryMinPct &&
-    metrics.trend1hPct <= trendMax1hPct &&
-    metrics.trend4hPct >= minTrend4hPct &&
-    token.localScore >= minScore &&
-    confidence >= minConfidence
+  const diagnostics = entryGateDiagnostics(
+    token,
+    {
+      minEstablishedAgeMinutes,
+      minLiquidityUsd,
+      minHolders,
+      minVolumeMon,
+      dipMinPct,
+      dipMaxPct,
+      recoveryMinPct,
+      trendMax1hPct,
+      minTrend4hPct,
+      minLocalScore: minScore,
+      minAiConfidence: minConfidence
+    },
+    confidence
   );
+  return diagnostics.blockers.length === 0;
 }
 
 export interface PositionExitRules {

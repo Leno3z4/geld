@@ -385,9 +385,11 @@ export class TradingEngine {
       }
     }
 
+    // Exit/risk management gets first priority on the one-minute Worker cycle.
+    // Discovery must never delay a protective sell on an existing position.
+    await this.managePositions();
     await this.discoverEstablishedTokens();
     await this.pollLogs();
-    await this.managePositions();
     await this.reviewOpenPositions();
 
     this.store.update((s) => {

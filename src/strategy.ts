@@ -268,6 +268,7 @@ export function shouldOpen(
     metrics.dipPct <= dipMaxPct &&
     metrics.rebound1hPct >= recoveryMinPct &&
     metrics.trend1hPct <= trendMax1hPct &&
+    metrics.trend4hPct >= minTrend4hPct &&
     token.localScore >= minScore &&
     confidence >= minConfidence
   );

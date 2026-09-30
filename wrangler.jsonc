@@ -11,7 +11,7 @@
     "GELD_AUTO_START": "true",
     "MONAD_RPC_URL": "https://rpc.monad.xyz",
     "MIN_LIQUIDITY_USD": "5000",
-    "MIN_MARKET_CAP_USD": "60000",
+    "MIN_MARKET_CAP_USD": "50000",
     "MIN_ESTABLISHED_AGE_MINUTES": "30",
     "MIN_HOLDERS": "25",
     "MIN_VOLUME_MON": "100",

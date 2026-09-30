@@ -980,7 +980,12 @@ export class TradingEngine {
         });
 
         if (decision.action === "SELL" && decision.confidence >= config.aiMinConfidence) {
-          await this.closePosition(position, "AI_SELL:" + decision.reason);
+          const aiSellPct = Math.max(5, Math.min(100, decision.sizePct * 100));
+          await this.sellPosition(
+            position,
+            aiSellPct,
+            "AI_SELL:" + decision.reason
+          );
         }
       } catch (error) {
         this.store.update((s) => {

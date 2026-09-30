@@ -146,7 +146,11 @@ export class TradingEngine {
     });
     this.seasonality.hydrate(this.store.get().seasonality);
 
-    if (this.account) await this.refreshBalance();
+    if (this.account) {
+      await this.refreshBalance();
+      await this.reconcileWalletPositions();
+      await this.refreshBalance();
+    }
     this.emit();
   }
 
@@ -441,6 +445,11 @@ export class TradingEngine {
         });
       }
     }
+
+    // Reconcile wallet assets before risk management. A confirmed BUY must
+    // never disappear from the internal book just because the process died
+    // between settlement and state persistence.
+    await this.reconcileWalletPositions();
 
     // Exit/risk management gets first priority on the one-minute Worker cycle.
     // Discovery must never delay a protective sell on an existing position.
@@ -1126,6 +1135,12 @@ export class TradingEngine {
         config.slippagePct
       );
 
+      this.store.update((s) => {
+        const pending = s.pendingExecutions[pendingId];
+        if (pending) pending.txHash = tx;
+      });
+      await this.persist();
+
       const receipt = await this.publicClient.waitForTransactionReceipt({ hash: tx });
       if (receipt.status === "reverted") {
         throw new Error("Buy transaction reverted: " + tx);
@@ -1167,6 +1182,14 @@ export class TradingEngine {
     }
 
     const id = token.token + ":" + Date.now();
+    this.store.update((s) => {
+      const pending = s.pendingExecutions[pendingId];
+      if (pending) {
+        pending.amountRaw = amountRaw.toString();
+        pending.decimals = decimals;
+      }
+    });
+
     const position: Position = {
       id,
       token: token.token,
@@ -1185,6 +1208,7 @@ export class TradingEngine {
       openedAt: Date.now(),
       lastAiAt: 0,
       entryTx: tx,
+      costBasisKnown: true,
       status: "OPEN"
     };
 
@@ -1203,7 +1227,99 @@ export class TradingEngine {
       });
       this.emit();
     } finally {
+      this.store.update((s) => {
+        delete s.pendingExecutions[pendingId];
+      });
       this.reservedSpendMon = Math.max(0, this.reservedSpendMon - spend);
+    }
+  }
+
+  private async reconcileWalletPositions() {
+    if (!this.account) return;
+
+    const state = this.store.get();
+    const tokens = Object.values(state.tokens);
+    let recovered = 0;
+
+    for (const token of tokens) {
+      if (!/^0x[0-9a-f]{40}$/.test(token.token)) continue;
+
+      const existing = Object.values(this.store.get().positions).find(
+        (p) =>
+          p.token.toLowerCase() === token.token.toLowerCase() &&
+          (p.status === "OPEN" || p.status === "CLOSING")
+      );
+      if (existing) continue;
+
+      try {
+        const balanceRaw = await getTokenBalance(
+          this.publicClient,
+          token.token as Address,
+          this.account.address
+        );
+        if (balanceRaw <= 0n) continue;
+
+        const decimals = await getTokenDecimals(
+          this.publicClient,
+          token.token as Address
+        );
+        const currentQuote = await quoteSell(
+          this.publicClient,
+          token.token as Address,
+          balanceRaw
+        );
+        const currentMon = Number(formatUnits(currentQuote, 18));
+
+        // Ignore dust that is economically irrelevant to the trading book.
+        if (!Number.isFinite(currentMon) || currentMon < 0.001) continue;
+
+        // We do not invent historical cost basis. A recovered balance is
+        // marked at its current sellable MON value until its original BUY
+        // receipt can be associated with it.
+        const id = "RECOVERED:" + token.token.toLowerCase();
+        const position: Position = {
+          id,
+          token: token.token,
+          symbol: token.symbol,
+          amountRaw: balanceRaw.toString(),
+          decimals,
+          entryMon: currentMon,
+          entryPriceMon: currentMon / Math.max(Number(formatUnits(balanceRaw, decimals)), 1e-18),
+          currentMon,
+          realizedPnlMon: 0,
+          pnlMon: 0,
+          pnlPct: 0,
+          peakMon: currentMon,
+          peakPnlPct: 0,
+          entryLiquidityUsd: token.liquidityUsd ?? 0,
+          openedAt: Date.now(),
+          lastAiAt: 0,
+          entryTx: "RECOVERED_ONCHAIN_BALANCE",
+          costBasisKnown: false,
+          recoveredAt: Date.now(),
+          status: "OPEN"
+        };
+
+        this.store.upsertPosition(position);
+        recovered += 1;
+      } catch (error) {
+        this.store.update((s) => {
+          s.stats.lastError = error instanceof Error ? error.message : String(error);
+        });
+      }
+    }
+
+    // Also surface any pending execution that already has a confirmed
+    // token balance. This closes the crash window between on-chain settlement
+    // and position persistence without fabricating a historical PnL number.
+    this.store.update((s) => {
+      s.stats.lastReconciliationAt = Date.now();
+      s.stats.recoveredPositions = recovered;
+    });
+
+    if (recovered > 0) {
+      await this.persist();
+      this.emit();
     }
   }
 

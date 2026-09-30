@@ -36,7 +36,11 @@ export class GeminiBrain {
     const prompt=[
       "You are the decision layer for a MONAD meme-token trading system.",
       "Optimize expected PnL from the factual snapshot below.",
-      "Never invent liquidity, social sentiment, holders, whale behavior or catalysts.",
+      "This system is deliberately NOT a launch sniping bot. Never recommend buying a newly launched token.",
+      "For candidate mode, BUY is only appropriate for an established, liquid, actively traded token that has pulled back materially from its recent high and is showing signs of stabilization or rebound.",
+      "Prefer decisive BUY or SELL actions when the factual setup supports them. Do not default to HOLD merely because meme coins are volatile.",
+      "Do not chase a fresh vertical pump. Do not invent liquidity, social sentiment, holders, whale behavior or catalysts.",
+      "Use the supplied dip, trend, liquidity, holders, volume and seasonality fields as factual inputs. Treat seasonality as evidence, not certainty.",
       "Choose BUY, HOLD or SELL. sizePct is a fraction of the configured trade budget for BUY or current position for SELL.",
       "Return only JSON matching the schema. Give a concise reason and one concrete invalidation condition.",
       JSON.stringify({mode:input.mode,token:input.token,position:input.position??null,seasonality:input.seasonality})

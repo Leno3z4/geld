@@ -180,12 +180,12 @@ export function scoreToken(token: TokenSnapshot, seasonality: SeasonalityModel) 
   ));
 }
 
-export function shouldWatch(token: TokenSnapshot, minLiquidityMon: number, minHolders: number, minVolumeMon: number) {
+export function shouldWatch(token: TokenSnapshot, minLiquidityUsd: number, minHolders: number, minVolumeMon: number) {
   return (
     token.createdAt > 0 &&
     token.graduated &&
     !token.locked &&
-    (token.liquidityMon ?? 0) >= minLiquidityMon &&
+    (token.liquidityUsd ?? 0) >= minLiquidityUsd &&
     (token.holders ?? 0) >= minHolders &&
     (token.volumeMon ?? 0) >= minVolumeMon
   );
@@ -197,7 +197,7 @@ export function shouldOpen(
   minScore: number,
   minConfidence: number,
   minEstablishedAgeMinutes: number,
-  minLiquidityMon: number,
+  minLiquidityUsd: number,
   minHolders: number,
   minVolumeMon: number,
   dipMinPct: number,
@@ -213,7 +213,7 @@ export function shouldOpen(
     token.graduated &&
     !token.locked &&
     age >= minEstablishedAgeMinutes &&
-    (token.liquidityMon ?? 0) >= minLiquidityMon &&
+    (token.liquidityUsd ?? 0) >= minLiquidityUsd &&
     (token.holders ?? 0) >= minHolders &&
     (token.volumeMon ?? 0) >= minVolumeMon &&
     metrics.dipPct >= dipMinPct &&

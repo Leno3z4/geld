@@ -111,10 +111,14 @@ function historyMetrics(token: TokenSnapshot) {
   const recent = history.filter((x) => x.ts >= oneHourAgo);
   const fourHour = history.filter((x) => x.ts >= fourHoursAgo);
 
+  const marketChangePct = Number.isFinite(token.changePct) ? token.changePct! : 0;
+  const fallbackPullbackPct = marketChangePct < 0 ? Math.min(50, -marketChangePct) : 0;
   const observedPeak4h = Math.max(token.priceMon, ...fourHour.map((x) => x.priceMon));
-  const observedDipPct = observedPeak4h > 0
-    ? Math.max(0, (1 - token.priceMon / observedPeak4h) * 100)
-    : 0;
+  const observedDipPct = fourHour.length
+    ? (observedPeak4h > 0
+      ? Math.max(0, (1 - token.priceMon / observedPeak4h) * 100)
+      : 0)
+    : fallbackPullbackPct;
 
   const athPriceMon = token.athPriceMon && token.athPriceMon > 0
     ? token.athPriceMon
@@ -129,9 +133,6 @@ function historyMetrics(token: TokenSnapshot) {
   // Never relabel a short warm-up window as "1h" or "4h" history.
   // Established tokens can enter after launch, so use the market snapshot
   // change as a conservative fallback until enough local samples exist.
-  const marketChangePct = Number.isFinite(token.changePct) ? token.changePct! : 0;
-  const fallbackPullbackPct = marketChangePct < 0 ? Math.min(50, -marketChangePct) : 0;
-
   const trend1hPct = oneHourBase && oneHourBase.priceMon > 0
     ? (token.priceMon / oneHourBase.priceMon - 1) * 100
     : marketChangePct;

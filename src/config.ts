@@ -18,7 +18,7 @@ function csv(name: string) {
 export const config = {
   network: "mainnet" as const,
   chainId: 143,
-  rpcUrl: process.env.MONAD_RPC_URL ?? "https://mainnet.monad.xyz/rpc",
+  rpcUrl: process.env.MONAD_RPC_URL ?? "https://rpc.monad.xyz",
   wsUrl: process.env.MONAD_WS_URL ?? "",
   privateKey: process.env.MONAD_PRIVATE_KEY ?? "",
   liveTrading: bool("LIVE_TRADING", false),

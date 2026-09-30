@@ -50,7 +50,7 @@ export const config = {
   // Established-token dip strategy: do not buy newly launched tokens.
   establishedOnly: true,
   minEstablishedAgeMinutes: Math.max(5, num("MIN_ESTABLISHED_AGE_MINUTES", 30)),
-  minLiquidityMon: Math.max(0, num("MIN_LIQUIDITY_MON", 25)),
+  minLiquidityUsd: Math.max(0, num("MIN_LIQUIDITY_USD", 100000)),
   minHolders: Math.max(0, Math.floor(num("MIN_HOLDERS", 25))),
   minVolumeMon: Math.max(0, num("MIN_VOLUME_MON", 100)),
   dipMinPct: Math.max(0, num("DIP_MIN_PCT", 8)),

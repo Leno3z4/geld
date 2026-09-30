@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { SeasonalityModel, positionExitSignal, scoreToken, shouldClose } from "../src/strategy.js";
+import { SeasonalityModel, entryGateDiagnostics, positionExitSignal, scoreToken, shouldClose } from "../src/strategy.js";
 
 test("seasonality is neutral until a bucket has enough observations", () => {
   const m = new SeasonalityModel();
@@ -130,4 +130,28 @@ test("early exit cuts a deteriorating loser before the hard stop", () => {
     profitProtectionRatio: 0.40
   });
   assert.equal(signal?.reason, "EARLY_MOMENTUM_STOP");
+});
+
+
+test("uses market change fallback until enough local history exists", () => {
+  const now = Date.now();
+  const token = {
+    token: "0x" + "9".repeat(40), symbol: "FALLBACK", name: "Fallback",
+    creator: "", pair: "",
+    createdAt: now - 8 * 60 * 60 * 1000, lastEventAt: now,
+    buys: 0, sells: 0, buyMon: 0, sellMon: 0, progressPct: 100,
+    graduated: true, locked: false, holders: 500, volumeUsd: 0,
+    priceUsd: 1, priceMon: 1, peakPriceMon: 1, localScore: 75,
+    liquidityUsd: 40000, liquidityMon: 1000000, volumeMon: 500,
+    changePct: -12
+  };
+  const d = entryGateDiagnostics(token, {
+    minEstablishedAgeMinutes: 30, minLiquidityUsd: 30000,
+    minHolders: 25, minVolumeMon: 100,
+    dipMinPct: 8, dipMaxPct: 35, recoveryMinPct: -4,
+    trendMax1hPct: 8, minTrend4hPct: -12, minLocalScore: 50
+  });
+  assert.equal(d.metrics.dipPct, 12);
+  assert.equal(d.metrics.trend1hPct, -12);
+  assert.equal(d.metrics.trend4hPct, -12);
 });

@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { config } from "./src/config.js";
 
 interface Env {
   GELD_BOT: DurableObjectNamespace<GeldBot>;
@@ -234,11 +235,48 @@ export class GeldBot extends DurableObject<Env> {
           balanceMon: state.balanceMon,
           openPositions: Object.values(state.positions).filter((p: any) => p.status === "OPEN").length,
           chainId: 143,
-          lastCycleAt: state.stats.lastCycleAt ?? 0
+          lastCycleAt: state.stats.lastCycleAt ?? 0,
+          minLiquidityUsd: config.minLiquidityUsd,
+          minMarketCapUsd: config.minMarketCapUsd
         });
       }
 
-      return Response.json(state);
+      return Response.json({
+        ...state,
+        effectiveConfig: {
+          network: config.network,
+          chainId: config.chainId,
+          liveTrading: config.liveTrading,
+          autoStart: config.autoStart,
+          minLiquidityUsd: config.minLiquidityUsd,
+          minMarketCapUsd: config.minMarketCapUsd,
+          minEstablishedAgeMinutes: config.minEstablishedAgeMinutes,
+          minHolders: config.minHolders,
+          minVolumeMon: config.minVolumeMon,
+          dipMinPct: config.dipMinPct,
+          dipMaxPct: config.dipMaxPct,
+          trendMax1hPct: config.trendMax1hPct,
+          minTrend4hPct: config.minTrend4hPct
+        }
+      });
+    }
+
+    if (path === "/api/config") {
+      return Response.json({
+        network: config.network,
+        chainId: config.chainId,
+        liveTrading: config.liveTrading,
+        autoStart: config.autoStart,
+        minLiquidityUsd: config.minLiquidityUsd,
+        minMarketCapUsd: config.minMarketCapUsd,
+        minEstablishedAgeMinutes: config.minEstablishedAgeMinutes,
+        minHolders: config.minHolders,
+        minVolumeMon: config.minVolumeMon,
+        dipMinPct: config.dipMinPct,
+        dipMaxPct: config.dipMaxPct,
+        trendMax1hPct: config.trendMax1hPct,
+        minTrend4hPct: config.minTrend4hPct
+      });
     }
 
     if (path === "/api/positions") {

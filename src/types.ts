@@ -52,6 +52,27 @@ export interface TokenSnapshot {
   aiAction?: DecisionAction;
   aiConfidence?: number;
   aiReason?: string;
+  entryDiagnostics?: EntryGateDiagnostics;
+}
+
+export interface EntryGateDiagnostics {
+  checkedAt: number;
+  readyForAi: boolean;
+  primary: string;
+  blockers: string[];
+  metrics: {
+    ageMinutes: number;
+    liquidityUsd: number;
+    holders: number;
+    volumeMon: number;
+    dipPct: number;
+    rebound1hPct: number;
+    trend1hPct: number;
+    trend4hPct: number;
+    localScore: number;
+  };
+  aiAction?: DecisionAction;
+  aiConfidence?: number;
 }
 
 export interface Position {

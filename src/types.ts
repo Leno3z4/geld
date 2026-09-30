@@ -28,7 +28,10 @@ export interface TokenSnapshot {
   localScore: number;
   marketType?: "BONDING_CURVE" | "DEX";
   liquidityMon?: number;
+  liquidityUsd?: number;
   marketCapMon?: number;
+  marketCapUsd?: number;
+  monUsdPrice?: number;
   volumeMon?: number;
   changePct?: number;
   athPriceMon?: number;

@@ -9,7 +9,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "types": ["node"]
+    "types": ["node", "@cloudflare/workers-types"]
   },
   "include": ["src/**/*.ts", "tests/**/*.ts", "worker.ts"],
   "exclude": ["webapp/node_modules", "webapp/dist", "node_modules", "dist"]

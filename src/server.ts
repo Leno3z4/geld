@@ -1,5 +1,6 @@
 import express, { type Express, type Response } from "express";
 import type { TradingEngine } from "./engine.js";
+import { config } from "./config.js";
 
 export function createApp(engine: TradingEngine, existingApp?: Express) {
   const app = existingApp ?? express();

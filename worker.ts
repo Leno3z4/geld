@@ -1,11 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
-import { Container, getContainer } from "@cloudflare/containers";
 
 interface Env {
-  GELD_CONTAINER: DurableObjectNamespace<GeldContainer>;
+  GELD_BOT: DurableObjectNamespace<GeldBot>;
   GELD_STATE: DurableObjectNamespace<GeldState>;
 
-  // Worker Secrets / vars.
   GELD_API_SECRET?: string;
   GELD_LIVE_TRADING?: string;
   GELD_AUTO_START?: string;
@@ -17,6 +15,26 @@ interface Env {
   STATE_SYNC_URL?: string;
   MONAD_RPC_URL?: string;
   MONAD_WS_URL?: string;
+
+  GEMINI_FAST_MODEL?: string;
+  GEMINI_ESCALATION_MODEL?: string;
+  STARTING_CAPITAL_MON?: string;
+  POSITION_SIZE_PCT?: string;
+  MAX_TOTAL_EXPOSURE_PCT?: string;
+  MAX_OPEN_POSITIONS?: string;
+  GAS_RESERVE_MON?: string;
+  MIN_LOCAL_SCORE?: string;
+  AI_MIN_CONFIDENCE?: string;
+  SLIPPAGE_PCT?: string;
+  HARD_STOP_LOSS_PCT?: string;
+  TAKE_PROFIT_PCT?: string;
+  TRAILING_STOP_PCT?: string;
+  MAX_HOLD_MINUTES?: string;
+  CANDIDATE_MAX_AGE_SECONDS?: string;
+  EVENT_POLL_MS?: string;
+  POSITION_LOOP_MS?: string;
+  AI_POSITION_REVIEW_MS?: string;
+  AI_FAST_COOLDOWN_MS?: string;
 }
 
 function isTrue(value?: string) {
@@ -25,34 +43,44 @@ function isTrue(value?: string) {
 
 function isAuthorized(request: Request, env: Env) {
   const expected = env.GELD_API_SECRET;
-  if (!expected) return false;
-  return request.headers.get("x-geld-api-secret") === expected;
+  return Boolean(expected && request.headers.get("x-geld-api-secret") === expected);
 }
 
-function containerEnv(env: Env) {
-  return {
-    NODE_ENV: "production",
-    BOT_PORT: "8787",
+function hydrateProcessEnv(env: Env) {
+  const mapping: Record<string, string | undefined> = {
     LIVE_TRADING: isTrue(env.GELD_LIVE_TRADING) ? "true" : "false",
     AUTO_START: isTrue(env.GELD_AUTO_START) ? "true" : "false",
-    MONAD_PRIVATE_KEY: env.MONAD_PRIVATE_KEY ?? "",
-    GEMINI_API_KEYS: env.GEMINI_API_KEYS ?? "",
-    NADFUN_API_KEY: env.NADFUN_API_KEY ?? "",
-    STATE_SYNC_SECRET: env.STATE_SYNC_SECRET ?? "",
-    STATE_SYNC_URL: env.STATE_SYNC_URL ?? "",
-    MONAD_RPC_URL: env.MONAD_RPC_URL ?? "https://mainnet.monad.xyz/rpc",
-    MONAD_WS_URL: env.MONAD_WS_URL ?? ""
+    MONAD_PRIVATE_KEY: env.MONAD_PRIVATE_KEY,
+    GEMINI_API_KEYS: env.GEMINI_API_KEYS,
+    NADFUN_API_KEY: env.NADFUN_API_KEY,
+    STATE_SYNC_SECRET: env.STATE_SYNC_SECRET,
+    STATE_SYNC_URL: env.STATE_SYNC_URL,
+    MONAD_RPC_URL: env.MONAD_RPC_URL,
+    MONAD_WS_URL: env.MONAD_WS_URL,
+    GEMINI_FAST_MODEL: env.GEMINI_FAST_MODEL,
+    GEMINI_ESCALATION_MODEL: env.GEMINI_ESCALATION_MODEL,
+    STARTING_CAPITAL_MON: env.STARTING_CAPITAL_MON,
+    POSITION_SIZE_PCT: env.POSITION_SIZE_PCT,
+    MAX_TOTAL_EXPOSURE_PCT: env.MAX_TOTAL_EXPOSURE_PCT,
+    MAX_OPEN_POSITIONS: env.MAX_OPEN_POSITIONS,
+    GAS_RESERVE_MON: env.GAS_RESERVE_MON,
+    MIN_LOCAL_SCORE: env.MIN_LOCAL_SCORE,
+    AI_MIN_CONFIDENCE: env.AI_MIN_CONFIDENCE,
+    SLIPPAGE_PCT: env.SLIPPAGE_PCT,
+    HARD_STOP_LOSS_PCT: env.HARD_STOP_LOSS_PCT,
+    TAKE_PROFIT_PCT: env.TAKE_PROFIT_PCT,
+    TRAILING_STOP_PCT: env.TRAILING_STOP_PCT,
+    MAX_HOLD_MINUTES: env.MAX_HOLD_MINUTES,
+    CANDIDATE_MAX_AGE_SECONDS: env.CANDIDATE_MAX_AGE_SECONDS,
+    EVENT_POLL_MS: env.EVENT_POLL_MS,
+    POSITION_LOOP_MS: env.POSITION_LOOP_MS,
+    AI_POSITION_REVIEW_MS: env.AI_POSITION_REVIEW_MS,
+    AI_FAST_COOLDOWN_MS: env.AI_FAST_COOLDOWN_MS
   };
-}
 
-async function startContainer(env: Env) {
-  const container = getContainer(env.GELD_CONTAINER, "singleton");
-  await container.startAndWaitForPorts({
-    startOptions: {
-      envVars: containerEnv(env)
-    }
-  });
-  return container;
+  for (const [key, value] of Object.entries(mapping)) {
+    if (value !== undefined) process.env[key] = value;
+  }
 }
 
 export class GeldState extends DurableObject<Env> {
@@ -79,27 +107,106 @@ export class GeldState extends DurableObject<Env> {
   }
 }
 
-export class GeldContainer extends Container<Env> {
-  defaultPort = 8787;
-  requiredPorts = [8787];
-  sleepAfter = "24h";
-  enableInternet = true;
-  entrypoint = ["node", "dist/src/container.js"];
-  envVars = {
-    NODE_ENV: "production",
-    BOT_PORT: "8787"
-  };
+export class GeldBot extends DurableObject<Env> {
+  private engine: any = null;
 
-  override onStart() {
-    console.log("geld container started");
+  private async getEngine() {
+    if (this.engine) return this.engine;
+
+    hydrateProcessEnv(this.env);
+    const { TradingEngine } = await import("./src/engine.js");
+
+    this.engine = new TradingEngine();
+    await this.engine.init();
+    return this.engine;
   }
 
-  override onStop(params: unknown) {
-    console.log("geld container stopped", params);
-  }
+  async fetch(request: Request) {
+    const url = new URL(request.url);
+    const path = url.pathname;
 
-  override onError(error: unknown) {
-    console.error("geld container error", error);
+    if (path === "/__cron") {
+      const engine = await this.getEngine();
+
+      if (!engine.snapshot().running && engine.snapshot().stats.startedAt) {
+        return Response.json(engine.snapshot());
+      }
+
+      if (!engine.snapshot().running) {
+        const autoStart = isTrue(this.env.GELD_AUTO_START);
+        if (!autoStart) return Response.json(engine.snapshot());
+      }
+
+      if (!engine.snapshot().running) {
+        await engine.startScheduled();
+      } else {
+        await engine.runScheduledCycle();
+      }
+
+      return Response.json(engine.snapshot());
+    }
+
+    if (!isAuthorized(request, this.env)) {
+      return new Response("Unauthorized", { status: 401 });
+    }
+
+    const engine = await this.getEngine();
+
+    if (path === "/api/health" || path === "/api/state") {
+      const state = engine.snapshot();
+
+      if (path === "/api/health") {
+        return Response.json({
+          ok: true,
+          running: state.running,
+          liveTrading: state.liveTrading,
+          walletAddress: state.walletAddress,
+          balanceMon: state.balanceMon,
+          openPositions: Object.values(state.positions).filter((p: any) => p.status === "OPEN").length,
+          chainId: 143,
+          lastCycleAt: state.stats.lastCycleAt ?? 0
+        });
+      }
+
+      return Response.json(state);
+    }
+
+    if (path === "/api/positions") {
+      return Response.json(Object.values(engine.snapshot().positions));
+    }
+
+    if (path === "/api/tokens") {
+      return Response.json(
+        Object.values(engine.snapshot().tokens)
+          .sort((a: any, b: any) => b.localScore - a.localScore)
+          .slice(0, 100)
+      );
+    }
+
+    if (path === "/api/trades") {
+      return Response.json(engine.snapshot().trades);
+    }
+
+    if (request.method === "POST" && path === "/api/start") {
+      await engine.startScheduled();
+      return Response.json({ ok: true, state: engine.snapshot() });
+    }
+
+    if (request.method === "POST" && path === "/api/stop") {
+      await engine.stop();
+      return Response.json({ ok: true, state: engine.snapshot() });
+    }
+
+    if (request.method === "POST" && path === "/api/sell-all") {
+      await engine.sellAll();
+      return Response.json({ ok: true, state: engine.snapshot() });
+    }
+
+    if (path === "/api/events") {
+      return Response.json(engine.snapshot());
+    }
+
+    return new Response("Not Found", { status: 404 });
   }
 }
 
@@ -110,25 +217,21 @@ export default {
     if (url.pathname.startsWith("/internal/state/")) {
       const id = env.GELD_STATE.idFromName("singleton");
       const innerPath = url.pathname.replace("/internal/state", "") || "/";
-      return env.GELD_STATE.get(id).fetch(
-        new Request(new URL(innerPath, url), request)
-      );
+      return env.GELD_STATE.get(id).fetch(new Request(new URL(innerPath, url), request));
     }
 
     if (!isAuthorized(request, env)) {
       return new Response("Unauthorized", { status: 401 });
     }
 
-    const container = await startContainer(env);
-
-    return container.fetch(request);
+    const id = env.GELD_BOT.idFromName("singleton");
+    return env.GELD_BOT.get(id).fetch(request);
   },
 
   async scheduled(_event: ScheduledEvent, env: Env) {
-    try {
-      await startContainer(env);
-    } catch (error) {
-      console.error("scheduled container start failed", error);
-    }
+    const id = env.GELD_BOT.idFromName("singleton");
+    await env.GELD_BOT.get(id).fetch(
+      new Request("https://geld.internal/__cron", { method: "POST" })
+    );
   }
 };

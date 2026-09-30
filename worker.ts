@@ -1,3 +1,4 @@
+import { DurableObject } from "cloudflare:workers";
 import { Container, getContainer } from "@cloudflare/containers";
 
 interface Env {

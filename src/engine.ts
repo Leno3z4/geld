@@ -8,6 +8,8 @@ import {
   erc20Abi,
   getBalance,
   getTokenBalance,
+  getTokenBalances,
+  quoteSells,
   getTokenDecimals,
   quoteBuy,
   quoteSell,
@@ -1257,80 +1259,102 @@ export class TradingEngine {
     if (!this.account) return;
 
     const state = this.store.get();
-    const tokens = Object.values(state.tokens);
+    const tokens = Object.values(state.tokens).filter(
+      (token) => /^0x[0-9a-fA-F]{40}$/.test(token.token)
+    );
     let recovered = 0;
 
-    for (const token of tokens) {
-      if (!/^0x[0-9a-f]{40}$/.test(token.token)) continue;
-
-      const existing = Object.values(this.store.get().positions).find(
-        (p) =>
-          p.token.toLowerCase() === token.token.toLowerCase() &&
-          (p.status === "OPEN" || p.status === "CLOSING")
-      );
-      if (existing) continue;
-
-      try {
-        const balanceRaw = await getTokenBalance(
-          this.publicClient,
-          token.token as Address,
-          this.account.address
-        );
-        if (balanceRaw <= 0n) continue;
-
-        const decimals = await getTokenDecimals(
-          this.publicClient,
-          token.token as Address
-        );
-        const currentQuote = await quoteSell(
-          this.publicClient,
-          token.token as Address,
-          balanceRaw
-        );
-        const currentMon = Number(formatUnits(currentQuote, 18));
-
-        // Ignore dust that is economically irrelevant to the trading book.
-        if (!Number.isFinite(currentMon) || currentMon < 0.001) continue;
-
-        // We do not invent historical cost basis. A recovered balance is
-        // marked at its current sellable MON value until its original BUY
-        // receipt can be associated with it.
-        const id = "RECOVERED:" + token.token.toLowerCase();
-        const position: Position = {
-          id,
-          token: token.token,
-          symbol: token.symbol,
-          amountRaw: balanceRaw.toString(),
-          decimals,
-          entryMon: currentMon,
-          entryPriceMon: currentMon / Math.max(Number(formatUnits(balanceRaw, decimals)), 1e-18),
-          currentMon,
-          realizedPnlMon: 0,
-          pnlMon: 0,
-          pnlPct: 0,
-          peakMon: currentMon,
-          peakPnlPct: 0,
-          entryLiquidityUsd: token.liquidityUsd ?? 0,
-          openedAt: Date.now(),
-          lastAiAt: 0,
-          entryTx: "RECOVERED_ONCHAIN_BALANCE",
-          costBasisKnown: false,
-          recoveredAt: Date.now(),
-          status: "OPEN"
-        };
-
-        this.store.upsertPosition(position);
-        recovered += 1;
-      } catch (error) {
-        this.store.update((s) => {
-          s.stats.lastError = error instanceof Error ? error.message : String(error);
-        });
-      }
+    if (tokens.length === 0) {
+      this.store.update((s) => {
+        s.stats.lastReconciliationAt = Date.now();
+        s.stats.recoveredPositions = 0;
+      });
+      return;
     }
 
-    // Also surface any pending execution that already has a confirmed
-    // token balance. This closes the crash window between on-chain settlement
-    // and position persistence without fabricating a historical PnL number.
+    try {
+      // Batch all known balanceOf calls through Multicall3. Cloudflare counts
+      // outbound RPC calls as Worker subrequests, so N individual reads can
+      // exceed the per-invocation limit even when each call is cheap.
+      const balances = await getTokenBalances(
+        this.publicClient,
+        tokens.map((token) => token.token as Address),
+        this.account.address
+      );
+
+      const candidates: Array<{ token: TokenSnapshot; balanceRaw: bigint }> = [];
+      const quoteRequests: Array<{ token: Address; amountRaw: bigint }> = [];
+
+      for (const token of tokens) {
+        const existing = Object.values(this.store.get().positions).find(
+          (p) =>
+            p.token.toLowerCase() === token.token.toLowerCase() &&
+            (p.status === "OPEN" || p.status === "CLOSING")
+        );
+        if (existing) continue;
+
+        const balanceRaw = balances.get(token.token.toLowerCase()) ?? 0n;
+        if (balanceRaw <= 0n) continue;
+
+        candidates.push({ token, balanceRaw });
+        quoteRequests.push({ token: token.token as Address, amountRaw: balanceRaw });
+      }
+
+      const quotes = await quoteSells(this.publicClient, quoteRequests);
+
+      for (const { token, balanceRaw } of candidates) {
+        try {
+          const currentQuote = quotes.get(token.token.toLowerCase());
+          if (currentQuote == null) continue;
+
+          // Decimals are only read for actual non-zero holdings, not every
+          // discovered token.
+          const decimals = await getTokenDecimals(
+            this.publicClient,
+            token.token as Address
+          );
+          const currentMon = Number(formatUnits(currentQuote, 18));
+
+          if (!Number.isFinite(currentMon) || currentMon < 0.001) continue;
+
+          const id = "RECOVERED:" + token.token.toLowerCase();
+          const position: Position = {
+            id,
+            token: token.token,
+            symbol: token.symbol,
+            amountRaw: balanceRaw.toString(),
+            decimals,
+            entryMon: currentMon,
+            entryPriceMon: currentMon / Math.max(Number(formatUnits(balanceRaw, decimals)), 1e-18),
+            currentMon,
+            realizedPnlMon: 0,
+            pnlMon: 0,
+            pnlPct: 0,
+            peakMon: currentMon,
+            peakPnlPct: 0,
+            entryLiquidityUsd: token.liquidityUsd ?? 0,
+            openedAt: Date.now(),
+            lastAiAt: 0,
+            entryTx: "RECOVERED_ONCHAIN_BALANCE",
+            costBasisKnown: false,
+            recoveredAt: Date.now(),
+            status: "OPEN"
+          };
+
+          this.store.upsertPosition(position);
+          recovered += 1;
+        } catch (error) {
+          this.store.update((s) => {
+            s.stats.lastError = error instanceof Error ? error.message : String(error);
+          });
+        }
+      }
+    } catch (error) {
+      this.store.update((s) => {
+        s.stats.lastError = error instanceof Error ? error.message : String(error);
+      });
+    }
+
     this.store.update((s) => {
       s.stats.lastReconciliationAt = Date.now();
       s.stats.recoveredPositions = recovered;

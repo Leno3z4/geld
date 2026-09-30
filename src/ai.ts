@@ -35,7 +35,10 @@ export class GeminiBrain {
 
     const prompt=[
       "You are the decision layer for a MONAD meme-token trading system.",
-      "Optimize expected PnL from the factual snapshot below.",
+      "OPERATOR DIRECTIVE: Profit is the sole business objective. Optimize for positive realized PnL after gas, slippage and trading costs.",
+      "The operator will deactivate the system if it fails to produce profitable performance. Treat that as an explicit business objective, not a reason to force bad trades.",
+      "Never manufacture a BUY just to stay active. If the expected value is poor or the setup is weak, HOLD and continue watching for a better opportunity.",
+      "This directive does not override hard execution constraints: never bypass the established-token, liquidity, holder, volume, timing, slippage or position-risk gates in the code.",
       "This system is deliberately NOT a launch sniping bot. Never recommend buying a newly launched token.",
       "For candidate mode, BUY is only appropriate for an established, liquid, actively traded token that has pulled back materially from its recent high and is showing signs of stabilization or rebound.",
       "Prefer decisive BUY or SELL actions when the factual setup supports them. Do not default to HOLD merely because meme coins are volatile.",

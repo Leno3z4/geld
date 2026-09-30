@@ -33,13 +33,15 @@ export const config = {
   minLocalScore: num("MIN_LOCAL_SCORE", 50),
   aiMinConfidence: num("AI_MIN_CONFIDENCE", 0.58),
   slippagePct: num("SLIPPAGE_PCT", 6),
+  sellGasLimit: Math.max(250000, Math.floor(num("SELL_GAS_LIMIT", 1_000_000))),
   hardStopPct: num("HARD_STOP_LOSS_PCT", 18),
   takeProfitPct: num("TAKE_PROFIT_PCT", 70),
   trailingPct: num("TRAILING_STOP_PCT", 12),
   maxHoldMinutes: num("MAX_HOLD_MINUTES", 180),
 
   // Aggressive profit-taking / loss-cutting for established tokens.
-  profitTake1Pct: num("PROFIT_TAKE_1_PCT", 15),
+  // Take a small first profit instead of waiting for a large move.
+  profitTake1Pct: num("PROFIT_TAKE_1_PCT", 3),
   profitTake1SellPct: num("PROFIT_TAKE_1_SELL_PCT", 25),
   profitTake2Pct: num("PROFIT_TAKE_2_PCT", 30),
   profitTake2SellPct: num("PROFIT_TAKE_2_SELL_PCT", 33),

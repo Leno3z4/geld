@@ -27,6 +27,7 @@ interface Env {
   MIN_LOCAL_SCORE?: string;
   AI_MIN_CONFIDENCE?: string;
   SLIPPAGE_PCT?: string;
+  SELL_GAS_LIMIT?: string;
   HARD_STOP_LOSS_PCT?: string;
   TAKE_PROFIT_PCT?: string;
   TRAILING_STOP_PCT?: string;
@@ -134,6 +135,7 @@ function hydrateProcessEnv(env: Env) {
     MIN_LOCAL_SCORE: env.MIN_LOCAL_SCORE,
     AI_MIN_CONFIDENCE: env.AI_MIN_CONFIDENCE,
     SLIPPAGE_PCT: env.SLIPPAGE_PCT,
+    SELL_GAS_LIMIT: env.SELL_GAS_LIMIT,
     HARD_STOP_LOSS_PCT: env.HARD_STOP_LOSS_PCT,
     TAKE_PROFIT_PCT: env.TAKE_PROFIT_PCT,
     TRAILING_STOP_PCT: env.TRAILING_STOP_PCT,

@@ -181,3 +181,30 @@ test("blocks established tokens below the $60k market cap floor", () => {
   });
   assert.ok(d.blockers.some((x) => x.includes("market cap $50.0k < $60.0k")));
 });
+
+
+test("small profitable moves trigger the first profit take", () => {
+  const now = Date.now();
+  const position = {
+    id: "p4", token: "0x" + "b".repeat(40), symbol: "SMALLWIN",
+    amountRaw: "100", decimals: 18, entryMon: 10, entryPriceMon: 1,
+    currentMon: 10.4, pnlMon: 0.4, pnlPct: 4, realizedPnlMon: 0,
+    peakMon: 10.4, peakPnlPct: 4, openedAt: now - 10 * 60000, lastAiAt: 0,
+    entryTx: "PAPER", status: "OPEN" as const
+  };
+  const signal = positionExitSignal(position, undefined, {
+    hardStopPct: 18, takeProfitPct: 70, trailingPct: 12, maxHoldMinutes: 180,
+    minLiquidityUsd: 5000, liquidityExitRatio: 0.65,
+    earlyExitLossPct: -10, earlyExitTrend1hPct: -8,
+    momentumExitProfitPct: 8, momentumExitTrend1hPct: -10, momentumExitReboundPct: 2,
+    sellPressureExitRatio: 0.65, sellPressureMinVolumeMon: 20,
+    profitTake1Pct: 3, profitTake1SellPct: 25,
+    profitTake2Pct: 15, profitTake2SellPct: 33,
+    profitTake3Pct: 30, profitTake3SellPct: 50,
+    profitProtectionStartPct: 12, profitProtectionFloorPct: 5,
+    profitProtectionRatio: 0.40
+  });
+  assert.equal(signal?.reason, "PROFIT_TAKE_1");
+  assert.equal(signal?.kind, "PARTIAL");
+  assert.equal(signal?.sellPct, 25);
+});

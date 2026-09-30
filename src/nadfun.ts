@@ -242,6 +242,10 @@ export async function sellToNative(
     address: ADDRESSES.ROUTER,
     abi: routerAbi,
     functionName: "sellToNative",
+    // Monad's RPC can reject viem's oversized gas estimate for NadFun sells.
+    // Keep the transaction below the network's per-transaction gas cap while
+    // leaving ample headroom for the V2 router path.
+    gas: BigInt(config.sellGasLimit),
     args: [{
       amountIn: amountRaw,
       amountOutMin: minOut(amountOut, slippagePct),

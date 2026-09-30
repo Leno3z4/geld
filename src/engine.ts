@@ -1560,6 +1560,9 @@ export class TradingEngine {
         );
 
         const receipt = await this.publicClient.waitForTransactionReceipt({ hash: tx });
+        if (receipt.status === "reverted") {
+          throw new Error("Sell transaction reverted: " + tx);
+        }
         const nativeAfter = await this.readNativeBalanceWithRetry();
         const gasUsed = BigInt(String(receipt.gasUsed ?? 0));
         const effectiveGasPrice = BigInt(String(receipt.effectiveGasPrice ?? 0));

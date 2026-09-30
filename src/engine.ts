@@ -1118,6 +1118,14 @@ export class TradingEngine {
       decimals = await getTokenDecimals(this.publicClient, token.token as Address);
       const before = await getTokenBalance(this.publicClient, token.token as Address, this.account.address);
 
+      tx = await buyNative(
+        this.walletClient,
+        this.publicClient,
+        token.token as Address,
+        spend,
+        config.slippagePct
+      );
+
       const receipt = await this.publicClient.waitForTransactionReceipt({ hash: tx });
       if (receipt.status === "reverted") {
         throw new Error("Buy transaction reverted: " + tx);

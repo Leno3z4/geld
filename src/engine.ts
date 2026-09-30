@@ -596,7 +596,9 @@ export class TradingEngine {
 
         soldAmountRaw = walletTokenBalance < soldAmountRaw ? walletTokenBalance : soldAmountRaw;
 
-        const nativeBefore = await this.publicClient.getBalance({ address: this.account.address });
+        const nativeBefore = BigInt(String(
+          await this.publicClient.getBalance({ address: this.account.address })
+        ));
 
         tx = await sellToNative(
           this.walletClient,
@@ -607,7 +609,9 @@ export class TradingEngine {
         );
 
         const receipt = await this.publicClient.waitForTransactionReceipt({ hash: tx });
-        const nativeAfter = await this.publicClient.getBalance({ address: this.account.address });
+        const nativeAfter = BigInt(String(
+          await this.publicClient.getBalance({ address: this.account.address })
+        ));
         const gasUsed = BigInt(String(receipt.gasUsed ?? 0));
         const effectiveGasPrice = BigInt(String(receipt.effectiveGasPrice ?? 0));
         const gasCost = gasUsed * effectiveGasPrice;

@@ -130,6 +130,9 @@ export interface TradeRecord {
 export interface EquityPoint {
   ts: number;
   balanceMon: number;
+  openExposureMon: number;
+  unrealizedPnlMon: number;
+  equityMon: number;
   realizedPnlMon: number;
 }
 

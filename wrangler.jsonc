@@ -37,6 +37,8 @@
     "MIN_TREND_4H_PCT": "-12",
     "LIQUIDITY_EXIT_RATIO": "0.65",
     "MAX_QUOTE_FAILURES": "3",
+    "LOG_CHUNK_BLOCKS": "100",
+    "MAX_LOG_CHUNKS_PER_CYCLE": "4",
     "STATE_SYNC_URL": "https://geld.mahoraga6190.workers.dev/internal/state/singleton"
   },
   "durable_objects": {

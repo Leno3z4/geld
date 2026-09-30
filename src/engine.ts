@@ -12,7 +12,9 @@ import {
   quoteBuy,
   quoteSell,
   buyNative,
-  sellToNative
+  sellToNative,
+  factoryAbi,
+  nadFunPairAbi
 } from "./nadfun.js";
 import { StateStore } from "./store.js";
 import { GeminiBrain } from "./ai.js";
@@ -83,6 +85,8 @@ interface MarketResponse {
     volume?: string;
     ath_price?: string;
     market_type?: string;
+    pair?: string;
+    pair_address?: string;
     is_locked?: boolean;
   };
   token_info?: {
@@ -108,6 +112,7 @@ export class TradingEngine {
   private aiTimer?: NodeJS.Timeout;
   private saveTimer?: NodeJS.Timeout;
   private lastBlock = 0n;
+  private lastDexBlock = 0n;
   private pendingCandidates = new Set<string>();
   private reservedSpendMon = 0;
 
@@ -223,7 +228,7 @@ export class TradingEngine {
           symbol: String(info.symbol ?? "?"),
           name: String(info.name ?? info.symbol ?? "Unknown"),
           creator: String(info.creator?.account_id ?? info.creator ?? ""),
-          pair: String(info.pair ?? market.pair ?? ""),
+          pair: String(info.pair ?? market.pair ?? market.pair_address ?? row?.pair ?? ""),
           quoteToken: String(info.quote_token ?? ""),
           createdBlock: String(info.created_block ?? ""),
           virtualTokenStart: undefined,
@@ -263,7 +268,26 @@ export class TradingEngine {
         token.changePct = numeric(row?.percent ?? market.percent ?? token.changePct);
         token.priceMon = priceMon || marketPriceMon || token.priceMon || 0;
         token.priceUsd = numeric(market.price_usd ?? token.priceUsd);
-        token.athPriceMon = numeric(market.ath_price ?? token.athPriceMon);
+
+        const athPriceUsd = numeric(market.ath_price ?? token.athPriceUsd);
+        if (athPriceUsd > 0) {
+          token.athPriceUsd = athPriceUsd;
+          if ((token.monUsdPrice ?? 0) > 0) {
+            token.athPriceMon = athPriceUsd / token.monUsdPrice!;
+          }
+        }
+
+        const marketPair = String(
+          info.pair ??
+          market.pair ??
+          market.pair_address ??
+          row?.pair ??
+          ""
+        );
+        if (/^0x[0-9a-fA-F]{40}$/.test(marketPair)) {
+          token.pair = marketPair.toLowerCase();
+        }
+
         token.lastMarketAt = Date.now();
 
         if (token.priceMon > 0) {
@@ -320,6 +344,10 @@ export class TradingEngine {
         const entrySetup = diagnostics.blockers.length === 0;
         if (entrySetup) candidates.push(token);
       }
+
+      await this.resolveDexPairs(
+        Object.values(this.store.get().tokens).filter((token) => token.graduated)
+      );
 
       candidates
         .sort((a, b) =>
@@ -395,6 +423,7 @@ export class TradingEngine {
     await this.managePositions();
     await this.discoverEstablishedTokens();
     await this.pollLogs();
+    await this.pollDexLogs();
     await this.reviewOpenPositions();
 
     this.store.update((s) => {
@@ -468,9 +497,10 @@ export class TradingEngine {
       let cursor = this.lastBlock + 1n;
       let totalLogs = 0;
 
+      const rpcRange = Math.min(100, config.logChunkBlocks);
       for (let chunk = 0; chunk < config.maxLogChunksPerCycle && cursor <= latest; chunk += 1) {
-        const to = latest > cursor + BigInt(config.logChunkBlocks - 1)
-          ? cursor + BigInt(config.logChunkBlocks - 1)
+        const to = latest > cursor + BigInt(rpcRange - 1)
+          ? cursor + BigInt(rpcRange - 1)
           : latest;
 
         const logs = await this.publicClient.getLogs({
@@ -497,6 +527,139 @@ export class TradingEngine {
       this.store.update((s) => {
         s.stats.lastError = error instanceof Error ? error.message : String(error);
         s.stats.lastLogPollAt = Date.now();
+      });
+    }
+  }
+
+  private async pollDexLogs() {
+    try {
+      const latest = await this.publicClient.getBlockNumber();
+
+      if (this.lastDexBlock === 0n) {
+        const persisted = this.store.get().stats.lastDexProcessedBlock;
+        this.lastDexBlock = persisted
+          ? BigInt(persisted)
+          : latest > BigInt(config.eventBackfillBlocks)
+            ? latest - BigInt(config.eventBackfillBlocks)
+            : 0n;
+      }
+
+      const pairMap = new Map<string, { token: TokenSnapshot; token0: string; token1: string }>();
+
+      for (const token of Object.values(this.store.get().tokens)) {
+        if (!token.graduated || !/^0x[0-9a-f]{40}$/.test(token.pair)) continue;
+        if (
+          !/^0x[0-9a-f]{40}$/.test(token.pairToken0 ?? "") ||
+          !/^0x[0-9a-f]{40}$/.test(token.pairToken1 ?? "")
+        ) continue;
+
+        pairMap.set(token.pair.toLowerCase(), {
+          token,
+          token0: token.pairToken0!,
+          token1: token.pairToken1!
+        });
+      }
+
+      if (!pairMap.size || latest <= this.lastDexBlock) {
+        this.store.update((s) => {
+          s.stats.lastDexLogCount = 0;
+          s.stats.lastDexLogPollAt = Date.now();
+          s.stats.lastDexProcessedBlock = this.lastDexBlock.toString();
+        });
+        return;
+      }
+
+      const pairs = [...pairMap.keys()] as Address[];
+      const eventAbi = nadFunPairAbi.filter((item: any) => item.type === "event");
+      let cursor = this.lastDexBlock + 1n;
+      let totalLogs = 0;
+      const rpcRange = Math.min(100, config.logChunkBlocks);
+
+      for (let chunk = 0; chunk < config.maxLogChunksPerCycle && cursor <= latest; chunk += 1) {
+        const to = latest > cursor + BigInt(rpcRange - 1)
+          ? cursor + BigInt(rpcRange - 1)
+          : latest;
+
+        const logs = await this.publicClient.getLogs({
+          address: pairs,
+          events: eventAbi,
+          fromBlock: cursor,
+          toBlock: to
+        });
+
+        totalLogs += logs.length;
+
+        for (const log of logs) {
+          const parsed: any = parseEventLogs({
+            abi: nadFunPairAbi,
+            logs: [log]
+          })[0];
+          if (!parsed || parsed.eventName !== "Swap") continue;
+
+          const pairAddress = String(log.address ?? "").toLowerCase();
+          const meta = pairMap.get(pairAddress);
+          if (!meta) continue;
+
+          const args = parsed.args as any;
+          const tokenIs0 = meta.token0 === meta.token.token.toLowerCase();
+          const tokenIs1 = meta.token1 === meta.token.token.toLowerCase();
+          const quoteIs0 = meta.token0 === ADDRESSES.WMON.toLowerCase();
+          const quoteIs1 = meta.token1 === ADDRESSES.WMON.toLowerCase();
+
+          if ((!tokenIs0 && !tokenIs1) || (!quoteIs0 && !quoteIs1)) continue;
+
+          const quoteIn = quoteIs0 ? BigInt(args.amount0In) : BigInt(args.amount1In);
+          const quoteOut = quoteIs0 ? BigInt(args.amount0Out) : BigInt(args.amount1Out);
+          const baseIn = tokenIs0 ? BigInt(args.amount0In) : BigInt(args.amount1In);
+          const baseOut = tokenIs0 ? BigInt(args.amount0Out) : BigInt(args.amount1Out);
+
+          const now = Date.now();
+
+          if (quoteIn > 0n && baseOut > 0n) {
+            const amount = Number(formatUnits(quoteIn, 18));
+            if (Number.isFinite(amount) && amount > 0) {
+              meta.token.buys += 1;
+              meta.token.buyMon += amount;
+              meta.token.flowHistory = [
+                ...(meta.token.flowHistory ?? []),
+                { ts: now, buyMon: amount, sellMon: 0 }
+              ].slice(-240);
+              this.seasonality.observe(now, amount, 0);
+            }
+          } else if (baseIn > 0n && quoteOut > 0n) {
+            const amount = Number(formatUnits(quoteOut, 18));
+            if (Number.isFinite(amount) && amount > 0) {
+              meta.token.sells += 1;
+              meta.token.sellMon += amount;
+              meta.token.flowHistory = [
+                ...(meta.token.flowHistory ?? []),
+                { ts: now, buyMon: 0, sellMon: amount }
+              ].slice(-240);
+              this.seasonality.observe(now, 0, amount);
+            }
+          }
+
+          meta.token.lastEventAt = now;
+          updateMarketMetrics(meta.token);
+          meta.token.localScore = scoreToken(meta.token, this.seasonality);
+          this.store.upsertToken(meta.token);
+        }
+
+        this.lastDexBlock = to;
+        cursor = to + 1n;
+      }
+
+      this.store.update((s) => {
+        s.stats.eventCount += totalLogs;
+        s.stats.lastDexLogCount = totalLogs;
+        s.stats.lastDexLogPollAt = Date.now();
+        s.stats.lastDexProcessedBlock = this.lastDexBlock.toString();
+        s.seasonality = this.seasonality.export();
+      });
+    } catch (error) {
+      this.store.update((s) => {
+        s.stats.lastDexLogPollAt = Date.now();
+        s.stats.lastError = error instanceof Error ? error.message : String(error);
       });
     }
   }
@@ -666,12 +829,100 @@ export class TradingEngine {
       token.volumeMon = Number.isFinite(Number(payload.market_info?.volume))
         ? Number(payload.market_info?.volume) / 1e18
         : token.volumeMon;
+
+      const enrichedPair = String(
+        payload.market_info?.pair ??
+        payload.market_info?.pair_address ??
+        ""
+      );
+      if (/^0x[0-9a-fA-F]{40}$/.test(enrichedPair)) {
+        token.pair = enrichedPair.toLowerCase();
+      }
+
+      const enrichedAthUsd = numeric(payload.market_info?.ath_price ?? token.athPriceUsd);
+      if (enrichedAthUsd > 0) {
+        token.athPriceUsd = enrichedAthUsd;
+        if ((token.monUsdPrice ?? 0) > 0) {
+          token.athPriceMon = enrichedAthUsd / token.monUsdPrice!;
+        }
+      }
+
       token.graduated = payload.token_info?.is_graduated ?? token.graduated;
       token.symbol = payload.token_info?.symbol ?? token.symbol;
       token.name = payload.token_info?.name ?? token.name;
       token.creator = payload.token_info?.creator?.account_id ?? token.creator;
     } catch {
       // On-chain signals remain authoritative when optional API enrichment fails.
+    }
+  }
+
+  private async resolveDexPairs(tokens: TokenSnapshot[]) {
+    const dexTokens = tokens.filter((token) => token.graduated);
+    const missingPair = dexTokens.filter(
+      (token) =>
+        !/^0x[0-9a-f]{40}$/.test(token.pair) ||
+        token.pair === "0x0000000000000000000000000000000000000000"
+    );
+
+    if (missingPair.length) {
+      try {
+        const results = await this.publicClient.multicall({
+          contracts: missingPair.map((token) => ({
+            address: ADDRESSES.FACTORY,
+            abi: factoryAbi,
+            functionName: "getPair",
+            args: [token.token as Address, ADDRESSES.WMON]
+          }))
+        });
+
+        results.forEach((result: any, index: number) => {
+          const pair = typeof result.result === "string" ? result.result.toLowerCase() : "";
+          if (
+            /^0x[0-9a-f]{40}$/.test(pair) &&
+            pair !== "0x0000000000000000000000000000000000000000"
+          ) {
+            missingPair[index].pair = pair;
+          }
+        });
+      } catch {}
+    }
+
+    const needsMeta = dexTokens.filter(
+      (token) =>
+        /^0x[0-9a-f]{40}$/.test(token.pair) &&
+        token.pair !== "0x0000000000000000000000000000000000000000" &&
+        (!/^0x[0-9a-f]{40}$/.test(token.pairToken0 ?? "") ||
+          !/^0x[0-9a-f]{40}$/.test(token.pairToken1 ?? ""))
+    );
+
+    if (needsMeta.length) {
+      try {
+        const results = await this.publicClient.multicall({
+          contracts: needsMeta.flatMap((token) => [
+            {
+              address: token.pair as Address,
+              abi: nadFunPairAbi,
+              functionName: "token0"
+            },
+            {
+              address: token.pair as Address,
+              abi: nadFunPairAbi,
+              functionName: "token1"
+            }
+          ])
+        });
+
+        needsMeta.forEach((token, index) => {
+          const token0 = results[index * 2]?.result;
+          const token1 = results[index * 2 + 1]?.result;
+          if (typeof token0 === "string") token.pairToken0 = token0.toLowerCase();
+          if (typeof token1 === "string") token.pairToken1 = token1.toLowerCase();
+        });
+      } catch {}
+    }
+
+    for (const token of dexTokens) {
+      this.store.upsertToken(token);
     }
   }
 

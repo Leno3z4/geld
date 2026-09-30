@@ -65,7 +65,8 @@ export const config = {
   aiFastCooldownMs: num("AI_FAST_COOLDOWN_MS", 4000),
   candidateMaxAgeSeconds: num("CANDIDATE_MAX_AGE_SECONDS", 180),
   eventBackfillBlocks: Math.max(0, Math.floor(num("EVENT_BACKFILL_BLOCKS", 1000))),
-  logChunkBlocks: Math.max(1, Math.floor(num("LOG_CHUNK_BLOCKS", 200))),
+  // Monad currently rejects eth_getLogs ranges wider than 100 blocks.
+  logChunkBlocks: Math.max(1, Math.min(100, Math.floor(num("LOG_CHUNK_BLOCKS", 100)))),
   maxLogChunksPerCycle: Math.max(1, Math.floor(num("MAX_LOG_CHUNKS_PER_CYCLE", 4))),
 
   // Established-token dip strategy: do not buy newly launched tokens.

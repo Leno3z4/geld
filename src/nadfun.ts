@@ -17,7 +17,13 @@ export const MONAD = defineChain({
   id: 143,
   name: "Monad Mainnet",
   nativeCurrency: { name: "Monad", symbol: "MON", decimals: 18 },
-  rpcUrls: { default: { http: [config.rpcUrl] } }
+  rpcUrls: { default: { http: [config.rpcUrl] } },
+  contracts: {
+    multicall3: {
+      address: "0xcA11bde05977b3631167028862bE2a173976CA11" as Address,
+      blockCreated: 9248132
+    }
+  }
 });
 
 export const ADDRESSES = {

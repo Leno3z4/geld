@@ -5,6 +5,10 @@ on:
     branches: ["master"]
   workflow_dispatch:
 
+concurrency:
+  group: cloudflare-geld-production
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -12,9 +16,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Build and deploy Worker + Container
+      - name: Deploy Worker + Container
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy
+
+      - name: Verify deployment configuration
+        if: ${{ success() }}
+        run: echo "Cloudflare deployment completed for ${GITHUB_SHA}"

@@ -685,7 +685,7 @@ export class TradingEngine {
 
       const watchable = shouldWatch(
         token,
-        config.minLiquidityMon,
+        config.minLiquidityUsd,
         config.minHolders,
         config.minVolumeMon
       );
@@ -724,7 +724,7 @@ export class TradingEngine {
           config.minLocalScore,
           config.aiMinConfidence,
           config.minEstablishedAgeMinutes,
-          config.minLiquidityMon,
+          config.minLiquidityUsd,
           config.minHolders,
           config.minVolumeMon,
           config.dipMinPct,

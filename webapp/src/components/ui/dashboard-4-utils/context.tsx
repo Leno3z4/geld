@@ -18,6 +18,8 @@ type DashboardState = {
     eventCount: number;
     wins: number;
     losses: number;
+    lastProcessedBlock?: string;
+    lastCycleAt?: number;
     lastError?: string;
   };
 };
@@ -73,36 +75,25 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       setApiError("");
     };
 
-    fetch("/api/state", {
-      headers: { accept: "application/json" },
-      cache: "no-store"
-    })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`API ${response.status}`);
-        return response.json() as Promise<DashboardState>;
-      })
-      .then(applyState)
-      .catch((error) => {
-        if (mounted) setApiError(error instanceof Error ? error.message : String(error));
-      });
-
-    const events = new EventSource("/api/events");
-
-    events.addEventListener("state", (event) => {
+    const refresh = async () => {
       try {
-        applyState(JSON.parse((event as MessageEvent).data) as DashboardState);
+        const response = await fetch("/api/state", {
+          headers: { accept: "application/json" },
+          cache: "no-store"
+        });
+        if (!response.ok) throw new Error(`API ${response.status}`);
+        applyState(await response.json() as DashboardState);
       } catch (error) {
         if (mounted) setApiError(error instanceof Error ? error.message : String(error));
       }
-    });
-
-    events.onerror = () => {
-      if (mounted) setApiError("live stream unavailable");
     };
+
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 5000);
 
     return () => {
       mounted = false;
-      events.close();
+      window.clearInterval(timer);
     };
   }, []);
 
@@ -110,7 +101,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     <C.Provider value={state}>
       {apiError ? (
         <div className="mb-4 rounded-lg border border-amber-900/60 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
-          Dashboard API: {apiError}. Showing local defaults until the backend responds.
+          Dashboard API: {apiError}. Showing the last known state until the backend responds.
         </div>
       ) : null}
       {children}

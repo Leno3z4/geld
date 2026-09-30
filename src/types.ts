@@ -6,6 +6,8 @@ export interface TokenSnapshot {
   name: string;
   creator: string;
   pair: string;
+  pairToken0?: string;
+  pairToken1?: string;
   quoteToken?: string;
   createdBlock?: string;
   virtualTokenStart?: string;
@@ -35,6 +37,7 @@ export interface TokenSnapshot {
   volumeMon?: number;
   changePct?: number;
   athPriceMon?: number;
+  athPriceUsd?: number;
   dipPct?: number;
   trendPct1h?: number;
   trendPct4h?: number;
@@ -137,6 +140,9 @@ export interface BotStats {
   startedAt?: number;
   lastLogCount?: number;
   lastLogPollAt?: number;
+  lastDexLogCount?: number;
+  lastDexLogPollAt?: number;
+  lastDexProcessedBlock?: string;
   eventBackfillDone?: boolean;
   lastDiscoveryAt?: number;
   discoveredTokens?: number;

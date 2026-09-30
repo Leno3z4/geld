@@ -1408,16 +1408,11 @@ export class TradingEngine {
         throw new Error("Invalid sell proceeds");
       }
 
-      let remainingAmountRaw = 0n;
-      if (config.liveTrading) {
-        remainingAmountRaw = await getTokenBalance(
-          this.publicClient,
-          position.token as Address,
-          this.account.address
-        );
-      } else {
-        remainingAmountRaw = walletTokenBalance - soldAmountRaw;
-      }
+      // The confirmed swap consumed exactly soldAmountRaw. Do not make
+      // successful SELL reconciliation depend on a second token-balance RPC
+      // call: if that RPC fails after the swap, the old code could leave a
+      // phantom OPEN position even though the tokens were already sold.
+      const remainingAmountRaw = walletTokenBalance - soldAmountRaw;
 
       const realizedPnl = proceeds - costBasisSold;
       const remainingCostBasis = Math.max(0, position.entryMon - costBasisSold);

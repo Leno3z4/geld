@@ -1,8 +1,10 @@
 name: CI
+
 on:
   push:
     branches: ["master","feat/monad-ai-live-rewrite"]
   pull_request:
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -14,6 +16,8 @@ jobs:
           cache: npm
           cache-dependency-path: package.json
       - run: npm install
+      - run: npm --prefix webapp install
       - run: npm run typecheck
       - run: npm test
-      - run: npm run build
+      - run: npm run build:app
+      - run: npm run build:web

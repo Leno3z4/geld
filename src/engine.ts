@@ -28,12 +28,16 @@ function decodeNadfunPayload(text: string) {
   if (!trimmed) return null;
 
   try {
-    return JSON.parse(trimmed);
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed !== "string") return parsed;
+    return decodeNadfunPayload(parsed);
   } catch {}
 
   try {
+    const normalized = trimmed.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
     const decoded = new TextDecoder().decode(
-      Uint8Array.from(atob(trimmed), (char) => char.charCodeAt(0))
+      Uint8Array.from(atob(padded), (char) => char.charCodeAt(0))
     );
     return JSON.parse(decoded);
   } catch {
@@ -181,6 +185,7 @@ export class TradingEngine {
 
       let watched = 0;
       let eligible = 0;
+      const candidates: TokenSnapshot[] = [];
 
       for (const row of rows) {
         const info = row?.token_info ?? {};
@@ -295,10 +300,19 @@ export class TradingEngine {
         this.store.upsertToken(token);
 
         const entrySetup = token.watchReason === "ENTRY SETUP: established dip candidate; awaiting AI";
-        if (entrySetup) {
-          void this.maybeEvaluateCandidate(token);
-        }
+        if (entrySetup) candidates.push(token);
       }
+
+      candidates
+        .sort((a, b) =>
+          (b.localScore - a.localScore) ||
+          ((b.liquidityMon ?? 0) - (a.liquidityMon ?? 0)) ||
+          ((b.volumeMon ?? 0) - (a.volumeMon ?? 0))
+        )
+        .slice(0, config.aiCandidateLimit)
+        .forEach((token) => {
+          void this.maybeEvaluateCandidate(token);
+        });
 
       this.store.update((s) => {
         s.stats.lastDiscoveryAt = Date.now();

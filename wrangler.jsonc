@@ -9,6 +9,7 @@
   "vars": {
     "GELD_LIVE_TRADING": "true",
     "GELD_AUTO_START": "true",
+    "MONAD_RPC_URL": "https://rpc.monad.xyz",
     "STATE_SYNC_URL": "https://geld.mahoraga6190.workers.dev/internal/state/singleton"
   },
   "durable_objects": {

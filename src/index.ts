@@ -56,7 +56,8 @@ async function proxy(req: any, res: any) {
       if (
         key !== "content-length" &&
         key !== "connection" &&
-        key !== "transfer-encoding"
+        key !== "transfer-encoding" &&
+        key !== "content-encoding"
       ) {
         res.setHeader(key, value);
       }

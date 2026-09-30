@@ -577,6 +577,7 @@ export class TradingEngine {
       }
 
       token.progressPct = curveProgressPct(token);
+      updateMarketMetrics(token);
       token.localScore = scoreToken(token, this.seasonality);
 
       this.store.upsertToken(token);
@@ -825,6 +826,7 @@ export class TradingEngine {
       currentMon: spend,
       pnlMon: 0,
       pnlPct: 0,
+      realizedPnlMon: 0,
       peakMon: spend,
       peakPnlPct: 0,
       entryLiquidityUsd: token.liquidityUsd ?? 0,
@@ -1072,6 +1074,7 @@ export class TradingEngine {
 
       const realizedPnl = proceeds - costBasisSold;
       const remainingCostBasis = Math.max(0, position.entryMon - costBasisSold);
+      const totalRealizedPnl = (position.realizedPnlMon ?? 0) + realizedPnl;
 
       this.store.addTrade({
         id: "SELL:" + position.id + ":" + Date.now(),
@@ -1091,6 +1094,7 @@ export class TradingEngine {
         s.realizedPnlMon += realizedPnl;
       });
 
+      position.realizedPnlMon = totalRealizedPnl;
       position.amountRaw = remainingAmountRaw.toString();
       position.entryMon = remainingCostBasis;
 
@@ -1103,7 +1107,7 @@ export class TradingEngine {
         position.closeTx = tx;
         position.closeReason = reason;
         position.amountRaw = "0";
-        if (realizedPnl >= 0) this.store.update((s) => { s.stats.wins += 1; });
+        if (totalRealizedPnl >= 0) this.store.update((s) => { s.stats.wins += 1; });
         else this.store.update((s) => { s.stats.losses += 1; });
       } else {
         const remainingValue = await quoteSell(
@@ -1111,7 +1115,7 @@ export class TradingEngine {
           position.token as Address,
           remainingAmountRaw
         );
-        position.currentMon = Number(formatUnits(remainingValue, position.decimals));
+        position.currentMon = Number(formatUnits(remainingValue, 18));
         position.pnlMon = position.currentMon - position.entryMon;
         position.pnlPct = position.entryMon ? position.pnlMon / position.entryMon * 100 : 0;
         position.peakMon = Math.max(0, position.peakMon * (1 - safeSoldFraction));
@@ -1125,7 +1129,7 @@ export class TradingEngine {
         this.store.upsertPosition(position);
       }
     } catch (error) {
-      position.status = "FAILED";
+      position.status = "OPEN";
       position.closeReason = error instanceof Error ? error.message : String(error);
       this.store.update((s) => {
         s.stats.lastError = position.closeReason;

@@ -1103,8 +1103,16 @@ export class TradingEngine {
       return;
     }
 
-    const openCount = Object.values(this.store.get().positions).filter((p) => p.status === "OPEN").length;
-    if (openCount >= config.maxOpenPositions) return;
+    const stateBeforeBuy = this.store.get();
+    const activePositionCount = Object.values(stateBeforeBuy.positions).filter(
+      (p) => p.status === "OPEN" || p.status === "CLOSING"
+    ).length;
+    const pendingBuyCount = Object.values(stateBeforeBuy.pendingExecutions).filter(
+      (pending) => pending.side === "BUY"
+    ).length;
+    // Count in-flight BUYs as reserved position slots so concurrent AI
+    // candidate evaluations cannot race past maxOpenPositions.
+    if (activePositionCount + pendingBuyCount >= config.maxOpenPositions) return;
 
     await this.refreshBalance();
 

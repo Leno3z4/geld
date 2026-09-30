@@ -63,6 +63,7 @@ export interface Position {
   entryMon: number;
   entryPriceMon: number;
   currentMon: number;
+  realizedPnlMon?: number;
   pnlMon: number;
   pnlPct: number;
   peakMon: number;

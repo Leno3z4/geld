@@ -16,11 +16,41 @@ import {
 } from "./nadfun.js";
 import { StateStore } from "./store.js";
 import { GeminiBrain } from "./ai.js";
-import { SeasonalityModel, scoreToken, shouldClose, shouldOpen, curveProgressPct } from "./strategy.js";
+import { SeasonalityModel, scoreToken, shouldClose, shouldOpen, shouldWatch, updateMarketMetrics, curveProgressPct } from "./strategy.js";
 import type { BotState, Position, TokenSnapshot } from "./types.js";
 import { formatUnits } from "viem";
 
 type Listener = (state: BotState) => void;
+
+
+function decodeNadfunPayload(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {}
+
+  try {
+    const decoded = new TextDecoder().decode(
+      Uint8Array.from(atob(trimmed), (char) => char.charCodeAt(0))
+    );
+    return JSON.parse(decoded);
+  } catch {
+    return null;
+  }
+}
+
+function numeric(value: unknown) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function createdAtMs(value: unknown) {
+  const n = numeric(value);
+  if (!n) return 0;
+  return n < 10_000_000_000 ? n * 1000 : n;
+}
 
 interface MarketResponse {
   market_info?: {
@@ -106,6 +136,162 @@ export class TradingEngine {
     await this.persist();
   }
 
+  private async discoverEstablishedTokens() {
+    try {
+      const url =
+        config.nadfunApiUrl +
+        "/order/market_cap?page=1&limit=" +
+        config.discoveryLimit +
+        "&is_nsfw=false";
+
+      const response = await fetch(url, {
+        headers: {
+          accept: "application/json",
+          ...(config.nadfunApiKey ? { "X-API-Key": config.nadfunApiKey } : {})
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error("NadFun discovery failed: HTTP " + response.status);
+      }
+
+      const payload = decodeNadfunPayload(await response.text());
+      const rows = Array.isArray(payload?.tokens) ? payload.tokens : [];
+
+      let watched = 0;
+      let eligible = 0;
+
+      for (const row of rows) {
+        const info = row?.token_info ?? {};
+        const market = row?.market_info ?? {};
+        const tokenAddress = String(info.token_id ?? info.token ?? row?.address ?? "").toLowerCase();
+        if (!/^0x[0-9a-f]{40}$/.test(tokenAddress)) continue;
+
+        const createdAt = createdAtMs(info.created_at ?? info.createdAt);
+        const reserveNative = numeric(market.reserve_native);
+        const reserveToken = numeric(market.reserve_token);
+        const priceMonFromReserve = reserveNative > 0 && reserveToken > 0
+          ? reserveNative / reserveToken
+          : 0;
+        const priceMon = priceMonFromReserve ||
+          numeric(market.price_native ?? market.price_mon ?? market.token_price);
+        const liquidityMon = reserveNative > 0 ? reserveNative / 1e18 : 0;
+        const volumeMonRaw = numeric(market.volume);
+        const volumeMon = volumeMonRaw > 0 ? volumeMonRaw / 1e18 : 0;
+        const holders = Math.max(0, Math.floor(numeric(market.holder_count ?? market.holders)));
+        const graduated = Boolean(info.is_graduated ?? market.market_type === "DEX");
+
+        const existing = this.store.get().tokens[tokenAddress];
+
+        const token: TokenSnapshot = existing ?? {
+          token: tokenAddress,
+          symbol: String(info.symbol ?? "?"),
+          name: String(info.name ?? info.symbol ?? "Unknown"),
+          creator: String(info.creator?.account_id ?? info.creator ?? ""),
+          pair: String(info.pair ?? market.pair ?? ""),
+          quoteToken: String(info.quote_token ?? ""),
+          createdBlock: String(info.created_block ?? ""),
+          virtualTokenStart: undefined,
+          virtualTokenReserve: undefined,
+          minTokenReserve: undefined,
+          createdAt: createdAt || Date.now(),
+          lastEventAt: Date.now(),
+          buys: 0,
+          sells: 0,
+          buyMon: 0,
+          sellMon: 0,
+          progressPct: 100,
+          graduated,
+          locked: Boolean(info.is_locked ?? market.is_locked),
+          holders: 0,
+          volumeUsd: 0,
+          priceUsd: 0,
+          priceMon: 0,
+          peakPriceMon: 0,
+          localScore: 0
+        };
+
+        token.name = String(info.name ?? token.name);
+        token.symbol = String(info.symbol ?? token.symbol);
+        token.creator = String(info.creator?.account_id ?? info.creator ?? token.creator);
+        token.graduated = graduated;
+        token.locked = Boolean(info.is_locked ?? market.is_locked ?? token.locked);
+        token.marketType = market.market_type === "DEX" || graduated ? "DEX" : "BONDING_CURVE";
+        token.liquidityMon = liquidityMon || token.liquidityMon || 0;
+        token.volumeMon = volumeMon || token.volumeMon || 0;
+        token.holders = holders || token.holders || 0;
+        token.changePct = numeric(row?.percent ?? market.percent ?? token.changePct);
+        token.priceMon = priceMon || token.priceMon || 0;
+        token.priceUsd = numeric(market.price_usd ?? token.priceUsd);
+        token.athPriceMon = numeric(market.ath_price ?? token.athPriceMon);
+        token.lastMarketAt = Date.now();
+
+        if (token.priceMon > 0) {
+          const history = token.priceHistory ?? [];
+          const previous = history.at(-1);
+          if (!previous || Date.now() - previous.ts >= config.priceSampleMs) {
+            history.push({ ts: Date.now(), priceMon: token.priceMon });
+            token.priceHistory = history.slice(-72);
+            if (previous && previous.priceMon > 0) {
+              const sampleReturn = (token.priceMon / previous.priceMon - 1) * 100;
+              this.seasonality.observeReturn(Date.now(), sampleReturn);
+            }
+          }
+        }
+
+        updateMarketMetrics(token);
+        token.localScore = scoreToken(token, this.seasonality);
+
+        const watchable = shouldWatch(
+          token,
+          config.minLiquidityMon,
+          config.minHolders,
+          config.minVolumeMon
+        );
+
+        const age = (Date.now() - token.createdAt) / 60000;
+        const isDip = (token.dipPct ?? 0) >= config.dipMinPct && (token.dipPct ?? 0) <= config.dipMaxPct;
+        const hasRecovery = (token.trendPct1h ?? 0) > -8 && (token.dipPct ?? 0) <= config.dipMaxPct;
+
+        if (!watchable) {
+          token.watchReason = "Watching: below established liquidity/holder/volume floor";
+        } else if (age < config.minEstablishedAgeMinutes) {
+          token.watchReason = "Watching: too new; launch buys are disabled";
+        } else if (!isDip) {
+          token.watchReason = "Watching: no qualifying pullback";
+        } else if (!hasRecovery) {
+          token.watchReason = "Watching: falling without stabilization";
+        } else if (token.localScore < config.minLocalScore) {
+          token.watchReason = "Watching: quality score below entry floor";
+        } else {
+          token.watchReason = "ENTRY SETUP: established dip candidate; awaiting AI";
+          eligible += 1;
+        }
+
+        if (watchable) watched += 1;
+
+        this.store.upsertToken(token);
+
+        if (eligible > 0 && token.watchReason.startsWith("ENTRY SETUP")) {
+          void this.maybeEvaluateCandidate(token);
+        }
+      }
+
+      this.store.update((s) => {
+        s.stats.lastDiscoveryAt = Date.now();
+        s.stats.discoveredTokens = rows.length;
+        s.stats.watchedTokens = watched;
+        s.stats.eligibleCandidates = eligible;
+        s.seasonality = this.seasonality.export();
+      });
+    } catch (error) {
+      this.store.update((s) => {
+        s.stats.lastError = error instanceof Error ? error.message : String(error);
+        s.stats.lastDiscoveryAt = Date.now();
+      });
+    }
+  }
+
   async startScheduled() {
     assertLiveConfig();
 
@@ -149,6 +335,7 @@ export class TradingEngine {
       }
     }
 
+    await this.discoverEstablishedTokens();
     await this.pollLogs();
     await this.managePositions();
     await this.reviewOpenPositions();
@@ -368,18 +555,39 @@ export class TradingEngine {
     token.lastEnrichedAt = Date.now();
 
     try {
-      const response = await fetch(config.nadfunApiUrl + "/token/metadata/" + token.token, {
-        headers: config.nadfunApiKey ? { "X-API-Key": config.nadfunApiKey } : {}
-      });
+      const endpoints = [
+        config.nadfunApiUrl + "/agent/market/" + token.token,
+        config.nadfunApiUrl + "/token/metadata/" + token.token
+      ];
 
-      if (!response.ok) return;
+      let payload: MarketResponse | null = null;
+      for (const endpoint of endpoints) {
+        try {
+          const response = await fetch(endpoint, {
+            headers: {
+              accept: "application/json",
+              ...(config.nadfunApiKey ? { "X-API-Key": config.nadfunApiKey } : {})
+            }
+          });
+          if (!response.ok) continue;
+          payload = decodeNadfunPayload(await response.text()) as MarketResponse | null;
+          if (payload) break;
+        } catch {}
+      }
 
-      const payload = await response.json() as MarketResponse;
+      if (!payload) return;
       token.holders = payload.market_info?.holder_count ?? token.holders;
       token.priceUsd = Number(payload.market_info?.price_usd ?? token.priceUsd);
       token.priceMon = Number(payload.market_info?.price_native ?? token.priceMon);
       token.peakPriceMon = Math.max(token.peakPriceMon, token.priceMon);
       token.volumeUsd = Number(payload.market_info?.volume ?? token.volumeUsd);
+      const reserveNative = numeric(payload.market_info?.reserve_native);
+      const reserveToken = numeric(payload.market_info?.reserve_token);
+      if (reserveNative > 0) token.liquidityMon = reserveNative / 1e18;
+      if (reserveToken > 0 && reserveNative > 0) token.priceMon = reserveNative / reserveToken;
+      token.volumeMon = Number.isFinite(Number(payload.market_info?.volume))
+        ? Number(payload.market_info?.volume) / 1e18
+        : token.volumeMon;
       token.graduated = payload.token_info?.is_graduated ?? token.graduated;
       token.symbol = payload.token_info?.symbol ?? token.symbol;
       token.name = payload.token_info?.name ?? token.name;
@@ -412,14 +620,20 @@ export class TradingEngine {
 
     try {
       await this.enrichToken(token);
+      updateMarketMetrics(token);
       token.progressPct = curveProgressPct(token);
       token.localScore = scoreToken(token, this.seasonality);
 
+      const watchable = shouldWatch(
+        token,
+        config.minLiquidityMon,
+        config.minHolders,
+        config.minVolumeMon
+      );
       if (
-        token.graduated ||
-        token.locked ||
-        token.localScore < config.minLocalScore ||
-        (Date.now() - token.createdAt) / 1000 > config.candidateMaxAgeSeconds
+        !watchable ||
+        token.watchReason !== "ENTRY SETUP: established dip candidate; awaiting AI" ||
+        (Date.now() - token.lastMarketAt! > config.discoveryPollMs * 2)
       ) {
         return;
       }
@@ -453,7 +667,24 @@ export class TradingEngine {
           config.aiMinConfidence
         )
       ) {
-        await this.openPosition(token, Math.max(0.05, Math.min(1, decision.sizePct)));
+        if (
+          shouldOpen(
+            token,
+            decision.confidence,
+            config.minLocalScore,
+            config.aiMinConfidence,
+            config.minEstablishedAgeMinutes,
+            config.minLiquidityMon,
+            config.minHolders,
+            config.minVolumeMon,
+            config.dipMinPct,
+            config.dipMaxPct,
+            config.recoveryMinPct,
+            config.trendMax1hPct
+          )
+        ) {
+          await this.openPosition(token, Math.max(0.05, Math.min(1, decision.sizePct)));
+        }
       }
 
       this.emit();

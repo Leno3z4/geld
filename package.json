@@ -27,7 +27,6 @@
     "tsx": "latest",
     "typescript": "latest",
     "wrangler": "latest",
-    "@cloudflare/containers": "latest",
     "@cloudflare/workers-types": "latest"
   }
 }

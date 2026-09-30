@@ -131,7 +131,25 @@ export class TradingEngine {
     }
 
     if (this.lastBlock === 0n) {
-      this.lastBlock = await this.publicClient.getBlockNumber();
+      const latest = await this.publicClient.getBlockNumber();
+      const stats = this.store.get().stats;
+      const needsBackfill = !stats.eventBackfillDone && stats.eventCount === 0 && Object.keys(this.store.get().tokens).length === 0;
+
+      if (needsBackfill) {
+        this.lastBlock = latest > BigInt(config.eventBackfillBlocks)
+          ? latest - BigInt(config.eventBackfillBlocks)
+          : 0n;
+      } else if (persistedBlock) {
+        this.lastBlock = BigInt(persistedBlock);
+      } else {
+        this.lastBlock = latest;
+      }
+
+      if (needsBackfill) {
+        this.store.update((s) => {
+          s.stats.eventBackfillDone = true;
+        });
+      }
     }
 
     await this.pollLogs();
@@ -197,24 +215,48 @@ export class TradingEngine {
   private async pollLogs() {
     try {
       const latest = await this.publicClient.getBlockNumber();
-      if (latest <= this.lastBlock) return;
+      if (latest <= this.lastBlock) {
+        this.store.update((s) => {
+          s.stats.lastLogCount = 0;
+          s.stats.lastLogPollAt = Date.now();
+        });
+        return;
+      }
 
-      const from = this.lastBlock + 1n;
-      const to = latest > from + 99n ? from + 99n : latest;
-      const logs = await this.publicClient.getLogs({
-        address: ADDRESSES.CURVE,
-        fromBlock: from,
-        toBlock: to
-      });
+      const eventAbi = curveAbi.filter((item: any) => item.type === "event");
+      let cursor = this.lastBlock + 1n;
+      let totalLogs = 0;
 
-      for (const log of logs) await this.handleLog(log);
-      this.lastBlock = to;
+      for (let chunk = 0; chunk < config.maxLogChunksPerCycle && cursor <= latest; chunk += 1) {
+        const to = latest > cursor + BigInt(config.logChunkBlocks - 1)
+          ? cursor + BigInt(config.logChunkBlocks - 1)
+          : latest;
+
+        const logs = await this.publicClient.getLogs({
+          address: ADDRESSES.CURVE,
+          events: eventAbi,
+          fromBlock: cursor,
+          toBlock: to
+        });
+
+        totalLogs += logs.length;
+        for (const log of logs) await this.handleLog(log);
+
+        this.lastBlock = to;
+        cursor = to + 1n;
+      }
+
       this.store.update((s) => {
+        s.stats.eventCount = s.stats.eventCount;
         s.stats.lastProcessedBlock = this.lastBlock.toString();
+        s.stats.lastLogCount = totalLogs;
+        s.stats.lastLogPollAt = Date.now();
+        s.stats.lastError = undefined;
       });
     } catch (error) {
       this.store.update((s) => {
         s.stats.lastError = error instanceof Error ? error.message : String(error);
+        s.stats.lastLogPollAt = Date.now();
       });
     }
   }

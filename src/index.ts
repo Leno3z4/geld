@@ -62,23 +62,8 @@ async function proxy(req: any, res: any) {
       }
     });
 
-    if (!remote.body) {
-      res.end();
-      return;
-    }
-
-    const reader = remote.body.getReader();
-
-    try {
-      while (true) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        res.write(Buffer.from(chunk.value));
-      }
-    } finally {
-      reader.releaseLock();
-      res.end();
-    }
+    const payload = Buffer.from(await remote.arrayBuffer());
+    res.end(payload);
   } catch (error) {
     console.error("geld cloudflare proxy error", error);
     if (!res.headersSent) {

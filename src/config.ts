@@ -47,7 +47,22 @@ export const config = {
   logChunkBlocks: Math.max(1, Math.floor(num("LOG_CHUNK_BLOCKS", 200))),
   maxLogChunksPerCycle: Math.max(1, Math.floor(num("MAX_LOG_CHUNKS_PER_CYCLE", 4))),
 
-  nadfunApiUrl: "https://api.nad.fun",
+  // Established-token dip strategy: do not buy newly launched tokens.
+  establishedOnly: true,
+  minEstablishedAgeMinutes: Math.max(5, num("MIN_ESTABLISHED_AGE_MINUTES", 30)),
+  minLiquidityMon: Math.max(0, num("MIN_LIQUIDITY_MON", 25)),
+  minHolders: Math.max(0, Math.floor(num("MIN_HOLDERS", 25))),
+  minVolumeMon: Math.max(0, num("MIN_VOLUME_MON", 100)),
+  dipMinPct: Math.max(0, num("DIP_MIN_PCT", 8)),
+  dipMaxPct: Math.max(1, num("DIP_MAX_PCT", 35)),
+  recoveryMinPct: num("RECOVERY_MIN_PCT", -4),
+  trendMax1hPct: num("TREND_MAX_1H_PCT", 8),
+  discoveryLimit: Math.max(10, Math.min(50, Math.floor(num("DISCOVERY_LIMIT", 50)))),
+  aiCandidateLimit: Math.max(1, Math.min(15, Math.floor(num("AI_CANDIDATE_LIMIT", 8)))),
+  discoveryPollMs: Math.max(30000, num("DISCOVERY_POLL_MS", 60000)),
+  priceSampleMs: Math.max(60000, num("PRICE_SAMPLE_MS", 300000)),
+
+  nadfunApiUrl: process.env.NADFUN_API_URL ?? "https://api.nadapp.net",
   nadfunApiKey: process.env.NADFUN_API_KEY ?? "",
 
   geminiKeys: csv("GEMINI_API_KEYS"),

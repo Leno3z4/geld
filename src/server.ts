@@ -14,7 +14,31 @@ export function createApp(engine: TradingEngine, existingApp?: Express) {
       walletAddress: s.walletAddress,
       balanceMon: s.balanceMon,
       openPositions: Object.values(s.positions).filter((p) => p.status === "OPEN").length,
-      chainId: 143
+      chainId: 143,
+      minLiquidityUsd: config.minLiquidityUsd,
+      minMarketCapUsd: config.minMarketCapUsd
+    });
+  });
+
+  app.get("/api/config", (_req, res) => {
+    res.json({
+      network: config.network,
+      chainId: config.chainId,
+      liveTrading: config.liveTrading,
+      autoStart: config.autoStart,
+      minLiquidityUsd: config.minLiquidityUsd,
+      minMarketCapUsd: config.minMarketCapUsd,
+      minEstablishedAgeMinutes: config.minEstablishedAgeMinutes,
+      minHolders: config.minHolders,
+      minVolumeMon: config.minVolumeMon,
+      dipMinPct: config.dipMinPct,
+      dipMaxPct: config.dipMaxPct,
+      trendMax1hPct: config.trendMax1hPct,
+      minTrend4hPct: config.minTrend4hPct,
+      positionSizePct: config.positionSizePct,
+      maxTotalExposurePct: config.maxTotalExposurePct,
+      maxOpenPositions: config.maxOpenPositions,
+      maxHoldMinutes: config.maxHoldMinutes
     });
   });
 

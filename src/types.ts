@@ -107,6 +107,8 @@ export interface Position {
   lastAiConfidence?: number;
   lastAiReason?: string;
   entryTx: string;
+  costBasisKnown?: boolean;
+  recoveredAt?: number;
   status: "OPEN" | "CLOSED" | "CLOSING" | "FAILED";
   closeTx?: string;
   closeReason?: string;
@@ -136,6 +138,18 @@ export interface EquityPoint {
   realizedPnlMon: number;
 }
 
+export interface PendingExecution {
+  id: string;
+  side: "BUY" | "SELL";
+  token: string;
+  symbol: string;
+  spendMon?: number;
+  amountRaw?: string;
+  decimals?: number;
+  txHash?: string;
+  createdAt: number;
+}
+
 export interface BotStats {
   aiCalls: number;
   aiFailures: number;
@@ -156,6 +170,8 @@ export interface BotStats {
   discoveredTokens?: number;
   watchedTokens?: number;
   eligibleCandidates?: number;
+  lastReconciliationAt?: number;
+  recoveredPositions?: number;
 }
 
 export interface BotState {
@@ -171,6 +187,7 @@ export interface BotState {
   tokens: Record<string, TokenSnapshot>;
   positions: Record<string, Position>;
   trades: TradeRecord[];
+  pendingExecutions: Record<string, PendingExecution>;
   equity: EquityPoint[];
   stats: BotStats;
 }

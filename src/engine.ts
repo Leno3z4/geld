@@ -608,7 +608,9 @@ export class TradingEngine {
 
         const receipt = await this.publicClient.waitForTransactionReceipt({ hash: tx });
         const nativeAfter = await this.publicClient.getBalance({ address: this.account.address });
-        const gasCost = (receipt.gasUsed ?? 0n) * (receipt.effectiveGasPrice ?? 0n);
+        const gasUsed = BigInt(receipt.gasUsed ?? 0);
+        const effectiveGasPrice = BigInt(receipt.effectiveGasPrice ?? 0);
+        const gasCost = gasUsed * effectiveGasPrice;
         const netProceedsRaw = nativeAfter + gasCost - nativeBefore;
         proceeds = Number(formatUnits(netProceedsRaw > 0n ? netProceedsRaw : 0n, 18));
       }

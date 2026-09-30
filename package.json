@@ -3,12 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "workspaces": ["webapp"],
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "npm run build:web && npm run build:app",
+    "build": "npm run build:app",
+    "build:all": "npm run build:web && npm run build:app",
     "build:app": "tsc -p tsconfig.json",
-    "build:web": "npm --workspace webapp run build",
+    "build:web": "npm --prefix webapp run build",
     "start": "node dist/src/index.js",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test tests/strategy.test.ts"

@@ -117,10 +117,10 @@ function historyMetrics(token: TokenSnapshot) {
   const marketChangePct = Number.isFinite(token.changePct) ? token.changePct! : 0;
   const fallbackPullbackPct = marketChangePct < 0 ? Math.min(50, -marketChangePct) : 0;
 
-  const trend1hPct = oneHourBase?.priceMon > 0
+  const trend1hPct = oneHourBase && oneHourBase.priceMon > 0
     ? (token.priceMon / oneHourBase.priceMon - 1) * 100
     : marketChangePct;
-  const trend4hPct = fourHourBase?.priceMon > 0
+  const trend4hPct = fourHourBase && fourHourBase.priceMon > 0
     ? (token.priceMon / fourHourBase.priceMon - 1) * 100
     : marketChangePct;
 
@@ -137,6 +137,43 @@ function historyMetrics(token: TokenSnapshot) {
     trend1hPct,
     trend4hPct,
     rebound1hPct
+  };
+}
+
+function flowMetrics(token: TokenSnapshot) {
+  const now = Date.now();
+  const history = (token.flowHistory ?? [])
+    .filter((x) => x.ts > now - 10 * 60 * 1000)
+    .sort((x, y) => x.ts - y.ts);
+
+  const recent = history.filter((x) => x.ts > now - 5 * 60 * 1000);
+  const previous = history.filter((x) => x.ts <= now - 5 * 60 * 1000);
+
+  const sum = (items: typeof history) =>
+    items.reduce(
+      (acc, x) => ({
+        buy: acc.buy + Math.max(0, x.buyMon),
+        sell: acc.sell + Math.max(0, x.sellMon)
+      }),
+      { buy: 0, sell: 0 }
+    );
+
+  const recentSum = sum(recent);
+  const previousSum = sum(previous);
+  const volume5mMon = recentSum.buy + recentSum.sell;
+  const volumePrev5mMon = previousSum.buy + previousSum.sell;
+  const buySellRatio5m = volume5mMon > 0
+    ? recentSum.buy / Math.max(0.01, recentSum.sell)
+    : 0;
+  const volumeAcceleration5m = volumePrev5mMon > 0
+    ? volume5mMon / volumePrev5mMon
+    : volume5mMon > 0 ? 2 : 0;
+
+  return {
+    buySellRatio5m,
+    volume5mMon,
+    volumePrev5mMon,
+    volumeAcceleration5m
   };
 }
 

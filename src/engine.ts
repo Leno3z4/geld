@@ -46,7 +46,21 @@ function numeric(value: unknown) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function boolish(value: unknown, fallback = false) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) return true;
+    if (["false", "0", "no", "off"].includes(normalized)) return false;
+  }
+  return fallback;
+}
+
 function createdAtMs(value: unknown) {
+  if (typeof value === "string" && Number.isNaN(Number(value))) {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
   const n = numeric(value);
   if (!n) return 0;
   return n < 10_000_000_000 ? n * 1000 : n;
@@ -186,7 +200,7 @@ export class TradingEngine {
         const volumeMonRaw = numeric(market.volume);
         const volumeMon = volumeMonRaw > 0 ? volumeMonRaw / 1e18 : 0;
         const holders = Math.max(0, Math.floor(numeric(market.holder_count ?? market.holders)));
-        const graduated = Boolean(info.is_graduated ?? market.market_type === "DEX");
+        const graduated = boolish(info.is_graduated, market.market_type === "DEX");
 
         const existing = this.store.get().tokens[tokenAddress];
 
@@ -209,7 +223,7 @@ export class TradingEngine {
           sellMon: 0,
           progressPct: 100,
           graduated,
-          locked: Boolean(info.is_locked ?? market.is_locked),
+          locked: boolish(info.is_locked, boolish(market.is_locked)),
           holders: 0,
           volumeUsd: 0,
           priceUsd: 0,
@@ -222,7 +236,7 @@ export class TradingEngine {
         token.symbol = String(info.symbol ?? token.symbol);
         token.creator = String(info.creator?.account_id ?? info.creator ?? token.creator);
         token.graduated = graduated;
-        token.locked = Boolean(info.is_locked ?? market.is_locked ?? token.locked);
+        token.locked = boolish(info.is_locked, boolish(market.is_locked, token.locked));
         token.marketType = market.market_type === "DEX" || graduated ? "DEX" : "BONDING_CURVE";
         token.liquidityMon = liquidityMon || token.liquidityMon || 0;
         token.volumeMon = volumeMon || token.volumeMon || 0;
@@ -279,7 +293,8 @@ export class TradingEngine {
 
         this.store.upsertToken(token);
 
-        if (eligible > 0 && token.watchReason.startsWith("ENTRY SETUP")) {
+        const entrySetup = token.watchReason === "ENTRY SETUP: established dip candidate; awaiting AI";
+        if (entrySetup) {
           void this.maybeEvaluateCandidate(token);
         }
       }
@@ -695,6 +710,14 @@ export class TradingEngine {
   }
 
   private async openPosition(token: TokenSnapshot, aiSizePct: number) {
+    const ageMinutes = (Date.now() - token.createdAt) / 60000;
+    if (
+      config.establishedOnly &&
+      (!token.graduated || ageMinutes < config.minEstablishedAgeMinutes)
+    ) {
+      return;
+    }
+
     const openCount = Object.values(this.store.get().positions).filter((p) => p.status === "OPEN").length;
     if (openCount >= config.maxOpenPositions) return;
 

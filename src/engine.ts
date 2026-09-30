@@ -232,6 +232,7 @@ export class TradingEngine {
           localScore: 0
         };
 
+        if (createdAt > 0) token.createdAt = createdAt;
         token.name = String(info.name ?? token.name);
         token.symbol = String(info.symbol ?? token.symbol);
         token.creator = String(info.creator?.account_id ?? info.creator ?? token.creator);

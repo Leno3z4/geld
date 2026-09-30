@@ -56,8 +56,15 @@ interface MarketResponse {
   market_info?: {
     holder_count?: number;
     price_native?: string;
+    price_mon?: string;
     price_usd?: string;
+    token_price?: string;
+    reserve_native?: string;
+    reserve_token?: string;
     volume?: string;
+    ath_price?: string;
+    market_type?: string;
+    is_locked?: boolean;
   };
   token_info?: {
     name?: string;
@@ -663,28 +670,18 @@ export class TradingEngine {
           token,
           decision.confidence,
           config.minLocalScore,
-          config.candidateMaxAgeSeconds,
-          config.aiMinConfidence
+          config.aiMinConfidence,
+          config.minEstablishedAgeMinutes,
+          config.minLiquidityMon,
+          config.minHolders,
+          config.minVolumeMon,
+          config.dipMinPct,
+          config.dipMaxPct,
+          config.recoveryMinPct,
+          config.trendMax1hPct
         )
       ) {
-        if (
-          shouldOpen(
-            token,
-            decision.confidence,
-            config.minLocalScore,
-            config.aiMinConfidence,
-            config.minEstablishedAgeMinutes,
-            config.minLiquidityMon,
-            config.minHolders,
-            config.minVolumeMon,
-            config.dipMinPct,
-            config.dipMaxPct,
-            config.recoveryMinPct,
-            config.trendMax1hPct
-          )
-        ) {
-          await this.openPosition(token, Math.max(0.05, Math.min(1, decision.sizePct)));
-        }
+        await this.openPosition(token, Math.max(0.05, Math.min(1, decision.sizePct)));
       }
 
       this.emit();

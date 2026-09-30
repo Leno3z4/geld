@@ -630,19 +630,28 @@ export class TradingEngine {
 
       if (!payload) return;
       token.holders = payload.market_info?.holder_count ?? token.holders;
-      token.priceUsd = Number(payload.market_info?.price_usd ?? token.priceUsd);
-      token.priceMon = Number(payload.market_info?.price_native ?? token.priceMon);
-      token.peakPriceMon = Math.max(token.peakPriceMon, token.priceMon);
-      token.volumeUsd = Number(payload.market_info?.volume ?? token.volumeUsd);
+      token.priceUsd = numeric(payload.market_info?.price_usd ?? token.priceUsd);
       const reserveNative = numeric(payload.market_info?.reserve_native);
       const reserveToken = numeric(payload.market_info?.reserve_token);
+      const marketPriceMon = numeric(
+        payload.market_info?.price_native ??
+        payload.market_info?.price_mon ??
+        payload.market_info?.price ??
+        payload.market_info?.token_price
+      );
+      token.priceMon = reserveToken > 0 && reserveNative > 0
+        ? reserveNative / reserveToken
+        : marketPriceMon || token.priceMon;
+      token.peakPriceMon = Math.max(token.peakPriceMon, token.priceMon);
+      token.volumeUsd = numeric(payload.market_info?.volume ?? token.volumeUsd);
       if (reserveNative > 0) token.liquidityMon = reserveNative / 1e18;
-      if (reserveToken > 0 && reserveNative > 0) token.priceMon = reserveNative / reserveToken;
 
       const impliedMonUsd =
-        token.priceMon > 0 && token.priceUsd > 0
-          ? token.priceUsd / token.priceMon
-          : 0;
+        marketPriceMon > 0 && token.priceUsd > 0
+          ? token.priceUsd / marketPriceMon
+          : token.priceMon > 0 && token.priceUsd > 0
+            ? token.priceUsd / token.priceMon
+            : 0;
       if (impliedMonUsd > 0) token.monUsdPrice = impliedMonUsd;
       if ((token.liquidityMon ?? 0) > 0 && (token.monUsdPrice ?? 0) > 0) {
         token.liquidityUsd = token.liquidityMon! * token.monUsdPrice!;

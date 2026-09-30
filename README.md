@@ -135,6 +135,12 @@ Watch for `geld container started`, followed by engine events / state updates. T
 
 The current high-aggression defaults are:
 
+- established-token DEX trading only; new-token launch buys are disabled
+- $100,000 minimum MON-side liquidity before a token can become an entry candidate
+- 30-minute minimum token age
+- 25 minimum holders
+- 100 MON minimum tracked volume
+- 8-35% pullback entry band
 - 24% of current free balance per planned trade
 - 90% max portfolio exposure
 - up to 5 open positions
@@ -144,10 +150,7 @@ The current high-aggression defaults are:
 - 70% take profit
 - 20% trailing stop
 - 240-minute maximum hold
-- 800ms event polling fallback
-- 2.2s position management loop
-- 30s AI position review
-- candidates can be evaluated for 180 seconds after creation
+- market discovery every minute in the free Worker architecture
 
 These settings are intentionally aggressive and can lose capital quickly. There is no guaranteed profit.
 

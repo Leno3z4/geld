@@ -165,3 +165,5 @@ The Gemini layer only proposes BUY/HOLD/SELL decisions. It never receives the pr
 The API proxy requires a separate shared secret before forwarding requests to the Cloudflare Worker. State sync uses its own secret.
 
 Re-verify Nad.fun contract addresses/ABIs against the official integration docs after protocol upgrades.
+
+<!-- vercel-main-deploy-check -->

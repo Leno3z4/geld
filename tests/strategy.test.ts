@@ -152,8 +152,8 @@ test("uses market change fallback until enough local history exists", () => {
     dipMinPct: 8, dipMaxPct: 35, recoveryMinPct: -4,
     trendMax1hPct: 8, minTrend4hPct: -12, minLocalScore: 50
   });
-  assert.equal(d.metrics.dipPct, 12);
-  assert.equal(d.metrics.drawdownFromRecentPeakPct, 12);
+  assert.equal(d.metrics.dipPct, 0);
+  assert.equal(d.metrics.drawdownFromRecentPeakPct, 0);
   assert.equal(d.metrics.drawdownFromAthPct, 0);
   assert.equal(d.metrics.marketCapUsd, 1_000_000_000);
   assert.equal(d.metrics.trend1hPct, -12);

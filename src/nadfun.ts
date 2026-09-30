@@ -34,6 +34,16 @@ export const routerAbi = parseAbi([
   "function sellToNative((uint256 amountIn,uint256 amountOutMin,address token,address to,uint256 deadline) params) returns (uint256 amountOut)"
 ]);
 
+export const factoryAbi = parseAbi([
+  "function getPair(address tokenA,address tokenB) view returns (address pair)"
+]);
+
+export const nadFunPairAbi = parseAbi([
+  "function token0() view returns (address)",
+  "function token1() view returns (address)",
+  "event Swap(address indexed sender,uint256 amount0In,uint256 amount1In,uint256 amount0Out,uint256 amount1Out,address indexed to)"
+]);
+
 export const erc20Abi = parseAbi([
   "function balanceOf(address owner) view returns (uint256)",
   "function allowance(address owner,address spender) view returns (uint256)",

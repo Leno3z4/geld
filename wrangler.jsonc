@@ -9,7 +9,8 @@
   "vars": {
     "BOT_PORT": "8787",
     "GELD_LIVE_TRADING": "true",
-    "GELD_AUTO_START": "true"
+    "GELD_AUTO_START": "true",
+    "STATE_SYNC_URL": "https://geld.mahoraga6190.workers.dev/internal/state/singleton"
   },
   "containers": [
     {

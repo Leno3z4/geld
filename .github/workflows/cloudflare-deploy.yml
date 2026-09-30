@@ -2,6 +2,9 @@ name: Deploy Cloudflare
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - master
 
 concurrency:
   group: cloudflare-geld-production

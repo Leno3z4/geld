@@ -34,5 +34,6 @@
   ],
   "alias": [
     "geld-seven.vercel.app"
-  ]
+  ],
+  "ignoreCommand": "if [ \"$VERCEL_GIT_COMMIT_REF\" = \"master\" ]; then exit 1; else exit 0; fi"
 }

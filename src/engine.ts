@@ -911,7 +911,7 @@ export class TradingEngine {
         }
 
         const out = await quoteSell(this.publicClient, position.token as Address, amountRaw);
-        position.currentMon = Number(formatUnits(out, position.decimals));
+        position.currentMon = Number(formatUnits(out, 18));
         position.pnlMon = position.currentMon - position.entryMon;
         position.pnlPct = position.entryMon ? position.pnlMon / position.entryMon * 100 : 0;
         position.peakMon = Math.max(position.peakMon, position.currentMon);

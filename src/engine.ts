@@ -1003,6 +1003,7 @@ export class TradingEngine {
       const watchable = shouldWatch(
         token,
         config.minLiquidityUsd,
+        config.minMarketCapUsd,
         config.minHolders,
         config.minVolumeMon
       );
@@ -1116,6 +1117,19 @@ export class TradingEngine {
 
     this.reservedSpendMon += spend;
 
+    const pendingId = "BUY:" + token.token.toLowerCase() + ":" + Date.now();
+    this.store.update((s) => {
+      s.pendingExecutions[pendingId] = {
+        id: pendingId,
+        side: "BUY",
+        token: token.token,
+        symbol: token.symbol,
+        spendMon: spend,
+        createdAt: Date.now()
+      };
+    });
+    await this.persist();
+
     try {
       let amountRaw: bigint;
       let decimals = 18;
@@ -1125,6 +1139,10 @@ export class TradingEngine {
       if (!this.walletClient || !this.account) throw new Error("No live wallet");
 
       decimals = await getTokenDecimals(this.publicClient, token.token as Address);
+      this.store.update((s) => {
+        const pending = s.pendingExecutions[pendingId];
+        if (pending) pending.decimals = decimals;
+      });
       const before = await getTokenBalance(this.publicClient, token.token as Address, this.account.address);
 
       tx = await buyNative(

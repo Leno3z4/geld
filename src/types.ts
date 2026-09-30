@@ -87,6 +87,9 @@ export interface BotStats {
   lastCycleAt?: number;
   lastError?: string;
   startedAt?: number;
+  lastLogCount?: number;
+  lastLogPollAt?: number;
+  eventBackfillDone?: boolean;
 }
 
 export interface BotState {

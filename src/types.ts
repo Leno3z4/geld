@@ -102,6 +102,10 @@ export interface BotStats {
   lastLogCount?: number;
   lastLogPollAt?: number;
   eventBackfillDone?: boolean;
+  lastDiscoveryAt?: number;
+  discoveredTokens?: number;
+  watchedTokens?: number;
+  eligibleCandidates?: number;
 }
 
 export interface BotState {

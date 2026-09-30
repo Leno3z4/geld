@@ -873,8 +873,9 @@ export class TradingEngine {
       } else if (token.priceUsd > 0) {
         token.marketCapUsd = token.priceUsd * 1_000_000_000;
       }
-      if (token.marketCapUsd > 0 && (token.monUsdPrice ?? 0) > 0) {
-        token.marketCapMon = token.marketCapUsd / token.monUsdPrice!;
+      const marketCapUsd = token.marketCapUsd ?? 0;
+      if (marketCapUsd > 0 && (token.monUsdPrice ?? 0) > 0) {
+        token.marketCapMon = marketCapUsd / token.monUsdPrice!;
       }
 
       const enrichedPair = String(

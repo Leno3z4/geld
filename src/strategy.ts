@@ -13,6 +13,8 @@ export interface MarketBucket {
   buyMon: number;
   sellMon: number;
   events: number;
+  returnSumPct?: number;
+  returnSamples?: number;
 }
 
 export class SeasonalityModel {
@@ -36,12 +38,31 @@ export class SeasonalityModel {
     this.buckets.set(key, b);
   }
 
+  observeReturn(ts: number, returnPct: number) {
+    if (!Number.isFinite(returnPct)) return;
+    const key = hourOfWeek(ts);
+    const b = this.buckets.get(key) ?? { buyMon: 0, sellMon: 0, events: 0 };
+    b.returnSumPct = (b.returnSumPct ?? 0) + clamp(returnPct, -50, 50);
+    b.returnSamples = (b.returnSamples ?? 0) + 1;
+    this.buckets.set(key, b);
+  }
+
   adjustment(ts = Date.now()) {
     const b = this.buckets.get(hourOfWeek(ts));
-    if (!b || b.events < 20) return 0;
+    if (!b) return 0;
+
     const denom = b.buyMon + b.sellMon;
-    if (!denom) return 0;
-    return clamp(((b.buyMon - b.sellMon) / denom) * 10, -8, 8);
+    const flowAdjustment = denom && b.events >= 20
+      ? clamp(((b.buyMon - b.sellMon) / denom) * 10, -8, 8)
+      : 0;
+
+    const samples = b.returnSamples ?? 0;
+    const meanReturn = samples >= 12 ? (b.returnSumPct ?? 0) / samples : 0;
+
+    // Slightly favor entries during historically weak hours, while never
+    // overriding the token-level dip/liquidity gates.
+    const timingAdjustment = clamp(-meanReturn * 0.75, -4, 4);
+    return flowAdjustment + timingAdjustment;
   }
 
   summary(ts = Date.now()) {
@@ -108,6 +129,15 @@ function historyMetrics(token: TokenSnapshot) {
   return { peak4h, dipPct, trend1hPct, trend4hPct, rebound1hPct };
 }
 
+export function updateMarketMetrics(token: TokenSnapshot) {
+  const metrics = historyMetrics(token);
+  token.dipPct = metrics.dipPct;
+  token.trendPct1h = metrics.trend1hPct;
+  token.trendPct4h = metrics.trend4hPct;
+  token.peakPriceMon = Math.max(token.peakPriceMon, metrics.peak4h || 0);
+  return metrics;
+}
+
 export function scoreToken(token: TokenSnapshot, seasonality: SeasonalityModel) {
   const age = ageMinutes(token);
   const liquidity = token.liquidityMon ?? 0;
@@ -152,6 +182,7 @@ export function scoreToken(token: TokenSnapshot, seasonality: SeasonalityModel) 
 
 export function shouldWatch(token: TokenSnapshot, minLiquidityMon: number, minHolders: number, minVolumeMon: number) {
   return (
+    token.createdAt > 0 &&
     token.graduated &&
     !token.locked &&
     (token.liquidityMon ?? 0) >= minLiquidityMon &&
@@ -178,6 +209,7 @@ export function shouldOpen(
   const metrics = historyMetrics(token);
 
   return (
+    token.createdAt > 0 &&
     token.graduated &&
     !token.locked &&
     age >= minEstablishedAgeMinutes &&

@@ -94,7 +94,15 @@ function historyMetrics(token: TokenSnapshot) {
     .sort((x, y) => x.ts - y.ts);
 
   if (!(token.priceMon > 0)) {
-    return { peak4h: token.priceMon, dipPct: 0, trend1hPct: 0, trend4hPct: 0, rebound1hPct: 0 };
+    return {
+      peak4h: token.priceMon,
+      dipPct: 0,
+      drawdownFromRecentPeakPct: 0,
+      drawdownFromAthPct: 0,
+      trend1hPct: 0,
+      trend4hPct: 0,
+      rebound1hPct: 0
+    };
   }
 
   const now = Date.now();

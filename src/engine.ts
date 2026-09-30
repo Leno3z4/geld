@@ -16,7 +16,7 @@ import {
 } from "./nadfun.js";
 import { StateStore } from "./store.js";
 import { GeminiBrain } from "./ai.js";
-import { SeasonalityModel, scoreToken, shouldClose, shouldOpen, shouldWatch, updateMarketMetrics, curveProgressPct } from "./strategy.js";
+import { SeasonalityModel, positionExitSignal, scoreToken, shouldClose, shouldOpen, shouldWatch, updateMarketMetrics, curveProgressPct, type PositionExitRules } from "./strategy.js";
 import type { BotState, Position, TokenSnapshot } from "./types.js";
 import { formatUnits } from "viem";
 
@@ -561,11 +561,13 @@ export class TradingEngine {
         const amount = Number(formatUnits(args.quoteIn as bigint, 18));
         token.buys += 1;
         token.buyMon += amount;
+        token.flowHistory = [...(token.flowHistory ?? []), { ts: now, buyMon: amount, sellMon: 0 }].slice(-240);
         this.seasonality.observe(now, amount, 0);
       } else if (parsed.eventName === "Sell") {
         const amount = Number(formatUnits(args.quoteOut as bigint, 18));
         token.sells += 1;
         token.sellMon += amount;
+        token.flowHistory = [...(token.flowHistory ?? []), { ts: now, buyMon: 0, sellMon: amount }].slice(-240);
         this.seasonality.observe(now, 0, amount);
       } else if (parsed.eventName === "Graduate") {
         token.graduated = true;
@@ -730,7 +732,8 @@ export class TradingEngine {
           config.dipMinPct,
           config.dipMaxPct,
           config.recoveryMinPct,
-          config.trendMax1hPct
+          config.trendMax1hPct,
+          config.minTrend4hPct
         )
       ) {
         await this.openPosition(token, Math.max(0.05, Math.min(1, decision.sizePct)));
@@ -823,6 +826,8 @@ export class TradingEngine {
       pnlMon: 0,
       pnlPct: 0,
       peakMon: spend,
+      peakPnlPct: 0,
+      entryLiquidityUsd: token.liquidityUsd ?? 0,
       openedAt: Date.now(),
       lastAiAt: 0,
       entryTx: tx,
@@ -853,8 +858,41 @@ export class TradingEngine {
     let unrealized = 0;
     let exposure = 0;
 
+    const exitRules: PositionExitRules = {
+      hardStopPct: config.hardStopPct,
+      takeProfitPct: config.takeProfitPct,
+      trailingPct: config.trailingPct,
+      maxHoldMinutes: config.maxHoldMinutes,
+      minLiquidityUsd: config.minLiquidityUsd,
+      liquidityExitRatio: config.liquidityExitRatio,
+      earlyExitLossPct: config.earlyExitLossPct,
+      earlyExitTrend1hPct: config.earlyExitTrend1hPct,
+      momentumExitProfitPct: config.momentumExitProfitPct,
+      momentumExitTrend1hPct: config.momentumExitTrend1hPct,
+      momentumExitReboundPct: config.momentumExitReboundPct,
+      sellPressureExitRatio: config.sellPressureExitRatio,
+      sellPressureMinVolumeMon: config.sellPressureMinVolumeMon,
+      profitTake1Pct: config.profitTake1Pct,
+      profitTake1SellPct: config.profitTake1SellPct,
+      profitTake2Pct: config.profitTake2Pct,
+      profitTake2SellPct: config.profitTake2SellPct,
+      profitTake3Pct: config.profitTake3Pct,
+      profitTake3SellPct: config.profitTake3SellPct,
+      profitProtectionStartPct: config.profitProtectionStartPct,
+      profitProtectionFloorPct: config.profitProtectionFloorPct,
+      profitProtectionRatio: config.profitProtectionRatio
+    };
+
     for (const position of positions) {
       try {
+        const token = this.store.get().tokens[position.token];
+        if (token) {
+          await this.enrichToken(token);
+          updateMarketMetrics(token);
+          token.localScore = scoreToken(token, this.seasonality);
+          this.store.upsertToken(token);
+        }
+
         let amountRaw = BigInt(position.amountRaw);
 
         if (config.liveTrading) {
@@ -875,19 +913,30 @@ export class TradingEngine {
         position.pnlMon = position.currentMon - position.entryMon;
         position.pnlPct = position.entryMon ? position.pnlMon / position.entryMon * 100 : 0;
         position.peakMon = Math.max(position.peakMon, position.currentMon);
+        position.peakPnlPct = Math.max(position.peakPnlPct ?? position.pnlPct, position.pnlPct);
+
+        const signal = positionExitSignal(position, token, exitRules);
+        if (signal) {
+          if (signal.kind === "PARTIAL") {
+            await this.sellPosition(position, signal.sellPct, signal.reason);
+          } else {
+            await this.sellPosition(position, 100, signal.reason);
+          }
+          if (position.status !== "OPEN") continue;
+        } else {
+          const exit = shouldClose(
+            position,
+            config.hardStopPct,
+            config.takeProfitPct,
+            config.trailingPct,
+            config.maxHoldMinutes
+          );
+          if (exit) await this.sellPosition(position, 100, exit);
+          if (position.status !== "OPEN") continue;
+        }
 
         unrealized += position.pnlMon;
         exposure += position.currentMon;
-
-        const exit = shouldClose(
-          position,
-          config.hardStopPct,
-          config.takeProfitPct,
-          config.trailingPct,
-          config.maxHoldMinutes
-        );
-
-        if (exit) await this.closePosition(position, exit);
       } catch (error) {
         this.store.update((s) => {
           s.stats.lastError = error instanceof Error ? error.message : String(error);
@@ -942,32 +991,44 @@ export class TradingEngine {
     this.emit();
   }
 
-  private async closePosition(position: Position, reason: string) {
+  private async sellPosition(position: Position, sellPct: number, reason: string) {
     if (position.status !== "OPEN") return;
 
     position.status = "CLOSING";
     this.emit();
 
+    const fractionPct = Math.max(1, Math.min(100, sellPct));
+
     try {
       let tx = "PAPER";
-      let proceeds = position.currentMon;
-      let soldAmountRaw = BigInt(position.amountRaw);
+      let proceeds = 0;
+      const priorAmountRaw = BigInt(position.amountRaw);
+      if (priorAmountRaw <= 0n) throw new Error("No token balance recorded for sell");
 
+      let walletTokenBalance = priorAmountRaw;
       if (config.liveTrading) {
         if (!this.walletClient || !this.account) throw new Error("No live wallet");
-
-        const walletTokenBalance = await getTokenBalance(
+        walletTokenBalance = await getTokenBalance(
           this.publicClient,
           position.token as Address,
           this.account.address
         );
-
         if (walletTokenBalance === 0n) {
           throw new Error("Token balance is zero; refusing to mark an unsold position closed");
         }
+      }
 
-        soldAmountRaw = walletTokenBalance < soldAmountRaw ? walletTokenBalance : soldAmountRaw;
+      const maxSellRaw = walletTokenBalance < priorAmountRaw ? walletTokenBalance : priorAmountRaw;
+      const targetBps = BigInt(Math.round(fractionPct * 100));
+      let soldAmountRaw = maxSellRaw * targetBps / 10000n;
+      if (fractionPct >= 100) soldAmountRaw = maxSellRaw;
+      if (soldAmountRaw <= 0n) throw new Error("Calculated sell amount is zero");
 
+      const soldFraction = Number(soldAmountRaw) / Math.max(1, Number(priorAmountRaw));
+      const safeSoldFraction = Math.max(0, Math.min(1, soldFraction));
+      const costBasisSold = position.entryMon * safeSoldFraction;
+
+      if (config.liveTrading) {
         const nativeBefore = BigInt(String(
           await this.publicClient.getBalance({ address: this.account.address })
         ));
@@ -989,38 +1050,80 @@ export class TradingEngine {
         const gasCost = gasUsed * effectiveGasPrice;
         const netProceedsRaw = nativeAfter + gasCost - nativeBefore;
         proceeds = Number(formatUnits(netProceedsRaw > 0n ? netProceedsRaw : 0n, 18));
+      } else {
+        const quote = await quoteSell(this.publicClient, position.token as Address, soldAmountRaw);
+        proceeds = Number(formatUnits(quote, 18));
       }
 
-      const pnl = proceeds - position.entryMon;
-      const pnlPct = position.entryMon ? pnl / position.entryMon * 100 : 0;
+      if (!Number.isFinite(proceeds) || proceeds < 0) {
+        throw new Error("Invalid sell proceeds");
+      }
 
-      position.amountRaw = "0";
-      position.currentMon = proceeds;
-      position.pnlMon = pnl;
-      position.pnlPct = pnlPct;
-      position.closeTx = tx;
-      position.closeReason = reason;
-      position.status = "CLOSED";
+      let remainingAmountRaw = 0n;
+      if (config.liveTrading) {
+        remainingAmountRaw = await getTokenBalance(
+          this.publicClient,
+          position.token as Address,
+          this.account.address
+        );
+      } else {
+        remainingAmountRaw = walletTokenBalance - soldAmountRaw;
+      }
 
-      this.store.update((s) => {
-        s.realizedPnlMon += pnl;
-        if (pnl >= 0) s.stats.wins += 1;
-        else s.stats.losses += 1;
-      });
+      const realizedPnl = proceeds - costBasisSold;
+      const remainingCostBasis = Math.max(0, position.entryMon - costBasisSold);
 
       this.store.addTrade({
-        id: "SELL:" + position.id,
+        id: "SELL:" + position.id + ":" + Date.now(),
         ts: Date.now(),
         action: "SELL",
         token: position.token,
         symbol: position.symbol,
         amountMon: proceeds,
-        pnlMon: pnl,
-        pnlPct,
+        pnlMon: realizedPnl,
+        pnlPct: costBasisSold ? realizedPnl / costBasisSold * 100 : 0,
         txHash: tx,
         reason,
         aiConfidence: position.lastAiConfidence
       });
+
+      this.store.update((s) => {
+        s.realizedPnlMon += realizedPnl;
+      });
+
+      position.amountRaw = remainingAmountRaw.toString();
+      position.entryMon = remainingCostBasis;
+
+      if (remainingAmountRaw === 0n || safeSoldFraction >= 0.999999) {
+        position.currentMon = 0;
+        position.pnlMon = 0;
+        position.pnlPct = 0;
+        position.peakMon = 0;
+        position.status = "CLOSED";
+        position.closeTx = tx;
+        position.closeReason = reason;
+        position.amountRaw = "0";
+        if (realizedPnl >= 0) this.store.update((s) => { s.stats.wins += 1; });
+        else this.store.update((s) => { s.stats.losses += 1; });
+      } else {
+        const remainingValue = await quoteSell(
+          this.publicClient,
+          position.token as Address,
+          remainingAmountRaw
+        );
+        position.currentMon = Number(formatUnits(remainingValue, position.decimals));
+        position.pnlMon = position.currentMon - position.entryMon;
+        position.pnlPct = position.entryMon ? position.pnlMon / position.entryMon * 100 : 0;
+        position.peakMon = Math.max(0, position.peakMon * (1 - safeSoldFraction));
+        position.peakPnlPct = Math.max(position.peakPnlPct ?? position.pnlPct, position.pnlPct);
+
+        if (reason === "PROFIT_TAKE_1") position.profitTake1Done = true;
+        if (reason === "PROFIT_TAKE_2") position.profitTake2Done = true;
+        if (reason === "PROFIT_TAKE_3") position.profitTake3Done = true;
+
+        position.status = "OPEN";
+        this.store.upsertPosition(position);
+      }
     } catch (error) {
       position.status = "FAILED";
       position.closeReason = error instanceof Error ? error.message : String(error);
@@ -1029,7 +1132,14 @@ export class TradingEngine {
       });
     }
 
+    if (position.status === "CLOSED") {
+      this.store.upsertPosition(position);
+    }
     this.emit();
+  }
+
+  private async closePosition(position: Position, reason: string) {
+    await this.sellPosition(position, 100, reason);
   }
 
   private async refreshBalance() {

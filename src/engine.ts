@@ -1118,20 +1118,35 @@ export class TradingEngine {
       decimals = await getTokenDecimals(this.publicClient, token.token as Address);
       const before = await getTokenBalance(this.publicClient, token.token as Address, this.account.address);
 
-      tx = await buyNative(
-        this.walletClient,
-        this.publicClient,
-        token.token as Address,
-        spend,
-        config.slippagePct
-      );
-      await this.publicClient.waitForTransactionReceipt({ hash: tx });
+      const receipt = await this.publicClient.waitForTransactionReceipt({ hash: tx });
+      if (receipt.status === "reverted") {
+        throw new Error("Buy transaction reverted: " + tx);
+      }
 
-      const after = await getTokenBalance(this.publicClient, token.token as Address, this.account.address);
-      amountRaw = after - before;
+      // Reconcile the confirmed on-chain transfer from the receipt first.
+      // A post-tx RPC/balance-read failure must never erase a successful BUY.
+      const transfers = parseEventLogs({
+        abi: erc20Abi,
+        logs: receipt.logs,
+        eventName: "Transfer"
+      });
+      const recipient = this.account.address.toLowerCase();
+      amountRaw = transfers
+        .filter((log: any) =>
+          String(log.address).toLowerCase() === token.token.toLowerCase() &&
+          String(log.args?.to).toLowerCase() === recipient
+        )
+        .reduce((sum: bigint, log: any) => sum + BigInt(log.args?.value ?? 0n), 0n);
 
       if (amountRaw <= 0n) {
-        throw new Error("Buy transaction confirmed but token balance did not increase");
+        // Fallback for providers/routers whose receipt does not expose the
+        // token Transfer log in the parsed receipt.
+        const after = await getTokenBalance(this.publicClient, token.token as Address, this.account.address);
+        amountRaw = after - before;
+      }
+
+      if (amountRaw <= 0n) {
+        throw new Error("Buy confirmed but token amount could not be reconciled: " + tx);
       }
     } else {
       const quote = await quoteBuy(this.publicClient, token.token as Address, spend);
@@ -1378,9 +1393,7 @@ export class TradingEngine {
         );
 
         const receipt = await this.publicClient.waitForTransactionReceipt({ hash: tx });
-        const nativeAfter = BigInt(String(
-          await this.publicClient.getBalance({ address: this.account.address })
-        ));
+        const nativeAfter = await this.readNativeBalanceWithRetry();
         const gasUsed = BigInt(String(receipt.gasUsed ?? 0));
         const effectiveGasPrice = BigInt(String(receipt.effectiveGasPrice ?? 0));
         const gasCost = gasUsed * effectiveGasPrice;
@@ -1480,17 +1493,42 @@ export class TradingEngine {
     await this.sellPosition(position, 100, reason);
   }
 
+  private async readNativeBalanceWithRetry() {
+    if (!this.account) throw new Error("No live wallet");
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        return BigInt(String(await this.publicClient.getBalance({ address: this.account.address })));
+      } catch (error) {
+        lastError = error;
+        await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+
   private async refreshBalance() {
     if (!this.account) return;
 
     try {
       const balance = await getBalance(this.publicClient, this.account.address);
+      const state = this.store.get();
+      const openPositions = Object.values(state.positions).filter((p) => p.status === "OPEN");
+      const openExposureMon = openPositions.reduce((sum, p) => sum + Math.max(0, p.currentMon), 0);
+      const unrealizedPnlMon = openPositions.reduce((sum, p) => sum + p.pnlMon, 0);
+      const equityMon = balance + openExposureMon;
+
       this.store.update((s) => {
         s.balanceMon = balance;
+        s.openExposureMon = openExposureMon;
+        s.unrealizedPnlMon = unrealizedPnlMon;
       });
       this.store.addEquity({
         ts: Date.now(),
         balanceMon: balance,
+        openExposureMon,
+        unrealizedPnlMon,
+        equityMon,
         realizedPnlMon: this.store.get().realizedPnlMon
       });
     } catch (error) {

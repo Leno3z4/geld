@@ -39,6 +39,8 @@ export interface TokenSnapshot {
   athPriceMon?: number;
   athPriceUsd?: number;
   dipPct?: number;
+  drawdownFromRecentPeakPct?: number;
+  drawdownFromAthPct?: number;
   trendPct1h?: number;
   trendPct4h?: number;
   reboundPct1h?: number;
@@ -66,9 +68,12 @@ export interface EntryGateDiagnostics {
   metrics: {
     ageMinutes: number;
     liquidityUsd: number;
+    marketCapUsd: number;
     holders: number;
     volumeMon: number;
     dipPct: number;
+    drawdownFromRecentPeakPct: number;
+    drawdownFromAthPct: number;
     rebound1hPct: number;
     trend1hPct: number;
     trend4hPct: number;

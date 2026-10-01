@@ -12,6 +12,7 @@ export interface TokenSnapshot {
   pairToken0?: string;
   pairToken1?: string;
   quoteToken?: string;
+  virtualQuoteReserve?: string;
   createdBlock?: string;
   virtualTokenStart?: string;
   virtualTokenReserve?: string;

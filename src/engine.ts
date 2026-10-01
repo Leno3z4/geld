@@ -1297,7 +1297,8 @@ export class TradingEngine {
     } catch (error) {
       this.store.update((s) => {
         s.stats.aiFailures += 1;
-        s.stats.lastError = error instanceof Error ? error.message : String(error);
+        s.stats.lastAiError = error instanceof Error ? error.message : String(error);
+        s.stats.lastAiFailureAt = Date.now();
       });
       this.emit();
     }

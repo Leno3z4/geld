@@ -86,6 +86,10 @@ export interface EntryGateDiagnostics {
     rebound1hPct: number;
     trend1hPct: number;
     trend4hPct: number;
+    dayLowPriceMon: number;
+    dayAvgPriceMon: number;
+    distanceFromDayLowPct: number;
+    distanceFromDayAvgPct: number;
     localScore: number;
   };
   aiAction?: DecisionAction;

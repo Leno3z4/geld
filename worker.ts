@@ -477,7 +477,22 @@ export class GeldBot extends DurableObject<Env> {
           lowCapSellPressureRatio: runtimeConfig.lowCapSellPressureRatio,
           lowCapTrendExitPct: runtimeConfig.lowCapTrendExitPct,
           lowCapLossExitPct: runtimeConfig.lowCapLossExitPct,
-          lowCapPeakDrawdownExitPct: runtimeConfig.lowCapPeakDrawdownExitPct
+          lowCapPeakDrawdownExitPct: runtimeConfig.lowCapPeakDrawdownExitPct,
+          earlyLaunchEnabled: runtimeConfig.earlyLaunchEnabled,
+          earlyLaunchMinAgeSeconds: runtimeConfig.earlyLaunchMinAgeSeconds,
+          earlyLaunchMaxAgeMinutes: runtimeConfig.earlyLaunchMaxAgeMinutes,
+          earlyLaunchMinMarketCapUsd: runtimeConfig.earlyLaunchMinMarketCapUsd,
+          earlyLaunchMaxMarketCapUsd: runtimeConfig.earlyLaunchMaxMarketCapUsd,
+          earlyLaunchMinLiquidityUsd: runtimeConfig.earlyLaunchMinLiquidityUsd,
+          earlyLaunchMinHolders: runtimeConfig.earlyLaunchMinHolders,
+          earlyLaunchMinVolume1mUsd: runtimeConfig.earlyLaunchMinVolume1mUsd,
+          earlyLaunchMinBuySell1m: runtimeConfig.earlyLaunchMinBuySell1m,
+          earlyLaunchMinUniqueBuyers1m: runtimeConfig.earlyLaunchMinUniqueBuyers1m,
+          earlyLaunchMaxTopBuyerShare1m: runtimeConfig.earlyLaunchMaxTopBuyerShare1m,
+          earlyLaunchMinTrend1mPct: runtimeConfig.earlyLaunchMinTrend1mPct,
+          earlyLaunchMaxTrend1mPct: runtimeConfig.earlyLaunchMaxTrend1mPct,
+          earlyLaunchProbePortfolioPct: runtimeConfig.earlyLaunchProbePortfolioPct,
+          newEventPollMs: runtimeConfig.newEventPollMs
         }
       });
     }
@@ -515,7 +530,24 @@ export class GeldBot extends DurableObject<Env> {
         lowCapSellPressureRatio: runtimeConfig.lowCapSellPressureRatio,
         lowCapTrendExitPct: runtimeConfig.lowCapTrendExitPct,
         lowCapLossExitPct: runtimeConfig.lowCapLossExitPct,
-        lowCapPeakDrawdownExitPct: runtimeConfig.lowCapPeakDrawdownExitPct
+        lowCapPeakDrawdownExitPct: runtimeConfig.lowCapPeakDrawdownExitPct,
+        earlyLaunchEnabled: runtimeConfig.earlyLaunchEnabled,
+        earlyLaunchMinAgeSeconds: runtimeConfig.earlyLaunchMinAgeSeconds,
+        earlyLaunchMaxAgeMinutes: runtimeConfig.earlyLaunchMaxAgeMinutes,
+        earlyLaunchMinMarketCapUsd: runtimeConfig.earlyLaunchMinMarketCapUsd,
+        earlyLaunchMaxMarketCapUsd: runtimeConfig.earlyLaunchMaxMarketCapUsd,
+        earlyLaunchMinLiquidityUsd: runtimeConfig.earlyLaunchMinLiquidityUsd,
+        earlyLaunchMinHolders: runtimeConfig.earlyLaunchMinHolders,
+        earlyLaunchMinVolume1mUsd: runtimeConfig.earlyLaunchMinVolume1mUsd,
+        earlyLaunchMinBuySell1m: runtimeConfig.earlyLaunchMinBuySell1m,
+        earlyLaunchMinUniqueBuyers1m: runtimeConfig.earlyLaunchMinUniqueBuyers1m,
+        earlyLaunchMaxTopBuyerShare1m: runtimeConfig.earlyLaunchMaxTopBuyerShare1m,
+        earlyLaunchMinTrend1mPct: runtimeConfig.earlyLaunchMinTrend1mPct,
+        earlyLaunchMaxTrend1mPct: runtimeConfig.earlyLaunchMaxTrend1mPct,
+        earlyLaunchMinScore: runtimeConfig.earlyLaunchMinScore,
+        earlyLaunchProbePortfolioPct: runtimeConfig.earlyLaunchProbePortfolioPct,
+        newEventPollMs: runtimeConfig.newEventPollMs,
+        newEventCandidateLimit: runtimeConfig.newEventCandidateLimit
       });
     }
 

@@ -1,4 +1,4 @@
- # geld — MONAD / Nad.fun AI meme trading bot  
+ # geld — MONAD / Nad.fun AI meme trading bot
 
 geld is a TypeScript/Node + React system for autonomous meme-token trading on Monad/Nad.fun V2. The dashboard is hosted on Vercel, while the trading API and long-running engine run on Cloudflare. Read-only dashboard telemetry comes directly from the Cloudflare Worker. Protected operator actions still use the Vercel proxy so the API secret never ships to the browser.
 

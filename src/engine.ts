@@ -333,6 +333,7 @@ export class TradingEngine {
 
         updateMarketMetrics(token);
         token.localScore = scoreToken(token, this.seasonality);
+        token.entryStrategy = selectEntryStrategy(token, config.dailyMinSamples);
 
         const watchable = shouldWatch(
           token,

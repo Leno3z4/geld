@@ -671,6 +671,12 @@ export function positionExitSignal(
     if (pnlPct <= Math.max(lowCapLossExitPct, -3) && trend1h < 0) {
       return { kind: "FULL", sellPct: 100, reason: "LOW_CAP_MOMENTUM_BREAK" };
     }
+    // A low-cap winner can reverse hard before the generic trailing stop fires.
+    // Use the configured 1h trend break as an additional early exit while
+    // allowing a small positive buffer for normal noise.
+    if (trend1h <= lowCapTrendExitPct && pnlPct <= 3) {
+      return { kind: "FULL", sellPct: 100, reason: "LOW_CAP_TREND_BREAK" };
+    }
     if (position.peakMon > position.entryMon && position.currentMon <= position.peakMon * (1 - lowCapPeakDrawdownExitPct / 100)) {
       return { kind: "FULL", sellPct: 100, reason: "LOW_CAP_PEAK_REVERSAL" };
     }

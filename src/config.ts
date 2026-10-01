@@ -111,6 +111,8 @@ export const config = {
   lowCapLossExitPct: num("LOW_CAP_LOSS_EXIT_PCT", -4),
   lowCapPeakDrawdownExitPct: Math.max(1, num("LOW_CAP_PEAK_DRAWDOWN_EXIT_PCT", 12)),
   lowCapMaxLiquidityPositionPct: Math.min(10, Math.max(0.5, num("LOW_CAP_MAX_LIQUIDITY_POSITION_PCT", 2))),
+  lowCapFlowApiCandidateLimit: Math.max(1, Math.min(8, Math.floor(num("LOW_CAP_FLOW_API_CANDIDATE_LIMIT", 4)))),
+  flowApiRefreshMs: Math.max(15000, num("FLOW_API_REFRESH_MS", 30000)),
   dipMinPct: Math.max(0, num("DIP_MIN_PCT", 3)),
   dipMaxPct: Math.max(1, num("DIP_MAX_PCT", 50)),
   recoveryMinPct: num("RECOVERY_MIN_PCT", -10),
@@ -123,7 +125,7 @@ export const config = {
   minVolume5mUsd: Math.max(0, num("MIN_VOLUME_5M_USD", 1000)),
   fastCycleMs: Math.max(10000, num("FAST_CYCLE_MS", 10000)),
 
-  nadfunApiUrl: process.env.NADFUN_API_URL ?? "https://api.nadapp.net",
+  nadfunApiUrl: process.env.NADFUN_API_URL ?? "https://api.nad.fun",
   nadfunApiKey: process.env.NADFUN_API_KEY ?? "",
 
   geminiKeys: csv("GEMINI_API_KEYS"),

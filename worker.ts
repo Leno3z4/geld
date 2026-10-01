@@ -46,7 +46,7 @@ interface Env {
   MOMENTUM_EXIT_TREND_1H_PCT?: string;
   MOMENTUM_EXIT_REBOUND_1H_PCT?: string;
   SELL_PRESSURE_EXIT_RATIO?: string;
-  SELL_PRESSURE_MIN_VOLUME_5M_MON?: string;
+  SELL_PRESSURE_MIN_VOLUME_USD?: string;
   MIN_TREND_4H_PCT?: string;
   LIQUIDITY_EXIT_RATIO?: string;
   MAX_QUOTE_FAILURES?: string;
@@ -57,7 +57,8 @@ interface Env {
   MIN_ESTABLISHED_AGE_MINUTES?: string;
   MIN_LIQUIDITY_USD?: string;
   MIN_HOLDERS?: string;
-  MIN_VOLUME_MON?: string;
+  MIN_VOLUME_USD?: string;
+  MIN_VOLUME_5M_USD?: string;
   DIP_MIN_PCT?: string;
   DIP_MAX_PCT?: string;
   RECOVERY_MIN_PCT?: string;
@@ -87,17 +88,19 @@ interface Env {
   LOW_CAP_MAX_MARKET_CAP_USD?: string;
   LOW_CAP_MIN_LIQUIDITY_USD?: string;
   LOW_CAP_MIN_HOLDERS?: string;
-  LOW_CAP_MIN_VOLUME_MON?: string;
+  LOW_CAP_MIN_VOLUME_USD?: string;
+  MIN_VOLUME_5M_USD?: string;
   LOW_CAP_MIN_AGE_MINUTES?: string;
   LOW_CAP_CANDIDATE_MAX_AGE_SECONDS?: string;
   LOW_CAP_MIN_BUY_SELL_RATIO_5M?: string;
-  LOW_CAP_MIN_VOLUME_5M_MON?: string;
+  LOW_CAP_MIN_VOLUME_5M_USD?: string;
   LOW_CAP_MIN_VOLUME_ACCELERATION_5M?: string;
   LOW_CAP_MIN_TREND_1H_PCT?: string;
   LOW_CAP_MIN_SCORE?: string;
   LOW_CAP_LIQUIDITY_EXIT_RATIO?: string;
   LOW_CAP_SELL_PRESSURE_RATIO?: string;
-  LOW_CAP_SELL_PRESSURE_MIN_VOLUME_MON?: string;
+  LOW_CAP_SELL_PRESSURE_MIN_VOLUME_USD?: string;
+  MIN_VOLUME_5M_USD?: string;
   LOW_CAP_TREND_EXIT_PCT?: string;
   LOW_CAP_LOSS_EXIT_PCT?: string;
   LOW_CAP_PEAK_DRAWDOWN_EXIT_PCT?: string;
@@ -184,7 +187,7 @@ function hydrateProcessEnv(env: Env) {
     MOMENTUM_EXIT_TREND_1H_PCT: env.MOMENTUM_EXIT_TREND_1H_PCT,
     MOMENTUM_EXIT_REBOUND_1H_PCT: env.MOMENTUM_EXIT_REBOUND_1H_PCT,
     SELL_PRESSURE_EXIT_RATIO: env.SELL_PRESSURE_EXIT_RATIO,
-    SELL_PRESSURE_MIN_VOLUME_5M_MON: env.SELL_PRESSURE_MIN_VOLUME_5M_MON,
+    SELL_PRESSURE_MIN_VOLUME_USD: env.SELL_PRESSURE_MIN_VOLUME_USD,
     MIN_TREND_4H_PCT: env.MIN_TREND_4H_PCT,
     LIQUIDITY_EXIT_RATIO: env.LIQUIDITY_EXIT_RATIO,
     MAX_QUOTE_FAILURES: env.MAX_QUOTE_FAILURES,
@@ -195,7 +198,8 @@ function hydrateProcessEnv(env: Env) {
     MIN_ESTABLISHED_AGE_MINUTES: env.MIN_ESTABLISHED_AGE_MINUTES,
     MIN_LIQUIDITY_USD: env.MIN_LIQUIDITY_USD,
     MIN_HOLDERS: env.MIN_HOLDERS,
-    MIN_VOLUME_MON: env.MIN_VOLUME_MON,
+    MIN_VOLUME_USD: env.MIN_VOLUME_USD,
+    MIN_VOLUME_5M_USD: env.MIN_VOLUME_5M_USD,
     DIP_MIN_PCT: env.DIP_MIN_PCT,
     DIP_MAX_PCT: env.DIP_MAX_PCT,
     RECOVERY_MIN_PCT: env.RECOVERY_MIN_PCT,
@@ -224,17 +228,17 @@ function hydrateProcessEnv(env: Env) {
     LOW_CAP_MAX_MARKET_CAP_USD: env.LOW_CAP_MAX_MARKET_CAP_USD,
     LOW_CAP_MIN_LIQUIDITY_USD: env.LOW_CAP_MIN_LIQUIDITY_USD,
     LOW_CAP_MIN_HOLDERS: env.LOW_CAP_MIN_HOLDERS,
-    LOW_CAP_MIN_VOLUME_MON: env.LOW_CAP_MIN_VOLUME_MON,
+    LOW_CAP_MIN_VOLUME_USD: env.LOW_CAP_MIN_VOLUME_USD,
     LOW_CAP_MIN_AGE_MINUTES: env.LOW_CAP_MIN_AGE_MINUTES,
     LOW_CAP_CANDIDATE_MAX_AGE_SECONDS: env.LOW_CAP_CANDIDATE_MAX_AGE_SECONDS,
     LOW_CAP_MIN_BUY_SELL_RATIO_5M: env.LOW_CAP_MIN_BUY_SELL_RATIO_5M,
-    LOW_CAP_MIN_VOLUME_5M_MON: env.LOW_CAP_MIN_VOLUME_5M_MON,
+    LOW_CAP_MIN_VOLUME_5M_USD: env.LOW_CAP_MIN_VOLUME_5M_USD,
     LOW_CAP_MIN_VOLUME_ACCELERATION_5M: env.LOW_CAP_MIN_VOLUME_ACCELERATION_5M,
     LOW_CAP_MIN_TREND_1H_PCT: env.LOW_CAP_MIN_TREND_1H_PCT,
     LOW_CAP_MIN_SCORE: env.LOW_CAP_MIN_SCORE,
     LOW_CAP_LIQUIDITY_EXIT_RATIO: env.LOW_CAP_LIQUIDITY_EXIT_RATIO,
     LOW_CAP_SELL_PRESSURE_RATIO: env.LOW_CAP_SELL_PRESSURE_RATIO,
-    LOW_CAP_SELL_PRESSURE_MIN_VOLUME_MON: env.LOW_CAP_SELL_PRESSURE_MIN_VOLUME_MON,
+    LOW_CAP_SELL_PRESSURE_MIN_VOLUME_USD: env.LOW_CAP_SELL_PRESSURE_MIN_VOLUME_USD,
     LOW_CAP_TREND_EXIT_PCT: env.LOW_CAP_TREND_EXIT_PCT,
     LOW_CAP_LOSS_EXIT_PCT: env.LOW_CAP_LOSS_EXIT_PCT,
     LOW_CAP_PEAK_DRAWDOWN_EXIT_PCT: env.LOW_CAP_PEAK_DRAWDOWN_EXIT_PCT
@@ -369,7 +373,7 @@ export class GeldBot extends DurableObject<Env> {
           minMarketCapUsd: runtimeConfig.minMarketCapUsd,
           minEstablishedAgeMinutes: runtimeConfig.minEstablishedAgeMinutes,
           minHolders: runtimeConfig.minHolders,
-          minVolumeMon: runtimeConfig.minVolumeMon,
+          minVolumeUsd: runtimeConfig.minVolumeUsd,
           dipMinPct: runtimeConfig.dipMinPct,
           dipMaxPct: runtimeConfig.dipMaxPct,
           trendMax1hPct: runtimeConfig.trendMax1hPct,
@@ -380,10 +384,10 @@ export class GeldBot extends DurableObject<Env> {
           lowCapMaxMarketCapUsd: runtimeConfig.lowCapMaxMarketCapUsd,
           lowCapMinLiquidityUsd: runtimeConfig.lowCapMinLiquidityUsd,
           lowCapMinHolders: runtimeConfig.lowCapMinHolders,
-          lowCapMinVolumeMon: runtimeConfig.lowCapMinVolumeMon,
+          lowCapMinVolumeUsd: runtimeConfig.lowCapMinVolumeUsd,
           lowCapMinAgeMinutes: runtimeConfig.lowCapMinAgeMinutes,
           lowCapMinBuySellRatio5m: runtimeConfig.lowCapMinBuySellRatio5m,
-          lowCapMinVolume5mMon: runtimeConfig.lowCapMinVolume5mMon,
+          lowCapMinVolume5mUsd: runtimeConfig.lowCapMinVolume5mUsd,
           lowCapMinVolumeAcceleration5m: runtimeConfig.lowCapMinVolumeAcceleration5m,
           lowCapMinTrend1hPct: runtimeConfig.lowCapMinTrend1hPct,
           lowCapMinScore: runtimeConfig.lowCapMinScore,
@@ -407,7 +411,7 @@ export class GeldBot extends DurableObject<Env> {
         minMarketCapUsd: runtimeConfig.minMarketCapUsd,
         minEstablishedAgeMinutes: runtimeConfig.minEstablishedAgeMinutes,
         minHolders: runtimeConfig.minHolders,
-        minVolumeMon: runtimeConfig.minVolumeMon,
+        minVolumeUsd: runtimeConfig.minVolumeUsd,
         dipMinPct: runtimeConfig.dipMinPct,
         dipMaxPct: runtimeConfig.dipMaxPct,
         trendMax1hPct: runtimeConfig.trendMax1hPct,
@@ -418,10 +422,10 @@ export class GeldBot extends DurableObject<Env> {
         lowCapMaxMarketCapUsd: runtimeConfig.lowCapMaxMarketCapUsd,
         lowCapMinLiquidityUsd: runtimeConfig.lowCapMinLiquidityUsd,
         lowCapMinHolders: runtimeConfig.lowCapMinHolders,
-        lowCapMinVolumeMon: runtimeConfig.lowCapMinVolumeMon,
+        lowCapMinVolumeUsd: runtimeConfig.lowCapMinVolumeUsd,
         lowCapMinAgeMinutes: runtimeConfig.lowCapMinAgeMinutes,
         lowCapMinBuySellRatio5m: runtimeConfig.lowCapMinBuySellRatio5m,
-        lowCapMinVolume5mMon: runtimeConfig.lowCapMinVolume5mMon,
+        lowCapMinVolume5mUsd: runtimeConfig.lowCapMinVolume5mUsd,
         lowCapMinVolumeAcceleration5m: runtimeConfig.lowCapMinVolumeAcceleration5m,
         lowCapMinTrend1hPct: runtimeConfig.lowCapMinTrend1hPct,
         lowCapMinScore: runtimeConfig.lowCapMinScore,

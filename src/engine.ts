@@ -1018,11 +1018,60 @@ export class TradingEngine {
         return;
       }
 
-      const decision = await this.brain.decide({
-        mode: "candidate",
-        token,
-        seasonality: this.seasonality.summary()
-      });
+      let decision: import("./ai.js").AiDecision;
+      let usedAiFallback = false;
+
+      try {
+        decision = await this.brain.decide({
+          mode: "candidate",
+          token,
+          seasonality: this.seasonality.summary()
+        });
+      } catch (error) {
+        if (!config.aiFallbackEnabled || token.localScore < config.aiFallbackMinScore) {
+          throw error;
+        }
+
+        // Aggressive fallback: when Gemini is unavailable/rate-limited, keep
+        // trading only candidates that already passed every hard market gate.
+        // This never bypasses shouldOpen(); it simply removes AI availability
+        // as the single point of failure for an otherwise qualified setup.
+        const dip = token.dipPct ?? 0;
+        const trend1h = token.trendPct1h ?? 0;
+        const trend4h = token.trendPct4h ?? 0;
+        const buySell = token.buySellRatio5m ?? 0;
+        const volume5m = token.volume5mMon ?? 0;
+
+        const pullbackSetup =
+          dip >= config.dipMinPct &&
+          dip <= config.dipMaxPct &&
+          trend1h <= config.trendMax1hPct &&
+          trend4h >= config.minTrend4hPct;
+
+        const activeMomentumSetup =
+          trend1h > 0 &&
+          trend1h <= config.trendMax1hPct &&
+          trend4h >= config.minTrend4hPct &&
+          (buySell >= 0.85 || volume5m >= config.minVolumeMon * 0.20);
+
+        if (!pullbackSetup && !activeMomentumSetup) {
+          throw error;
+        }
+
+        usedAiFallback = true;
+        decision = {
+          action: "BUY",
+          confidence: Math.max(config.aiMinConfidence, 0.50),
+          sizePct: 0.75,
+          reason: "AI unavailable; deterministic aggressive setup passed hard market gates.",
+          invalidation: "Hard entry gates fail or momentum/liquidity deteriorates."
+        };
+
+        this.store.update((s) => {
+          s.stats.aiFailures += 1;
+          s.stats.lastError = error instanceof Error ? error.message : String(error);
+        });
+      }
 
       token.lastCandidateAiAt = Date.now();
       const aiDiagnostics = entryGateDiagnostics(
@@ -1048,7 +1097,7 @@ export class TradingEngine {
       token.entryDiagnostics = aiDiagnostics;
 
       this.store.update((s) => {
-        s.stats.aiCalls += 1;
+        if (!usedAiFallback) s.stats.aiCalls += 1;
         const current = s.tokens[token.token];
         if (current) {
           current.aiAction = decision.action;

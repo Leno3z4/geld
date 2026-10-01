@@ -31,6 +31,7 @@ export const config = {
   maxOpenPositions: Math.max(1, Math.floor(num("MAX_OPEN_POSITIONS", 5))),
   pendingExecutionTimeoutMs: Math.max(60_000, num("PENDING_EXECUTION_TIMEOUT_MS", 5 * 60 * 1000)),
   gasReserveMon: num("GAS_RESERVE_MON", 0.75),
+  dailyLossLimitPct: Math.max(1, num("DAILY_LOSS_LIMIT_PCT", 5)),
   minLocalScore: num("MIN_LOCAL_SCORE", 35),
   aiMinConfidence: num("AI_MIN_CONFIDENCE", 0.45),
   slippagePct: num("SLIPPAGE_PCT", 6),

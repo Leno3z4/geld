@@ -1333,8 +1333,6 @@ export class TradingEngine {
         createdAt: Date.now()
       };
     });
-    await this.persist();
-
     try {
       let amountRaw: bigint;
       let decimals = 18;

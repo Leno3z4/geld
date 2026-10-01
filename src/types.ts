@@ -175,7 +175,7 @@ export interface BotStats {
   lastProcessedBlock?: string;
   lastCycleAt?: number;
   lastRiskCycleAt?: number;
-  lastError?: string;
+  lastError?: string;\n  lastAiError?: string;\n  lastAiFailureAt?: number;\n  lastIdleReason?: string;
   startedAt?: number;
   lastLogCount?: number;
   lastLogPollAt?: number;

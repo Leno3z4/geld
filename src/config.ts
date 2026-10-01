@@ -48,7 +48,7 @@ export const config = {
   earlyLaunchMinScore: Math.max(0, num("EARLY_LAUNCH_MIN_SCORE", 30)),
   earlyLaunchProbePortfolioPct: Math.min(5, Math.max(0.25, num("EARLY_LAUNCH_PROBE_PORTFOLIO_PCT", 2))),
   newEventPollMs: Math.max(5000, num("NEW_EVENT_POLL_MS", 10000)),
-  newEventCandidateLimit: Math.max(1, Math.min(3, Math.floor(num("NEW_EVENT_CANDIDATE_LIMIT", 2))),
+  newEventCandidateLimit: Math.max(1, Math.min(3, Math.floor(num("NEW_EVENT_CANDIDATE_LIMIT", 2)))),
   minLocalScore: num("MIN_LOCAL_SCORE", 35),
   aiMinConfidence: num("AI_MIN_CONFIDENCE", 0.45),
   slippagePct: num("SLIPPAGE_PCT", 6),

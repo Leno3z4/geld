@@ -366,7 +366,7 @@ export class TradingEngine {
           minLiquidityUsd: config.minLiquidityUsd,
           minMarketCapUsd: config.minMarketCapUsd,
           minHolders: config.minHolders,
-          minVolumeMon: config.minVolumeUsd,
+          minVolumeUsd: config.minVolumeUsd,
           dipMinPct: config.dipMinPct,
           dipMaxPct: config.dipMaxPct,
           recoveryMinPct: config.recoveryMinPct,
@@ -814,7 +814,7 @@ export class TradingEngine {
         (parsed.eventName === "Buy" || parsed.eventName === "Sell" || parsed.eventName === "Sync") &&
         this.store.get().running &&
         token.localScore >= config.minLocalScore &&
-        (Date.now() - token.createdAt) / 1000 <= (isLowCapMomentumCandidate(token, { enabled: config.lowCapMomentumEnabled, minMarketCapUsd: config.lowCapMinMarketCapUsd, maxMarketCapUsd: config.lowCapMaxMarketCapUsd, minLiquidityUsd: config.lowCapMinLiquidityUsd, minHolders: config.lowCapMinHolders, minVolumeMon: config.lowCapMinVolumeUsd, minAgeMinutes: config.lowCapMinAgeMinutes, minBuySellRatio5m: config.lowCapMinBuySellRatio5m, minVolume5mMon: config.lowCapMinVolume5mUsd, minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m, minTrend1hPct: config.lowCapMinTrend1hPct, minLocalScore: config.lowCapMinScore }) ? config.lowCapCandidateMaxAgeSeconds : config.candidateMaxAgeSeconds)
+        (Date.now() - token.createdAt) / 1000 <= (isLowCapMomentumCandidate(token, { enabled: config.lowCapMomentumEnabled, minMarketCapUsd: config.lowCapMinMarketCapUsd, maxMarketCapUsd: config.lowCapMaxMarketCapUsd, minLiquidityUsd: config.lowCapMinLiquidityUsd, minHolders: config.lowCapMinHolders, minVolumeUsd: config.lowCapMinVolumeUsd, minAgeMinutes: config.lowCapMinAgeMinutes, minBuySellRatio5m: config.lowCapMinBuySellRatio5m, minVolume5mUsd: config.lowCapMinVolume5mUsd, minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m, minTrend1hPct: config.lowCapMinTrend1hPct, minLocalScore: config.lowCapMinScore }) ? config.lowCapCandidateMaxAgeSeconds : config.candidateMaxAgeSeconds)
       ) {
         void this.maybeEvaluateCandidate(token);
       }
@@ -1036,10 +1036,10 @@ export class TradingEngine {
       maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
       minLiquidityUsd: config.lowCapMinLiquidityUsd,
       minHolders: config.lowCapMinHolders,
-      minVolumeMon: config.lowCapMinVolumeUsd,
+      minVolumeUsd: config.lowCapMinVolumeUsd,
       minAgeMinutes: config.lowCapMinAgeMinutes,
       minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
-      minVolume5mMon: config.lowCapMinVolume5mUsd,
+      minVolume5mUsd: config.lowCapMinVolume5mUsd,
       minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
       minTrend1hPct: config.lowCapMinTrend1hPct,
       minLocalScore: config.lowCapMinScore
@@ -1097,10 +1097,10 @@ export class TradingEngine {
       maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
       minLiquidityUsd: config.lowCapMinLiquidityUsd,
       minHolders: config.lowCapMinHolders,
-      minVolumeMon: config.lowCapMinVolumeUsd,
+      minVolumeUsd: config.lowCapMinVolumeUsd,
       minAgeMinutes: config.lowCapMinAgeMinutes,
       minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
-      minVolume5mMon: config.lowCapMinVolume5mUsd,
+      minVolume5mUsd: config.lowCapMinVolume5mUsd,
       minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
       minTrend1hPct: config.lowCapMinTrend1hPct,
       minLocalScore: config.lowCapMinScore
@@ -1153,10 +1153,10 @@ export class TradingEngine {
       maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
       minLiquidityUsd: config.lowCapMinLiquidityUsd,
       minHolders: config.lowCapMinHolders,
-      minVolumeMon: config.lowCapMinVolumeUsd,
+      minVolumeUsd: config.lowCapMinVolumeUsd,
       minAgeMinutes: config.lowCapMinAgeMinutes,
       minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
-      minVolume5mMon: config.lowCapMinVolume5mUsd,
+      minVolume5mUsd: config.lowCapMinVolume5mUsd,
       minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
       minTrend1hPct: config.lowCapMinTrend1hPct,
       minLocalScore: config.lowCapMinScore
@@ -1181,7 +1181,7 @@ export class TradingEngine {
           minLiquidityUsd: config.minLiquidityUsd,
           minMarketCapUsd: config.minMarketCapUsd,
           minHolders: config.minHolders,
-          minVolumeMon: config.minVolumeUsd,
+          minVolumeUsd: config.minVolumeUsd,
           dipMinPct: config.dipMinPct,
           dipMaxPct: config.dipMaxPct,
           recoveryMinPct: config.recoveryMinPct,
@@ -1251,10 +1251,10 @@ export class TradingEngine {
       maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
       minLiquidityUsd: config.lowCapMinLiquidityUsd,
       minHolders: config.lowCapMinHolders,
-      minVolumeMon: config.lowCapMinVolumeUsd,
+      minVolumeUsd: config.lowCapMinVolumeUsd,
       minAgeMinutes: config.lowCapMinAgeMinutes,
       minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
-      minVolume5mMon: config.lowCapMinVolume5mUsd,
+      minVolume5mUsd: config.lowCapMinVolume5mUsd,
       minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
       minTrend1hPct: config.lowCapMinTrend1hPct,
       minLocalScore: config.lowCapMinScore
@@ -1568,7 +1568,7 @@ export class TradingEngine {
       momentumExitTrend1hPct: config.momentumExitTrend1hPct,
       momentumExitReboundPct: config.momentumExitReboundPct,
       sellPressureExitRatio: config.sellPressureExitRatio,
-      sellPressureMinVolumeMon: config.sellPressureMinVolumeUsd,
+      sellPressureMinVolumeUsd: config.sellPressureMinVolumeUsd,
       profitTake1Pct: config.profitTake1Pct,
       profitTake1SellPct: config.profitTake1SellPct,
       profitTake2Pct: config.profitTake2Pct,
@@ -1581,7 +1581,7 @@ export class TradingEngine {
       ,lowCapMaxMarketCapUsd: config.lowCapMaxMarketCapUsd,
       lowCapLiquidityExitRatio: config.lowCapLiquidityExitRatio,
       lowCapSellPressureRatio: config.lowCapSellPressureRatio,
-      lowCapSellPressureMinVolumeMon: config.lowCapSellPressureMinVolumeUsd,
+      lowCapSellPressureMinVolumeUsd: config.lowCapSellPressureMinVolumeUsd,
       lowCapTrendExitPct: config.lowCapTrendExitPct,
       lowCapLossExitPct: config.lowCapLossExitPct,
       lowCapPeakDrawdownExitPct: config.lowCapPeakDrawdownExitPct

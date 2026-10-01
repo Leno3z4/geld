@@ -73,6 +73,8 @@ export class GeminiBrain {
            };
            const decision=Decision.parse({
              ...raw,
+             confidence: Math.max(0, Math.min(1, Number(raw?.confidence ?? 0))),
+             sizePct: Math.max(0, Math.min(1, Number(raw?.sizePct ?? 0))),
              reason: clip(raw?.reason, 240),
              invalidation: clip(raw?.invalidation, 200)
            });

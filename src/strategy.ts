@@ -134,16 +134,26 @@ function historyMetrics(token: TokenSnapshot) {
     ? Math.max(0, (1 - token.priceMon / athPriceMon) * 100)
     : 0;
 
-  const oneHourBase = history.find((x) => x.ts <= oneHourAgo);
-  const fourHourBase = history.find((x) => x.ts <= fourHoursAgo);
+  const oneHourBases = history.filter((x) => x.ts <= oneHourAgo);
+  const fourHourBases = history.filter((x) => x.ts <= fourHoursAgo);
+  const oneHourBase = oneHourBases.at(-1);
+  const fourHourBase = fourHourBases.at(-1);
   const marketChangePct = Number.isFinite(token.changePct) ? token.changePct! : 0;
 
-  const trend1hPct = oneHourBase && oneHourBase.priceMon > 0
+  const localTrend1hPct = oneHourBase && oneHourBase.priceMon > 0
     ? (token.priceMon / oneHourBase.priceMon - 1) * 100
     : marketChangePct;
-  const trend4hPct = fourHourBase && fourHourBase.priceMon > 0
+  const localTrend4hPct = fourHourBase && fourHourBase.priceMon > 0
     ? (token.priceMon / fourHourBase.priceMon - 1) * 100
     : marketChangePct;
+
+  const apiFresh =
+    token.lastFlowApiAt !== undefined &&
+    Date.now() - token.lastFlowApiAt < config.flowApiRefreshMs * 2;
+  const trend1hPct = apiFresh && token.apiTrend1hPct !== undefined
+    ? token.apiTrend1hPct
+    : localTrend1hPct;
+  const trend4hPct = localTrend4hPct;
 
   const oneHourLow = recent.length
     ? Math.min(token.priceMon, ...recent.map((x) => x.priceMon))

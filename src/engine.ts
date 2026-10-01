@@ -1074,6 +1074,40 @@ export class TradingEngine {
       }
 
       token.lastCandidateAiAt = Date.now();
+
+      // In aggressive mode, AI is advisory rather than an absolute veto.
+      // A strong deterministic setup can promote AI HOLD to BUY after all
+      // hard market gates have already passed.
+      if (decision.action === "HOLD" && config.aiFallbackEnabled) {
+        const dip = token.dipPct ?? 0;
+        const trend1h = token.trendPct1h ?? 0;
+        const trend4h = token.trendPct4h ?? 0;
+        const buySell = token.buySellRatio5m ?? 0;
+        const volume5m = token.volume5mMon ?? 0;
+        const pullbackSetup =
+          dip >= config.dipMinPct &&
+          dip <= config.dipMaxPct &&
+          trend1h <= config.trendMax1hPct &&
+          trend4h >= config.minTrend4hPct;
+        const momentumSetup =
+          dip <= config.dipMaxPct &&
+          trend1h > 0 &&
+          trend1h <= config.trendMax1hPct &&
+          trend4h >= config.minTrend4hPct &&
+          (buySell >= 0.85 || volume5m >= config.minVolumeMon * 0.20);
+
+        if (token.localScore >= config.aiOverrideScore && (pullbackSetup || momentumSetup)) {
+          decision = {
+            ...decision,
+            action: "BUY",
+            confidence: Math.max(decision.confidence, config.aiMinConfidence),
+            sizePct: Math.max(decision.sizePct, 0.75),
+            reason: "Strong deterministic setup overrides AI HOLD; hard gates passed.",
+            invalidation: "Hard entry gates fail or momentum/liquidity deteriorates."
+          };
+        }
+      }
+
       const aiDiagnostics = entryGateDiagnostics(
         token,
         {

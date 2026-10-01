@@ -1565,7 +1565,8 @@ export class TradingEngine {
       minLocalScore: config.lowCapMinScore
     });
 
-        if (!pullbackSetup && !activeMomentumSetup && !lowCapSetup) {
+        const earlyLaunchSetup = isEarlyLaunchCandidate(token);
+        if (!pullbackSetup && !activeMomentumSetup && !lowCapSetup && !earlyLaunchSetup) {
           throw error;
         }
 
@@ -1622,7 +1623,7 @@ export class TradingEngine {
       minLocalScore: config.lowCapMinScore
     });
 
-        if (token.localScore >= config.aiOverrideScore && (pullbackSetup || momentumSetup || lowCapSetup)) {
+        if (token.localScore >= config.aiOverrideScore && (pullbackSetup || momentumSetup || lowCapSetup || earlyLaunchSetup)) {
           decision = {
             ...decision,
             action: "BUY",
@@ -1751,9 +1752,11 @@ export class TradingEngine {
       minTrend1hPct: config.lowCapMinTrend1hPct,
       minLocalScore: config.lowCapMinScore
     });
+    const earlyLaunch = isEarlyLaunchCandidate(token);
     if (
       config.establishedOnly &&
       !lowCapMomentum &&
+      !earlyLaunch &&
       (!token.graduated ||
         ageMinutes < config.minEstablishedAgeMinutes ||
         (token.liquidityUsd ?? 0) < config.minLiquidityUsd ||
@@ -1797,16 +1800,19 @@ export class TradingEngine {
     const availableCapacity = Math.max(0, capacity - this.reservedSpendMon);
     const volatilityFactor = entrySizeVolatilityFactor(token);
     const baseSpend = Math.min(perTrade, availableCapacity, freeBalance) * aiSizePct * volatilityFactor;
+    const earlyProbeCap = earlyLaunch
+      ? state.balanceMon * config.earlyLaunchProbePortfolioPct / 100
+      : Number.POSITIVE_INFINITY;
     // On low-cap pools, size the order against available quote liquidity so the
     // bot does not become the market. The 2% default is a risk guard, not a
     // claim about an optimal market-impact threshold.
-    const lowCapLiquidityMon = lowCapMomentum && (token.liquidityMon ?? 0) > 0
+    const lowCapLiquidityMon = (lowCapMomentum || earlyLaunch) && (token.liquidityMon ?? 0) > 0
       ? token.liquidityMon!
       : Number.POSITIVE_INFINITY;
     const liquidityCap = Number.isFinite(lowCapLiquidityMon)
       ? lowCapLiquidityMon * config.lowCapMaxLiquidityPositionPct / 100
       : Number.POSITIVE_INFINITY;
-    const spend = Math.min(baseSpend, liquidityCap);
+    const spend = Math.min(baseSpend, liquidityCap, earlyProbeCap);
 
     if (spend <= 0.001) return;
 

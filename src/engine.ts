@@ -140,8 +140,26 @@ export class TradingEngine {
     for (const listener of this.listeners) listener(this.store.get());
   }
 
+  private cleanupStalePendingExecutions() {
+    const cutoff = Date.now() - config.pendingExecutionTimeoutMs;
+    const stale = Object.values(this.store.get().pendingExecutions).filter(
+      (pending) => pending.createdAt < cutoff && !pending.txHash
+    );
+
+    if (stale.length === 0) return 0;
+
+    this.store.update((s) => {
+      for (const pending of stale) {
+        delete s.pendingExecutions[pending.id];
+      }
+    });
+
+    return stale.length;
+  }
+
   async init() {
     await this.store.load();
+    this.cleanupStalePendingExecutions();
     this.store.update((s) => {
       s.walletAddress = this.account?.address ?? "";
       s.liveTrading = config.liveTrading;
@@ -449,7 +467,7 @@ export class TradingEngine {
       }
     }
 
-    // Reconcile wallet assets before risk management. A confirmed BUY must
+    // Drop abandoned pre-transaction reservations before counting pending BUY slots.\n    // A Worker restart can otherwise leave persisted pending BUYs forever and\n    // block every new entry even though no position exists on-chain.\n    this.cleanupStalePendingExecutions();\n\n    // Reconcile wallet assets before risk management. A confirmed BUY must
     // never disappear from the internal book just because the process died
     // between settlement and state persistence.
     await this.reconcileWalletPositions();

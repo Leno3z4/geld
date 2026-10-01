@@ -487,6 +487,10 @@ export class TradingEngine {
 
       candidates
         .sort((a, b) =>
+          (b.localScore - a.localScore) ||
+          ((b.liquidityMon ?? 0) - (a.liquidityMon ?? 0)) ||
+          ((b.volumeMon ?? 0) - (a.volumeMon ?? 0))
+        )
         .slice(0, config.aiCandidateLimit)
         .forEach((token) => {
           void this.maybeEvaluateCandidate(token);

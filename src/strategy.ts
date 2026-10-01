@@ -195,6 +195,68 @@ function historyMetrics(token: TokenSnapshot) {
   };
 }
 
+export function isEarlyLaunchCandidate(token: TokenSnapshot) {
+  if (!config.earlyLaunchEnabled) return false;
+
+  const ageSeconds = Math.max(0, (Date.now() - token.createdAt) / 1000);
+  const marketCap = token.marketCapUsd ?? 0;
+  const liquidity = token.liquidityUsd ?? 0;
+  const holders = token.holders ?? 0;
+  const volume1m = token.apiBuy1mUsd !== undefined || token.apiSell1mUsd !== undefined
+    ? (token.apiBuy1mUsd ?? 0) + (token.apiSell1mUsd ?? 0)
+    : 0;
+  const ratio1m = volume1m > 0
+    ? (token.apiBuy1mUsd ?? 0) / Math.max(0.01, token.apiSell1mUsd ?? 0)
+    : 0;
+  const uniqueBuyers = token.apiUniqueBuyers1m ?? 0;
+  const topBuyerShare = token.apiTopBuyerShare1m ?? 1;
+  const trend1m = token.apiTrend1mPct ?? 0;
+
+  return ageSeconds >= config.earlyLaunchMinAgeSeconds &&
+    ageSeconds <= config.earlyLaunchMaxAgeMinutes * 60 &&
+    marketCap >= config.earlyLaunchMinMarketCapUsd &&
+    marketCap <= config.earlyLaunchMaxMarketCapUsd &&
+    liquidity >= config.earlyLaunchMinLiquidityUsd &&
+    holders >= config.earlyLaunchMinHolders &&
+    volume1m >= config.earlyLaunchMinVolume1mUsd &&
+    ratio1m >= config.earlyLaunchMinBuySell1m &&
+    uniqueBuyers >= config.earlyLaunchMinUniqueBuyers1m &&
+    topBuyerShare <= config.earlyLaunchMaxTopBuyerShare1m &&
+    trend1m >= config.earlyLaunchMinTrend1mPct &&
+    trend1m <= config.earlyLaunchMaxTrend1mPct &&
+    token.localScore >= config.earlyLaunchMinScore;
+}
+
+export function earlyLaunchBlockers(token: TokenSnapshot) {
+  const blockers: string[] = [];
+  const ageSeconds = Math.max(0, (Date.now() - token.createdAt) / 1000);
+  const marketCap = token.marketCapUsd ?? 0;
+  const liquidity = token.liquidityUsd ?? 0;
+  const holders = token.holders ?? 0;
+  const buy1 = token.apiBuy1mUsd ?? 0;
+  const sell1 = token.apiSell1mUsd ?? 0;
+  const volume1m = buy1 + sell1;
+  const ratio1m = volume1m > 0 ? buy1 / Math.max(0.01, sell1) : 0;
+  const uniqueBuyers = token.apiUniqueBuyers1m ?? 0;
+  const topBuyerShare = token.apiTopBuyerShare1m ?? 1;
+  const trend1m = token.apiTrend1mPct ?? 0;
+
+  if (ageSeconds < config.earlyLaunchMinAgeSeconds) blockers.push("age " + ageSeconds.toFixed(0) + "s < " + config.earlyLaunchMinAgeSeconds + "s");
+  if (ageSeconds > config.earlyLaunchMaxAgeMinutes * 60) blockers.push("age > " + config.earlyLaunchMaxAgeMinutes + "m");
+  if (marketCap < config.earlyLaunchMinMarketCapUsd) blockers.push("MC $" + Math.round(marketCap) + " < $" + Math.round(config.earlyLaunchMinMarketCapUsd));
+  if (marketCap > config.earlyLaunchMaxMarketCapUsd) blockers.push("MC $" + Math.round(marketCap) + " > $" + Math.round(config.earlyLaunchMaxMarketCapUsd));
+  if (liquidity < config.earlyLaunchMinLiquidityUsd) blockers.push("liq $" + Math.round(liquidity) + " < $" + Math.round(config.earlyLaunchMinLiquidityUsd));
+  if (holders < config.earlyLaunchMinHolders) blockers.push("holders " + holders + " < " + config.earlyLaunchMinHolders);
+  if (volume1m < config.earlyLaunchMinVolume1mUsd) blockers.push("1m volume $" + Math.round(volume1m) + " < $" + Math.round(config.earlyLaunchMinVolume1mUsd));
+  if (ratio1m < config.earlyLaunchMinBuySell1m) blockers.push("1m buy/sell " + ratio1m.toFixed(2) + " < " + config.earlyLaunchMinBuySell1m);
+  if (uniqueBuyers < config.earlyLaunchMinUniqueBuyers1m) blockers.push("unique buyers " + uniqueBuyers + " < " + config.earlyLaunchMinUniqueBuyers1m);
+  if (topBuyerShare > config.earlyLaunchMaxTopBuyerShare1m) blockers.push("top buyer share " + Math.round(topBuyerShare * 100) + "% > " + Math.round(config.earlyLaunchMaxTopBuyerShare1m * 100) + "%");
+  if (trend1m < config.earlyLaunchMinTrend1mPct) blockers.push("1m trend " + trend1m.toFixed(1) + "% < " + config.earlyLaunchMinTrend1mPct + "%");
+  if (trend1m > config.earlyLaunchMaxTrend1mPct) blockers.push("1m trend " + trend1m.toFixed(1) + "% > " + config.earlyLaunchMaxTrend1mPct + "%");
+  if (token.localScore < config.earlyLaunchMinScore) blockers.push("score " + token.localScore + " < " + config.earlyLaunchMinScore);
+  return blockers;
+}
+
 export function isLowCapMomentumCandidate(
   token: TokenSnapshot,
   rules: {

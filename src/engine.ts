@@ -344,6 +344,7 @@ export class TradingEngine {
         token.monUsdPrice = impliedMonUsd || token.monUsdPrice || 0;
         token.liquidityUsd = liquidityUsd || token.liquidityUsd || 0;
         token.volumeMon = volumeMon || token.volumeMon || 0;
+        token.volumeUsd = (token.volumeMon ?? 0) * (token.monUsdPrice ?? impliedMonUsd ?? 0);
         token.holders = holders || token.holders || 0;
         token.marketCapUsd = marketCapUsd || token.marketCapUsd || 0;
         token.marketCapMon = marketCapMon || token.marketCapMon || 0;
@@ -994,14 +995,14 @@ export class TradingEngine {
 
   private async enrichToken(token: TokenSnapshot) {
     const lastEnrichedAt = token.lastEnrichedAt ?? 0;
-    if (Date.now() - lastEnrichedAt < 4000) return;
+    if (Date.now() - lastEnrichedAt < 30000) return;
 
     token.lastEnrichedAt = Date.now();
 
     try {
       const endpoints = [
-        config.nadfunApiUrl + "/agent/market/" + token.token,
-        config.nadfunApiUrl + "/token/metadata/" + token.token
+        config.nadfunApiUrl + "/trade/market/" + token.token,
+        config.nadfunApiUrl + "/agent/market/" + token.token
       ];
 
       let payload: MarketResponse | null = null;
@@ -1021,35 +1022,40 @@ export class TradingEngine {
 
       if (!payload) return;
       token.holders = payload.market_info?.holder_count ?? token.holders;
-      token.priceUsd = numeric(payload.market_info?.price_usd ?? token.priceUsd);
+      token.priceUsd = numeric(
+        payload.market_info?.price_usd ??
+        payload.market_info?.token_price ??
+        token.priceUsd
+      );
       const reserveNative = numeric(payload.market_info?.reserve_native);
       const reserveToken = numeric(payload.market_info?.reserve_token);
       const marketPriceMon = numeric(
         payload.market_info?.price_native ??
+        payload.market_info?.price_quote ??
         payload.market_info?.price_mon ??
         payload.market_info?.price ??
         payload.market_info?.token_price
+      );
+      const quotePriceUsd = numeric(
+        payload.market_info?.quote_price ??
+        payload.market_info?.native_price ??
+        token.monUsdPrice
       );
       token.priceMon = reserveToken > 0 && reserveNative > 0
         ? reserveNative / reserveToken
         : marketPriceMon || token.priceMon;
       token.peakPriceMon = Math.max(token.peakPriceMon, token.priceMon);
-      token.volumeUsd = numeric(payload.market_info?.volume ?? token.volumeUsd);
-      if (reserveNative > 0) token.liquidityMon = reserveNative / 1e18;
 
-      const impliedMonUsd =
-        marketPriceMon > 0 && token.priceUsd > 0
-          ? token.priceUsd / marketPriceMon
-          : token.priceMon > 0 && token.priceUsd > 0
-            ? token.priceUsd / token.priceMon
-            : 0;
-      if (impliedMonUsd > 0) token.monUsdPrice = impliedMonUsd;
+      if (quotePriceUsd > 0) token.monUsdPrice = quotePriceUsd;
+      if (reserveNative > 0) token.liquidityMon = reserveNative / 1e18;
       if ((token.liquidityMon ?? 0) > 0 && (token.monUsdPrice ?? 0) > 0) {
         token.liquidityUsd = token.liquidityMon! * token.monUsdPrice!;
       }
+
       token.volumeMon = Number.isFinite(Number(payload.market_info?.volume))
         ? Number(payload.market_info?.volume) / 1e18
         : token.volumeMon;
+      token.volumeUsd = (token.volumeMon ?? 0) * (token.monUsdPrice ?? 0);
 
       const enrichedMarketCapUsd = numeric(
         payload.market_info?.market_cap_usd ??
@@ -1087,6 +1093,16 @@ export class TradingEngine {
       token.symbol = payload.token_info?.symbol ?? token.symbol;
       token.name = payload.token_info?.name ?? token.name;
       token.creator = payload.token_info?.creator?.account_id ?? token.creator;
+      if (payload.market_info?.market_type) {
+        token.marketType =
+          payload.market_info.market_type === "DEX" ||
+          payload.market_info.market_type === "V2_DEX" ||
+          token.graduated
+            ? "DEX"
+            : "BONDING_CURVE";
+      }
+      const quoteId = payload.market_info?.quote_info?.quote_id;
+      if (quoteId) token.quoteToken = quoteId.toLowerCase();
     } catch {
       // On-chain signals remain authoritative when optional API enrichment fails.
     }

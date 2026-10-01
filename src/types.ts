@@ -63,6 +63,7 @@ export interface TokenSnapshot {
   watchReason?: string;
   lastCandidateAiAt?: number;
   lastEnrichedAt?: number;
+  lastFlowApiAt?: number;
   aiAction?: DecisionAction;
   aiConfidence?: number;
   aiReason?: string;

@@ -65,6 +65,7 @@ interface Env {
   TREND_MAX_1H_PCT?: string;
   DISCOVERY_LIMIT?: string;
   AI_CANDIDATE_LIMIT?: string;
+  AI_CANDIDATE_COOLDOWN_MS?: string;
   DISCOVERY_POLL_MS?: string;
   PRICE_SAMPLE_MS?: string;
   NADFUN_API_URL?: string;
@@ -83,6 +84,7 @@ interface Env {
   DAILY_MEAN_EXIT_PCT?: string;
   DAILY_MIN_SAMPLES?: string;
   FAST_CYCLE_MS?: string;
+  PENDING_EXECUTION_TIMEOUT_MS?: string;
   LOW_CAP_MOMENTUM_ENABLED?: string;
   LOW_CAP_MIN_MARKET_CAP_USD?: string;
   LOW_CAP_MAX_MARKET_CAP_USD?: string;
@@ -205,6 +207,7 @@ function hydrateProcessEnv(env: Env) {
     TREND_MAX_1H_PCT: env.TREND_MAX_1H_PCT,
     DISCOVERY_LIMIT: env.DISCOVERY_LIMIT,
     AI_CANDIDATE_LIMIT: env.AI_CANDIDATE_LIMIT,
+    AI_CANDIDATE_COOLDOWN_MS: env.AI_CANDIDATE_COOLDOWN_MS,
     DISCOVERY_POLL_MS: env.DISCOVERY_POLL_MS,
     PRICE_SAMPLE_MS: env.PRICE_SAMPLE_MS,
     EVENT_POLL_MS: env.EVENT_POLL_MS,
@@ -222,6 +225,7 @@ function hydrateProcessEnv(env: Env) {
     DAILY_MEAN_EXIT_PCT: env.DAILY_MEAN_EXIT_PCT,
     DAILY_MIN_SAMPLES: env.DAILY_MIN_SAMPLES,
     FAST_CYCLE_MS: env.FAST_CYCLE_MS,
+    PENDING_EXECUTION_TIMEOUT_MS: env.PENDING_EXECUTION_TIMEOUT_MS,
     LOW_CAP_MOMENTUM_ENABLED: env.LOW_CAP_MOMENTUM_ENABLED,
     LOW_CAP_MIN_MARKET_CAP_USD: env.LOW_CAP_MIN_MARKET_CAP_USD,
     LOW_CAP_MAX_MARKET_CAP_USD: env.LOW_CAP_MAX_MARKET_CAP_USD,
@@ -310,6 +314,35 @@ export class GeldBot extends DurableObject<Env> {
     return this.engine;
   }
 
+  private async runRiskCycle() {
+    if (this.cycleInFlight) return;
+    this.cycleInFlight = true;
+    try {
+      const engine = await this.getEngine();
+      if (engine.snapshot().running) await engine.runRiskCycle();
+    } finally {
+      this.cycleInFlight = false;
+      if (this.engine?.snapshot()?.running) {
+        await this.ctx.storage.setAlarm(Date.now() + (await getRuntimeConfig(this.env)).fastCycleMs);
+      }
+    }
+  }
+
+  private async runFullCycle() {
+    if (this.cycleInFlight) return;
+    this.cycleInFlight = true;
+    try {
+      const engine = await this.getEngine();
+      if (engine.snapshot().running) await engine.runScheduledCycle();
+    } finally {
+      this.cycleInFlight = false;
+    }
+  }
+
+  async alarm() {
+    await this.runRiskCycle();
+  }
+
   async fetch(request: Request) {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -330,7 +363,7 @@ export class GeldBot extends DurableObject<Env> {
         await engine.startScheduled();
         await this.ctx.storage.setAlarm(Date.now() + (await getRuntimeConfig(this.env)).fastCycleMs);
       } else {
-        await this.runFastCycle();
+        await this.runFullCycle();
       }
 
       return Response.json(engine.snapshot());

@@ -5,6 +5,9 @@ export interface TokenSnapshot {
   symbol: string;
   name: string;
   creator: string;
+  creatorPriorLaunches?: number;
+  creatorPriorGraduations?: number;
+  creatorPriorRugLikeClosures?: number;
   pair: string;
   pairToken0?: string;
   pairToken1?: string;

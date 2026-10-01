@@ -20,7 +20,7 @@ import {
 } from "./nadfun.js";
 import { StateStore } from "./store.js";
 import { GeminiBrain } from "./ai.js";
-import { SeasonalityModel, entryGateDiagnostics, positionExitSignal, scoreToken, selectEntryStrategy, shouldClose, shouldOpen, shouldWatch, updateMarketMetrics, curveProgressPct, isLowCapMomentumCandidate, entrySizeVolatilityFactor, type EntryGateRules, type PositionExitRules } from "./strategy.js";
+import { SeasonalityModel, entryGateDiagnostics, positionExitSignal, scoreToken, selectEntryStrategy, shouldClose, shouldOpen, shouldWatch, updateMarketMetrics, curveProgressPct, isLowCapMomentumCandidate, lowCapMomentumBlockers, entrySizeVolatilityFactor, type EntryGateRules, type PositionExitRules } from "./strategy.js";
 import type { BotState, Position, TokenSnapshot } from "./types.js";
 import { formatUnits } from "viem";
 
@@ -523,20 +523,37 @@ export class TradingEngine {
           candidates.push(token);
           eligible += 1;
           token.watchReason = "ENTRY SETUP: low-cap momentum; awaiting AI";
+        } else if (!lowCapMomentum) {
+          const blockers = lowCapMomentumBlockers(token, {
+            enabled: config.lowCapMomentumEnabled,
+            minMarketCapUsd: config.lowCapMinMarketCapUsd,
+            maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
+            minLiquidityUsd: config.lowCapMinLiquidityUsd,
+            minHolders: config.lowCapMinHolders,
+            minVolumeUsd: config.lowCapMinVolumeUsd,
+            minAgeMinutes: config.lowCapMinAgeMinutes,
+            minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
+            minVolume5mUsd: config.lowCapMinVolume5mUsd,
+            minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
+            minTrend1hPct: config.lowCapMinTrend1hPct,
+            minLocalScore: config.lowCapMinScore
+          });
+          token.watchReason = blockers.length
+            ? "LOW-CAP BLOCKED: " + blockers.slice(0, 2).join("; ")
+            : "LOW-CAP BLOCKED";
         }
         this.store.upsertToken(token);
       }
 
-      candidates
+      for (const token of candidates
         .sort((a, b) =>
           (b.localScore - a.localScore) ||
           ((b.liquidityMon ?? 0) - (a.liquidityMon ?? 0)) ||
           ((b.volumeMon ?? 0) - (a.volumeMon ?? 0))
         )
-        .slice(0, config.aiCandidateLimit)
-        .forEach((token) => {
-          void this.maybeEvaluateCandidate(token);
-        });
+        .slice(0, config.aiCandidateLimit)) {
+        await this.maybeEvaluateCandidate(token);
+      }
 
       this.store.update((s) => {
         s.stats.lastDiscoveryAt = Date.now();
@@ -1024,10 +1041,13 @@ export class TradingEngine {
         }
       }
 
+      let apiTrend5mPct: number | undefined;
       let apiTrend15mPct: number | undefined;
       let apiTrend1hPct: number | undefined;
       let metrics5mBuyUsd: number | undefined;
       let metrics5mSellUsd: number | undefined;
+      let metrics5mBuyTx: number | undefined;
+      let metrics5mSellTx: number | undefined;
       if (metricsResponse.ok) {
         const payload = decodeNadfunPayload(await metricsResponse.text());
         const metrics = Array.isArray(payload?.metrics) ? payload.metrics : [];
@@ -1037,6 +1057,7 @@ export class TradingEngine {
         const metric60 = byTimeframe.get("60");
         const metric5 = byTimeframe.get("5");
 
+        apiTrend5mPct = Number(metric5?.percent);
         apiTrend15mPct = Number(metric15?.percent);
         apiTrend1hPct = Number(metric60?.percent);
 
@@ -1045,6 +1066,8 @@ export class TradingEngine {
         if (Number.isFinite(apiBuy5) && Number.isFinite(apiSell5)) {
           metrics5mBuyUsd = apiBuy5;
           metrics5mSellUsd = apiSell5;
+          metrics5mBuyTx = numeric(metric5?.transactions?.buy);
+          metrics5mSellTx = numeric(metric5?.transactions?.sell);
 
           // The metrics endpoint is authoritative for the current 5m window.
           buy5Usd = apiBuy5;
@@ -1079,6 +1102,8 @@ export class TradingEngine {
       }
       if (metrics5mBuyUsd !== undefined) token.apiBuy5mUsd = metrics5mBuyUsd;
       if (metrics5mSellUsd !== undefined) token.apiSell5mUsd = metrics5mSellUsd;
+      if (metrics5mBuyTx !== undefined) token.apiBuyTx5m = metrics5mBuyTx;
+      if (metrics5mSellTx !== undefined) token.apiSellTx5m = metrics5mSellTx;
       token.apiVolume5mUsd = volume5mUsd;
 
       token.lastFlowApiAt = now;

@@ -71,6 +71,9 @@ export interface TokenSnapshot {
   lastCandidateAiAt?: number;
   lastEnrichedAt?: number;
   lastFlowApiAt?: number;
+  lastBuyAttemptAt?: number;
+  lastBuyTx?: string;
+  buyBlockedUntil?: number;
   apiTrend1mPct?: number;
   apiTrend5mPct?: number;
   apiTrend15mPct?: number;

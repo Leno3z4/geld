@@ -201,19 +201,40 @@ export class TradingEngine {
         config.discoveryLimit +
         "&is_nsfw=false";
 
-      const response = await fetch(url, {
-        headers: {
-          accept: "application/json",
-          ...(config.nadfunApiKey ? { "X-API-Key": config.nadfunApiKey } : {})
-        }
-      });
+      const headers = {
+        accept: "application/json",
+        ...(config.nadfunApiKey ? { "X-API-Key": config.nadfunApiKey } : {})
+      };
 
-      if (!response.ok) {
-        throw new Error("NadFun discovery failed: HTTP " + response.status);
-      }
+      const response = await fetch(url, { headers });
+      if (!response.ok) throw new Error("NadFun market-cap discovery failed: HTTP " + response.status);
 
       const payload = decodeNadfunPayload(await response.text());
-      const rows = Array.isArray(payload?.tokens) ? payload.tokens : [];
+      const marketRows = Array.isArray(payload?.tokens) ? payload.tokens : [];
+
+      // Market-cap alone misses the $8k-$25k lane because it is dominated by
+      // higher-cap tokens. Pull newest tokens separately and merge the full
+      // market objects so low-cap momentum candidates enter the same pipeline.
+      let newestRows: any[] = [];
+      if (config.lowCapMomentumEnabled) {
+        const newestUrl =
+          config.nadfunApiUrl +
+          "/order/creation_time?page=1&limit=50&is_nsfw=false&direction=DESC";
+        try {
+          const newestResponse = await fetch(newestUrl, { headers });
+          if (newestResponse.ok) {
+            const newestPayload = decodeNadfunPayload(await newestResponse.text());
+            newestRows = Array.isArray(newestPayload?.tokens) ? newestPayload.tokens : [];
+          }
+        } catch {}
+      }
+
+      const byToken = new Map<string, any>();
+      for (const row of [...marketRows, ...newestRows]) {
+        const address = String(row?.token_info?.token_id ?? row?.token_info?.token ?? row?.address ?? "").toLowerCase();
+        if (/^0x[0-9a-f]{40}$/.test(address)) byToken.set(address, row);
+      }
+      const rows = [...byToken.values()];
 
       let watched = 0;
       let eligible = 0;
@@ -353,6 +374,21 @@ export class TradingEngine {
         token.localScore = scoreToken(token, this.seasonality);
         token.entryStrategy = selectEntryStrategy(token, config.dailyMinSamples, config.minVolume5mUsd);
 
+        const lowCapMomentum = isLowCapMomentumCandidate(token, {
+          enabled: config.lowCapMomentumEnabled,
+          minMarketCapUsd: config.lowCapMinMarketCapUsd,
+          maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
+          minLiquidityUsd: config.lowCapMinLiquidityUsd,
+          minHolders: config.lowCapMinHolders,
+          minVolumeUsd: config.lowCapMinVolumeUsd,
+          minAgeMinutes: config.lowCapMinAgeMinutes,
+          minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
+          minVolume5mUsd: config.lowCapMinVolume5mUsd,
+          minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
+          minTrend1hPct: config.lowCapMinTrend1hPct,
+          minLocalScore: config.lowCapMinScore
+        });
+
         const watchable = shouldWatch(
           token,
           config.minLiquidityUsd,
@@ -377,20 +413,24 @@ export class TradingEngine {
         const diagnostics = entryGateDiagnostics(token, entryRules);
         token.entryDiagnostics = diagnostics;
 
-        if (!watchable) {
+        if (lowCapMomentum) {
+          token.watchReason = "ENTRY SETUP: low-cap momentum; awaiting AI";
+          eligible += 1;
+          watched += 1;
+        } else if (!watchable) {
           token.watchReason = `Watching: ${diagnostics.primary}`;
         } else if (diagnostics.blockers.length > 0) {
           token.watchReason = `Watching: ${diagnostics.primary}`;
+          watched += 1;
         } else {
           token.watchReason = "ENTRY SETUP: established candidate; awaiting AI";
           eligible += 1;
+          watched += 1;
         }
-
-        if (watchable) watched += 1;
 
         this.store.upsertToken(token);
 
-        const entrySetup = diagnostics.blockers.length === 0;
+        const entrySetup = lowCapMomentum || diagnostics.blockers.length === 0;
         if (entrySetup) candidates.push(token);
       }
 

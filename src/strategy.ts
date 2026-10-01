@@ -1,3 +1,4 @@
+import { config } from "./config.js";
 import type { EntryGateDiagnostics, Position, TokenSnapshot } from "./types.js";
 
 export function clamp(v: number, min: number, max: number) {
@@ -270,6 +271,18 @@ export function selectEntryStrategy(token: TokenSnapshot, minDailySamples = 24, 
 
 function flowMetrics(token: TokenSnapshot) {
   const now = Date.now();
+  const flowApiFresh =
+    token.lastFlowApiAt !== undefined &&
+    now - token.lastFlowApiAt < config.flowApiRefreshMs * 2;
+  if (flowApiFresh) {
+    return {
+      buySellRatio5m: token.buySellRatio5m ?? 0,
+      volume5mMon: token.volume5mMon ?? 0,
+      volumePrev5mMon: token.volumePrev5mMon ?? 0,
+      volumeAcceleration5m: token.volumeAcceleration5m ?? 0
+    };
+  }
+
   const history = (token.flowHistory ?? [])
     .filter((x) => x.ts > now - 10 * 60 * 1000)
     .sort((x, y) => x.ts - y.ts);
@@ -322,10 +335,15 @@ export function updateMarketMetrics(token: TokenSnapshot) {
   token.distanceFromDayLowPct = metrics.distanceFromDayLowPct;
   token.distanceFromDayAvgPct = metrics.distanceFromDayAvgPct;
   token.distanceFromDayHighPct = metrics.distanceFromDayHighPct;
-  token.buySellRatio5m = flow.buySellRatio5m;
-  token.volume5mMon = flow.volume5mMon;
-  token.volumePrev5mMon = flow.volumePrev5mMon;
-  token.volumeAcceleration5m = flow.volumeAcceleration5m;
+  const flowApiFresh =
+    token.lastFlowApiAt !== undefined &&
+    Date.now() - token.lastFlowApiAt < config.flowApiRefreshMs * 2;
+  if (!flowApiFresh) {
+    token.buySellRatio5m = flow.buySellRatio5m;
+    token.volume5mMon = flow.volume5mMon;
+    token.volumePrev5mMon = flow.volumePrev5mMon;
+    token.volumeAcceleration5m = flow.volumeAcceleration5m;
+  }
   token.peakPriceMon = Math.max(token.peakPriceMon, metrics.peak4h || 0);
   return { ...metrics, ...flow };
 }

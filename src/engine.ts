@@ -80,19 +80,33 @@ interface MarketResponse {
     price_native?: string;
     price_mon?: string;
     price?: string;
+    price_quote?: string;
     price_usd?: string;
     token_price?: string;
     reserve_native?: string;
+    reserve_quote?: string;
     reserve_token?: string;
     volume?: string;
     market_cap_usd?: string | number;
     marketCapUsd?: string | number;
     ath_price?: string;
+    ath_price_usd?: string;
     market_type?: string;
+    market_id?: string;
     pair?: string;
     pair_address?: string;
+    quote_price?: string;
+    native_price?: string;
+    quote_info?: { quote_id?: string; symbol?: string; decimals?: number };
     is_locked?: boolean;
   };
+  metrics?: Array<{
+    timeframe?: string;
+    percent?: number;
+    transactions?: { buy?: number; sell?: number; total?: number };
+    volume?: { buy?: string; sell?: string; total?: string };
+    makers?: { buy?: number; sell?: number; total?: number };
+  }>;
   token_info?: {
     name?: string;
     symbol?: string;
@@ -239,6 +253,7 @@ export class TradingEngine {
       let watched = 0;
       let eligible = 0;
       const candidates: TokenSnapshot[] = [];
+      const lowCapSeeds: TokenSnapshot[] = [];
 
       for (const row of rows) {
         const info = row?.token_info ?? {};
@@ -374,20 +389,18 @@ export class TradingEngine {
         token.localScore = scoreToken(token, this.seasonality);
         token.entryStrategy = selectEntryStrategy(token, config.dailyMinSamples, config.minVolume5mUsd);
 
-        const lowCapMomentum = isLowCapMomentumCandidate(token, {
-          enabled: config.lowCapMomentumEnabled,
-          minMarketCapUsd: config.lowCapMinMarketCapUsd,
-          maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
-          minLiquidityUsd: config.lowCapMinLiquidityUsd,
-          minHolders: config.lowCapMinHolders,
-          minVolumeUsd: config.lowCapMinVolumeUsd,
-          minAgeMinutes: config.lowCapMinAgeMinutes,
-          minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
-          minVolume5mUsd: config.lowCapMinVolume5mUsd,
-          minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
-          minTrend1hPct: config.lowCapMinTrend1hPct,
-          minLocalScore: config.lowCapMinScore
-        });
+        const ageMinutesForLowCap = Math.max(0, (Date.now() - token.createdAt) / 60000);
+        const lowCapBaseCandidate =
+          config.lowCapMomentumEnabled &&
+          token.marketCapUsd !== undefined &&
+          token.marketCapUsd >= config.lowCapMinMarketCapUsd &&
+          token.marketCapUsd <= config.lowCapMaxMarketCapUsd &&
+          (token.liquidityUsd ?? 0) >= config.lowCapMinLiquidityUsd &&
+          (token.holders ?? 0) >= config.lowCapMinHolders &&
+          (token.volumeUsd ?? 0) >= config.lowCapMinVolumeUsd &&
+          ageMinutesForLowCap >= config.lowCapMinAgeMinutes &&
+          (token.trendPct1h ?? token.changePct ?? 0) >= config.lowCapMinTrend1hPct &&
+          token.localScore >= config.lowCapMinScore;
 
         const watchable = shouldWatch(
           token,
@@ -413,9 +426,9 @@ export class TradingEngine {
         const diagnostics = entryGateDiagnostics(token, entryRules);
         token.entryDiagnostics = diagnostics;
 
-        if (lowCapMomentum) {
-          token.watchReason = "ENTRY SETUP: low-cap momentum; awaiting AI";
-          eligible += 1;
+        if (lowCapBaseCandidate) {
+          token.watchReason = "Watching: low-cap flow metrics pending";
+          lowCapSeeds.push(token);
           watched += 1;
         } else if (!watchable) {
           token.watchReason = `Watching: ${diagnostics.primary}`;
@@ -430,20 +443,50 @@ export class TradingEngine {
 
         this.store.upsertToken(token);
 
-        const entrySetup = lowCapMomentum || diagnostics.blockers.length === 0;
+        const entrySetup = lowCapBaseCandidate || diagnostics.blockers.length === 0;
         if (entrySetup) candidates.push(token);
+        token.lastEnrichedAt = Date.now();
       }
 
       await this.resolveDexPairs(
         Object.values(this.store.get().tokens).filter((token) => token.graduated)
       );
 
-      candidates
+      // Pull precise 5-minute USD flow for only the strongest low-cap seeds.
+      // Nad.fun's documented swap-history values are USD-denominated, which
+      // lets us compute both the current and previous 5m windows exactly.
+      for (const token of lowCapSeeds
         .sort((a, b) =>
           (b.localScore - a.localScore) ||
-          ((b.liquidityMon ?? 0) - (a.liquidityMon ?? 0)) ||
-          ((b.volumeMon ?? 0) - (a.volumeMon ?? 0))
+          ((b.volumeUsd ?? 0) - (a.volumeUsd ?? 0)) ||
+          ((b.liquidityUsd ?? 0) - (a.liquidityUsd ?? 0))
         )
+        .slice(0, config.lowCapFlowApiCandidateLimit)) {
+        await this.enrichFlowMetrics(token);
+        const lowCapMomentum = isLowCapMomentumCandidate(token, {
+          enabled: config.lowCapMomentumEnabled,
+          minMarketCapUsd: config.lowCapMinMarketCapUsd,
+          maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
+          minLiquidityUsd: config.lowCapMinLiquidityUsd,
+          minHolders: config.lowCapMinHolders,
+          minVolumeUsd: config.lowCapMinVolumeUsd,
+          minAgeMinutes: config.lowCapMinAgeMinutes,
+          minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
+          minVolume5mUsd: config.lowCapMinVolume5mUsd,
+          minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
+          minTrend1hPct: config.lowCapMinTrend1hPct,
+          minLocalScore: config.lowCapMinScore
+        });
+        if (lowCapMomentum && !candidates.includes(token)) {
+          candidates.push(token);
+          eligible += 1;
+          token.watchReason = "ENTRY SETUP: low-cap momentum; awaiting AI";
+        }
+        this.store.upsertToken(token);
+      }
+
+      candidates
+        .sort((a, b) =>
         .slice(0, config.aiCandidateLimit)
         .forEach((token) => {
           void this.maybeEvaluateCandidate(token);
@@ -875,6 +918,73 @@ export class TradingEngine {
       this.store.update((s) => {
         s.stats.lastError = error instanceof Error ? error.message : String(error);
       });
+    }
+  }
+
+  private async enrichFlowMetrics(token: TokenSnapshot) {
+    const now = Date.now();
+    if (now - (token.lastFlowApiAt ?? 0) < config.flowApiRefreshMs) return;
+
+    try {
+      const response = await fetch(
+        config.nadfunApiUrl + "/trade/swap-history/" + token.token + "?page=1&limit=100&direction=DESC",
+        {
+          headers: {
+            accept: "application/json",
+            ...(config.nadfunApiKey ? { "X-API-Key": config.nadfunApiKey } : {})
+          }
+        }
+      );
+      if (!response.ok) throw new Error("NadFun swap-history failed: HTTP " + response.status);
+
+      const payload = decodeNadfunPayload(await response.text());
+      const swaps = Array.isArray(payload?.swaps) ? payload.swaps : [];
+      const fiveAgo = now - 5 * 60 * 1000;
+      const tenAgo = now - 10 * 60 * 1000;
+
+      let buy5Usd = 0;
+      let sell5Usd = 0;
+      let buyPrev5Usd = 0;
+      let sellPrev5Usd = 0;
+
+      for (const swap of swaps) {
+        const info = swap?.swap_info ?? {};
+        const ts = createdAtMs(info.created_at);
+        const valueUsd = numeric(info.value);
+        if (!(ts > tenAgo) || !(valueUsd > 0)) continue;
+
+        if (ts > fiveAgo) {
+          if (String(info.event_type).toUpperCase() === "BUY") buy5Usd += valueUsd;
+          else if (String(info.event_type).toUpperCase() === "SELL") sell5Usd += valueUsd;
+        } else {
+          if (String(info.event_type).toUpperCase() === "BUY") buyPrev5Usd += valueUsd;
+          else if (String(info.event_type).toUpperCase() === "SELL") sellPrev5Usd += valueUsd;
+        }
+      }
+
+      const volume5mUsd = buy5Usd + sell5Usd;
+      const volumePrev5mUsd = buyPrev5Usd + sellPrev5Usd;
+      const quoteUsd = token.monUsdPrice ?? 0;
+
+      if (volume5mUsd > 0 && quoteUsd > 0) {
+        token.volume5mMon = volume5mUsd / quoteUsd;
+        token.volumePrev5mMon = volumePrev5mUsd / quoteUsd;
+      } else if (volume5mUsd === 0) {
+        token.volume5mMon = 0;
+        token.volumePrev5mMon = volumePrev5mUsd > 0 && quoteUsd > 0 ? volumePrev5mUsd / quoteUsd : 0;
+      }
+
+      token.buySellRatio5m = volume5mUsd > 0
+        ? buy5Usd / Math.max(0.01, sell5Usd)
+        : 0;
+      token.volumeAcceleration5m = volumePrev5mUsd > 0
+        ? volume5mUsd / volumePrev5mUsd
+        : volume5mUsd > 0 ? 2 : 0;
+      token.lastFlowApiAt = now;
+      updateMarketMetrics(token);
+      token.localScore = scoreToken(token, this.seasonality);
+    } catch {
+      // Preserve the on-chain flow fallback when the API is unavailable.
     }
   }
 

@@ -143,17 +143,21 @@ The current high-aggression defaults are:
 - 10-minute minimum token age
 - 10 minimum holders
 - 25 MON minimum tracked volume
-- 3-50% pullback entry band, plus controlled positive-momentum entries
+- multi-strategy entries: daily mean reversion, dip-reversion, momentum, flow and hybrid setups
+- rolling 24h daily high/low/average is one signal, not a mandatory entry rule
+- 3-50% pullback entry band plus controlled positive-momentum and flow entries
 - 24% of current free balance per planned trade
 - 90% max portfolio exposure
 - up to 5 open positions
 - 0.45 minimum AI confidence
 - 6% quote slippage
 - 22% hard stop
-- 70% take profit
-- 15% trailing stop
-- 180-minute maximum hold
-- market discovery every minute; 1-minute local price sampling
+- 3% / 30% / 50% staged profit-taking, with a full exit on the third tier
+- daily mean-reversion exits for qualifying mean-reversion positions
+- stale-loss and dead-money exits so positions do not sit indefinitely
+- dust sweeps for tiny residual positions
+- 180-minute absolute maximum hold
+- market discovery every minute; rolling daily price samples every 5 minutes
 
 These settings are intentionally aggressive. AI is advisory for strong setups, and a deterministic fallback can enter qualified setups during Gemini outages/rate limits. Trading can lose capital quickly; there is no guaranteed profit.
 

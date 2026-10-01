@@ -29,6 +29,7 @@ export const config = {
   positionSizePct: num("POSITION_SIZE_PCT", 24),
   maxTotalExposurePct: num("MAX_TOTAL_EXPOSURE_PCT", 90),
   maxOpenPositions: Math.max(1, Math.floor(num("MAX_OPEN_POSITIONS", 5))),
+  pendingExecutionTimeoutMs: Math.max(60_000, num("PENDING_EXECUTION_TIMEOUT_MS", 15 * 60 * 1000)),
   gasReserveMon: num("GAS_RESERVE_MON", 0.75),
   minLocalScore: num("MIN_LOCAL_SCORE", 35),
   aiMinConfidence: num("AI_MIN_CONFIDENCE", 0.45),

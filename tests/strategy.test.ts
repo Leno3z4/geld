@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { SeasonalityModel, entryGateDiagnostics, positionExitSignal, scoreToken, shouldClose } from "../src/strategy.js";
+import { SeasonalityModel, entryGateDiagnostics, positionExitSignal, scoreToken, selectEntryStrategy, shouldClose } from "../src/strategy.js";
 
 test("seasonality is neutral until a bucket has enough observations", () => {
   const m = new SeasonalityModel();
@@ -79,12 +79,21 @@ test("profit protection exits a winner before it round-trips", () => {
     buys: 20, sells: 10, buyMon: 200, sellMon: 100,
     progressPct: 100, graduated: true, locked: false,
     holders: 200, volumeUsd: 0, priceUsd: 0, priceMon: 1,
-    peakPriceMon: 1, localScore: 80, liquidityUsd: 150000,
+    peakPriceMon: 1, localScore: 80,
+    liquidityUsd: 150000,
+    dayLowPriceMon: 1,
+    dayAvgPriceMon: 1.05,
+    daySamples: 30,
+    distanceFromDayLowPct: 1,
+    distanceFromDayAvgPct: -4,
     trendPct1h: 1, reboundPct1h: 1, dipPct: 12,
     buySellRatio5m: 1.2, volume5mMon: 100, volumeAcceleration5m: 1.1
   };
   const signal = positionExitSignal(position, token, {
-    hardStopPct: 18, takeProfitPct: 70, trailingPct: 12, maxHoldMinutes: 180,
+    hardStopPct: 22, takeProfitPct: 55, trailingPct: 15, maxHoldMinutes: 180,
+    staleLossExitMinutes: 45, staleLossExitPct: -4,
+    deadMoneyExitMinutes: 90, deadMoneyMaxPnlPct: 3,
+    dustPositionMon: 0.05, dailyMeanExitPct: 1.5, dailyMinSamples: 24,
     minLiquidityUsd: 100000, liquidityExitRatio: 0.65,
     earlyExitLossPct: -10, earlyExitTrend1hPct: -8,
     momentumExitProfitPct: 8, momentumExitTrend1hPct: -10, momentumExitReboundPct: 2,
@@ -118,7 +127,10 @@ test("early exit cuts a deteriorating loser before the hard stop", () => {
     buySellRatio5m: 0.6, volume5mMon: 100, volumeAcceleration5m: 1.4
   };
   const signal = positionExitSignal(position, token, {
-    hardStopPct: 18, takeProfitPct: 70, trailingPct: 12, maxHoldMinutes: 180,
+    hardStopPct: 22, takeProfitPct: 55, trailingPct: 15, maxHoldMinutes: 180,
+    staleLossExitMinutes: 45, staleLossExitPct: -4,
+    deadMoneyExitMinutes: 90, deadMoneyMaxPnlPct: 3,
+    dustPositionMon: 0.05, dailyMeanExitPct: 1.5, dailyMinSamples: 24,
     minLiquidityUsd: 100000, liquidityExitRatio: 0.65,
     earlyExitLossPct: -10, earlyExitTrend1hPct: -8,
     momentumExitProfitPct: 8, momentumExitTrend1hPct: -10, momentumExitReboundPct: 2,
@@ -193,7 +205,10 @@ test("small profitable moves trigger the first profit take", () => {
     entryTx: "PAPER", status: "OPEN" as const
   };
   const signal = positionExitSignal(position, undefined, {
-    hardStopPct: 18, takeProfitPct: 70, trailingPct: 12, maxHoldMinutes: 180,
+    hardStopPct: 22, takeProfitPct: 55, trailingPct: 15, maxHoldMinutes: 180,
+    staleLossExitMinutes: 45, staleLossExitPct: -4,
+    deadMoneyExitMinutes: 90, deadMoneyMaxPnlPct: 3,
+    dustPositionMon: 0.05, dailyMeanExitPct: 1.5, dailyMinSamples: 24,
     minLiquidityUsd: 5000, liquidityExitRatio: 0.65,
     earlyExitLossPct: -10, earlyExitTrend1hPct: -8,
     momentumExitProfitPct: 8, momentumExitTrend1hPct: -10, momentumExitReboundPct: 2,
@@ -207,4 +222,95 @@ test("small profitable moves trigger the first profit take", () => {
   assert.equal(signal?.reason, "PROFIT_TAKE_1");
   assert.equal(signal?.kind, "PARTIAL");
   assert.equal(signal?.sellPct, 25);
+});
+
+
+test("daily mean reversion is one distinct entry strategy", () => {
+  const token = {
+    token: "0x" + "c".repeat(40), symbol: "MEAN", name: "Mean",
+    creator: "", pair: "", createdAt: Date.now() - 10 * 60 * 60 * 1000, lastEventAt: Date.now(),
+    buys: 100, sells: 90, buyMon: 300, sellMon: 250,
+    progressPct: 100, graduated: true, locked: false, holders: 500,
+    volumeUsd: 0, priceUsd: 1, priceMon: 1, peakPriceMon: 1.2, localScore: 80,
+    liquidityUsd: 50000, marketCapUsd: 500000, volumeMon: 1000,
+    daySamples: 60, dayLowPriceMon: 0.98, dayAvgPriceMon: 1.12,
+    distanceFromDayLowPct: 2.04, distanceFromDayAvgPct: -10.71,
+    dipPct: 15, trendPct1h: -1, trendPct4h: 2,
+    buySellRatio5m: 1.1, volume5mMon: 20, volumeAcceleration5m: 1.2
+  };
+  assert.equal(selectEntryStrategy(token), "DAILY_MEAN_REVERSION");
+});
+
+test("daily mean reversion exits when price returns to the rolling daily average", () => {
+  const now = Date.now();
+  const position = {
+    id: "mean-exit", token: "0x" + "d".repeat(40), symbol: "MEANEXIT",
+    amountRaw: "100", decimals: 18, entryMon: 10, entryPriceMon: 1,
+    currentMon: 10.2, pnlMon: 0.2, pnlPct: 2, peakMon: 10.2, peakPnlPct: 3,
+    openedAt: now - 25 * 60000, lastAiAt: 0, entryTx: "PAPER",
+    status: "OPEN" as const, strategy: "DAILY_MEAN_REVERSION" as const
+  };
+  const token = {
+    token: position.token, symbol: "MEANEXIT", name: "Mean Exit",
+    creator: "", pair: "", createdAt: now - 8 * 60 * 60 * 1000, lastEventAt: now,
+    buys: 20, sells: 10, buyMon: 100, sellMon: 50,
+    progressPct: 100, graduated: true, locked: false, holders: 300,
+    volumeUsd: 0, priceUsd: 0, priceMon: 1, peakPriceMon: 1.1, localScore: 85,
+    liquidityUsd: 50000, marketCapUsd: 500000, volumeMon: 500,
+    trendPct1h: 1, trendPct4h: 2,
+    daySamples: 40, dayLowPriceMon: 0.95, dayAvgPriceMon: 1,
+    distanceFromDayLowPct: 7, distanceFromDayAvgPct: 0,
+    dipPct: 8, reboundPct1h: 2, buySellRatio5m: 1.1, volume5mMon: 50
+  };
+  const signal = positionExitSignal(position, token, {
+    hardStopPct: 22, takeProfitPct: 55, trailingPct: 15, maxHoldMinutes: 180,
+    staleLossExitMinutes: 45, staleLossExitPct: -4,
+    deadMoneyExitMinutes: 90, deadMoneyMaxPnlPct: 3,
+    dustPositionMon: 0.05, dailyMeanExitPct: 1.5, dailyMinSamples: 24,
+    minLiquidityUsd: 5000, liquidityExitRatio: 0.65,
+    earlyExitLossPct: -10, earlyExitTrend1hPct: -8,
+    momentumExitProfitPct: 8, momentumExitTrend1hPct: -10, momentumExitReboundPct: 2,
+    sellPressureExitRatio: 0.65, sellPressureMinVolumeMon: 20,
+    profitTake1Pct: 3, profitTake1SellPct: 40,
+    profitTake2Pct: 30, profitTake2SellPct: 35,
+    profitTake3Pct: 50, profitTake3SellPct: 100,
+    profitProtectionStartPct: 12, profitProtectionFloorPct: 5,
+    profitProtectionRatio: 0.40
+  });
+  assert.equal(signal?.reason, "DAILY_MEAN_REVERSION_EXIT");
+});
+
+test("stale losing positions are fully exited", () => {
+  const now = Date.now();
+  const position = {
+    id: "stale", token: "0x" + "e".repeat(40), symbol: "STALE",
+    amountRaw: "100", decimals: 18, entryMon: 10, entryPriceMon: 1,
+    currentMon: 9.5, pnlMon: -0.5, pnlPct: -5, peakMon: 10, peakPnlPct: 0,
+    openedAt: now - 60 * 60000, lastAiAt: 0, entryTx: "PAPER",
+    status: "OPEN" as const
+  };
+  const token = {
+    token: position.token, symbol: "STALE", name: "Stale",
+    creator: "", pair: "", createdAt: now - 6 * 60 * 60 * 1000, lastEventAt: now,
+    buys: 20, sells: 20, buyMon: 100, sellMon: 100,
+    progressPct: 100, graduated: true, locked: false, holders: 200,
+    volumeUsd: 0, priceUsd: 0, priceMon: 1, peakPriceMon: 1.1, localScore: 60,
+    liquidityUsd: 50000, trendPct1h: -1, trendPct4h: -2, dipPct: 10
+  };
+  const signal = positionExitSignal(position, token, {
+    hardStopPct: 22, takeProfitPct: 55, trailingPct: 15, maxHoldMinutes: 180,
+    staleLossExitMinutes: 45, staleLossExitPct: -4,
+    deadMoneyExitMinutes: 90, deadMoneyMaxPnlPct: 3,
+    dustPositionMon: 0.05, dailyMeanExitPct: 1.5, dailyMinSamples: 24,
+    minLiquidityUsd: 5000, liquidityExitRatio: 0.65,
+    earlyExitLossPct: -10, earlyExitTrend1hPct: -8,
+    momentumExitProfitPct: 8, momentumExitTrend1hPct: -10, momentumExitReboundPct: 2,
+    sellPressureExitRatio: 0.65, sellPressureMinVolumeMon: 20,
+    profitTake1Pct: 3, profitTake1SellPct: 40,
+    profitTake2Pct: 30, profitTake2SellPct: 35,
+    profitTake3Pct: 50, profitTake3SellPct: 100,
+    profitProtectionStartPct: 12, profitProtectionFloorPct: 5,
+    profitProtectionRatio: 0.40
+  });
+  assert.equal(signal?.reason, "STALE_LOSS_EXIT");
 });

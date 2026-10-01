@@ -1047,9 +1047,10 @@ export class TradingEngine {
       const candidateWatchReason = lowCapMomentum
         ? "ENTRY SETUP: low-cap momentum; awaiting AI"
         : "ENTRY SETUP: established candidate; awaiting AI";
+      if (lowCapMomentum) token.watchReason = candidateWatchReason;
       if (
         (!watchable && !lowCapMomentum) ||
-        token.watchReason !== candidateWatchReason ||
+        (token.watchReason !== candidateWatchReason && !lowCapMomentum) ||
         (Date.now() - token.lastMarketAt! > (lowCapMomentum ? config.lowCapCandidateMaxAgeSeconds * 1000 : config.discoveryPollMs * 2))
       ) {
         return;
@@ -1228,7 +1229,8 @@ export class TradingEngine {
           config.minTrend4hPct
         ))
       ) {
-        await this.openPosition(token, Math.max(0.05, Math.min(1, decision.sizePct)));
+        const requestedSize = Math.max(0.05, Math.min(1, decision.sizePct));
+        await this.openPosition(token, lowCapMomentum ? Math.min(requestedSize, 0.65) : requestedSize);
       }
 
       this.emit();

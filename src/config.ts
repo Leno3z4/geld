@@ -67,6 +67,7 @@ export const config = {
   aiFastCooldownMs: num("AI_FAST_COOLDOWN_MS", 4000),
   aiFallbackEnabled: bool("AI_FALLBACK_ENABLED", true),
   aiFallbackMinScore: num("AI_FALLBACK_MIN_SCORE", 55),
+  aiOverrideScore: num("AI_OVERRIDE_SCORE", 75),
   candidateMaxAgeSeconds: num("CANDIDATE_MAX_AGE_SECONDS", 180),
   eventBackfillBlocks: Math.max(0, Math.floor(num("EVENT_BACKFILL_BLOCKS", 1000))),
   // Monad currently rejects eth_getLogs ranges wider than 100 blocks.
@@ -87,7 +88,7 @@ export const config = {
   discoveryLimit: Math.max(10, Math.min(50, Math.floor(num("DISCOVERY_LIMIT", 50)))),
   aiCandidateLimit: Math.max(1, Math.min(15, Math.floor(num("AI_CANDIDATE_LIMIT", 8)))),
   discoveryPollMs: Math.max(30000, num("DISCOVERY_POLL_MS", 60000)),
-  priceSampleMs: Math.max(60000, num("PRICE_SAMPLE_MS", 300000)),
+  priceSampleMs: Math.max(60000, num("PRICE_SAMPLE_MS", 60000)),
 
   nadfunApiUrl: process.env.NADFUN_API_URL ?? "https://api.nadapp.net",
   nadfunApiKey: process.env.NADFUN_API_KEY ?? "",

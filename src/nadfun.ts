@@ -30,7 +30,9 @@ export const ADDRESSES = {
   WMON: "0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A" as Address,
   ROUTER: "0x8986C8fD44eb85294A725a7e61AF35E76bA26F91" as Address,
   CURVE: "0x9f3832732923252A21044F21eE6bd87F09514ae4" as Address,
-  FACTORY: "0xA25b13127e63ddae6d0b35570FF3D39dBD621001" as Address
+  FACTORY: "0xA25b13127e63ddae6d0b35570FF3D39dBD621001" as Address,
+  V1_LENS: "0x7e78A8DE94f21804F7a17F4E8BF9EC2c872187ea" as Address,
+  V1_DEX_ROUTER: "0x0B79d71AE99528D1dB24A4148b5f4F865cc2b137" as Address
 };
 
 export const routerAbi = parseAbi([
@@ -40,7 +42,7 @@ export const routerAbi = parseAbi([
   "function sellToNative((uint256 amountIn,uint256 amountOutMin,address token,address to,uint256 deadline) params) returns (uint256 amountOut)"
 ]);
 
-export const factoryAbi = parseAbi([
+export const v1LensAbi = parseAbi([\n  "function getAmountOut(address token,uint256 amountIn,bool isBuy) view returns (address router,uint256 amountOut)",\n  "function isGraduated(address token) view returns (bool)",\n  "function isLocked(address token) view returns (bool)"\n]);\n\nexport const v1DexRouterAbi = parseAbi([\n  "function buy((uint256 amountOutMin,address token,address to,uint256 deadline) params) payable returns (uint256 amountOut)",\n  "function sell((uint256 amountIn,uint256 amountOutMin,address token,address to,uint256 deadline) params) returns (uint256 amountOut)"\n]);\n\nexport const factoryAbi = parseAbi([
   "function getPair(address tokenA,address tokenB) view returns (address pair)"
 ]);
 
@@ -158,42 +160,134 @@ export async function getTokenDecimals(publicClient: any, token: Address) {
   }));
 }
 
-export async function isNadFunToken(publicClient: any, token: Address): Promise<boolean> {
+async function quoteViaLens(publicClient: any, token: Address, amountIn: bigint, isBuy: boolean) {
+  const result = await publicClient.readContract({
+    address: ADDRESSES.V1_LENS,
+    abi: v1LensAbi,
+    functionName: "getAmountOut",
+    args: [token, amountIn, isBuy]
+  }) as readonly [Address, bigint];
+  return { router: result[0], amountOut: result[1] };
+}
+
+async function resolveQuote(publicClient: any, token: Address, amountIn: bigint, isBuy: boolean) {
   try {
-    // This call succeeds for both pre- and post-graduation NadFun tokens.
-    // A non-NadFun token causes the router to revert with TokenNotFound.
-    await publicClient.readContract({
+    const amountOut = await publicClient.readContract({
       address: ADDRESSES.ROUTER,
       abi: routerAbi,
-      functionName: "isGraduated",
-      args: [token]
-    });
-    return true;
+      functionName: "getAmountOut",
+      args: [token, amountIn, isBuy]
+    }) as bigint;
+    return { router: ADDRESSES.ROUTER, amountOut };
   } catch {
-    return false;
+    return await quoteViaLens(publicClient, token, amountIn, isBuy);
   }
 }
 
 export async function quoteBuy(publicClient: any, token: Address, amountMon: number) {
   const amountIn = parseEther(amountMon.toFixed(18));
-  const amountOut = await publicClient.readContract({
-    address: ADDRESSES.ROUTER,
-    abi: routerAbi,
-    functionName: "getAmountOut",
-    args: [token, amountIn, true]
-  }) as bigint;
-  return { amountIn, amountOut };
+  const quote = await resolveQuote(publicClient, token, amountIn, true);
+  return { amountIn, amountOut: quote.amountOut, router: quote.router };
 }
 
 export async function quoteSell(publicClient: any, token: Address, amountRaw: bigint) {
-  return await publicClient.readContract({
-    address: ADDRESSES.ROUTER,
-    abi: routerAbi,
-    functionName: "getAmountOut",
-    args: [token, amountRaw, false]
-  }) as bigint;
+  const quote = await resolveQuote(publicClient, token, amountRaw, false);
+  return quote.amountOut;
 }
 
+export function minOut(amount: bigint, slippagePct: number) {
+  const bps = BigInt(Math.floor(Math.max(0, Math.min(95, slippagePct)) * 100));
+  return amount * (10000n - bps) / 10000n;
+}
+
+export async function buyNative(
+  walletClient: any,
+  publicClient: any,
+  token: Address,
+  amountMon: number,
+  slippagePct: number
+): Promise<Hex> {
+  const account = walletClient.account;
+  const { amountIn, amountOut } = await quoteBuy(publicClient, token, amountMon);
+  return walletClient.writeContract({
+    account,
+    chain: MONAD,
+    address: ADDRESSES.ROUTER,
+    abi: routerAbi,
+    functionName: "buyWithNative",
+    args: [{
+      amountOutMin: minOut(amountOut, slippagePct),
+      token,
+      to: account.address,
+      deadline: BigInt(Math.floor(Date.now() / 1000) + 90)
+    }],
+    value: amountIn
+  });
+}
+
+export async function sellToNative(
+  walletClient: any,
+  publicClient: any,
+  token: Address,
+  amountRaw: bigint,
+  slippagePct: number
+): Promise<Hex> {
+  const account = walletClient.account;
+  const quote = await resolveQuote(publicClient, token, amountRaw, false);
+  const router = quote.router;
+  const allowance = await publicClient.readContract({
+    address: token,
+    abi: erc20Abi,
+    functionName: "allowance",
+    args: [account.address, router]
+  }) as bigint;
+
+  if (allowance < amountRaw) {
+    const approvalTx = await walletClient.writeContract({
+      account,
+      chain: MONAD,
+      address: token,
+      abi: erc20Abi,
+      functionName: "approve",
+      args: [router, amountRaw]
+    });
+    await publicClient.waitForTransactionReceipt({ hash: approvalTx });
+  }
+
+  if (router !== ADDRESSES.ROUTER) {
+    return walletClient.writeContract({
+      account,
+      chain: MONAD,
+      address: router,
+      abi: v1DexRouterAbi,
+      functionName: "sell",
+      gas: BigInt(config.sellGasLimit),
+      args: [{
+        amountIn: amountRaw,
+        amountOutMin: minOut(quote.amountOut, slippagePct),
+        token,
+        to: account.address,
+        deadline: BigInt(Math.floor(Date.now() / 1000) + 90)
+      }]
+    });
+  }
+
+  return walletClient.writeContract({
+    account,
+    chain: MONAD,
+    address: ADDRESSES.ROUTER,
+    abi: routerAbi,
+    functionName: "sellToNative",
+    gas: BigInt(config.sellGasLimit),
+    args: [{
+      amountIn: amountRaw,
+      amountOutMin: minOut(quote.amountOut, slippagePct),
+      token,
+      to: account.address,
+      deadline: BigInt(Math.floor(Date.now() / 1000) + 90)
+    }]
+  });
+}
 export function minOut(amount: bigint, slippagePct: number) {
   const bps = BigInt(Math.floor(Math.max(0, Math.min(95, slippagePct)) * 100));
   return amount * (10000n - bps) / 10000n;

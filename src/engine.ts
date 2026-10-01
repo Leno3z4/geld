@@ -746,12 +746,16 @@ export class TradingEngine {
     if (this.lastBlock === 0n) {
       const latest = await this.publicClient.getBlockNumber();
       const stats = this.store.get().stats;
-      const needsBackfill = !stats.eventBackfillDone && stats.eventCount === 0 && Object.keys(this.store.get().tokens).length === 0;
+      const needsBackfill =
+        !stats.eventBackfillDone &&
+        stats.eventCount === 0 &&
+        Object.keys(this.store.get().tokens).length === 0;
 
       if (needsBackfill) {
-        this.lastBlock = latest > BigInt(config.eventBackfillBlocks)
-          ? latest - BigInt(config.eventBackfillBlocks)
-          : 0n;
+        this.lastBlock =
+          latest > BigInt(config.eventBackfillBlocks)
+            ? latest - BigInt(config.eventBackfillBlocks)
+            : 0n;
       } else if (persistedBlock) {
         this.lastBlock = BigInt(persistedBlock);
       } else {
@@ -765,15 +769,30 @@ export class TradingEngine {
       }
     }
 
-    // Drop abandoned pre-transaction reservations before counting pending BUY slots.\n    // A Worker restart can otherwise leave persisted pending BUYs forever and\n    // block every new entry even though no position exists on-chain.\n    this.cleanupStalePendingExecutions();\n\n    // Reconcile wallet assets before risk management. A confirmed BUY must
-    // never disappear from the internal book just because the process died
-    // between settlement and state persistence.
-    await this.reconcileWalletPositions();
+    this.cleanupStalePendingExecutions();
 
-    // Exit/risk management gets first priority on the one-minute Worker cycle.
-    // Discovery must never delay a protective sell on an existing position.
+    await this.reconcileWalletPositions();
     await this.managePositions();
-    this.entryCircuitBreakerActive();
+
+    const entriesBlocked = this.entryCircuitBreakerActive();
+
+    // Keep event/market synchronization and position review alive even when
+    // the daily entry circuit breaker is active. The BUY boundary itself also
+    // enforces the breaker, so event-driven candidates cannot bypass it.
+    await this.pollLogs();
+    await this.pollDexLogs();
+    await this.reviewOpenPositions();
+
+    if (!entriesBlocked) {
+      await this.pollNewEvents();
+      await this.discoverEstablishedTokens();
+    } else {
+      this.store.update((s) => {
+        s.stats.lastIdleReason =
+          "ENTRY CIRCUIT BREAKER: daily loss limit reached; exits remain active";
+      });
+    }
+
     this.store.update((s) => {
       s.stats.lastCycleAt = Date.now();
       s.stats.lastProcessedBlock = this.lastBlock.toString();

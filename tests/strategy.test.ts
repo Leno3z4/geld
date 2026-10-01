@@ -97,7 +97,7 @@ test("profit protection exits a winner before it round-trips", () => {
     minLiquidityUsd: 100000, liquidityExitRatio: 0.65,
     earlyExitLossPct: -10, earlyExitTrend1hPct: -8,
     momentumExitProfitPct: 8, momentumExitTrend1hPct: -10, momentumExitReboundPct: 2,
-    sellPressureExitRatio: 0.65, sellPressureMinVolumeMon: 20,
+    sellPressureExitRatio: 0.65, sellPressureMinVolumeUsd: 20,
     profitTake1Pct: 15, profitTake1SellPct: 25,
     profitTake2Pct: 30, profitTake2SellPct: 33,
     profitTake3Pct: 50, profitTake3SellPct: 50,
@@ -134,7 +134,7 @@ test("early exit cuts a deteriorating loser before the hard stop", () => {
     minLiquidityUsd: 100000, liquidityExitRatio: 0.65,
     earlyExitLossPct: -10, earlyExitTrend1hPct: -8,
     momentumExitProfitPct: 8, momentumExitTrend1hPct: -10, momentumExitReboundPct: 2,
-    sellPressureExitRatio: 0.65, sellPressureMinVolumeMon: 20,
+    sellPressureExitRatio: 0.65, sellPressureMinVolumeUsd: 20,
     profitTake1Pct: 15, profitTake1SellPct: 25,
     profitTake2Pct: 30, profitTake2SellPct: 33,
     profitTake3Pct: 50, profitTake3SellPct: 50,
@@ -160,7 +160,7 @@ test("uses market change fallback until enough local history exists", () => {
   const d = entryGateDiagnostics(token, {
     minEstablishedAgeMinutes: 30, minLiquidityUsd: 5000,
     minMarketCapUsd: 60000,
-    minHolders: 25, minVolumeMon: 100,
+    minHolders: 25, minVolumeUsd: 100,
     dipMinPct: 8, dipMaxPct: 35, recoveryMinPct: -4,
     trendMax1hPct: 8, minTrend4hPct: -12, minLocalScore: 50
   });
@@ -187,7 +187,7 @@ test("blocks established tokens below the $60k market cap floor", () => {
   const d = entryGateDiagnostics(token, {
     minEstablishedAgeMinutes: 30, minLiquidityUsd: 5000,
     minMarketCapUsd: 60000,
-    minHolders: 25, minVolumeMon: 100,
+    minHolders: 25, minVolumeUsd: 100,
     dipMinPct: 8, dipMaxPct: 35, recoveryMinPct: -4,
     trendMax1hPct: 8, minTrend4hPct: -12, minLocalScore: 50
   });
@@ -212,7 +212,7 @@ test("small profitable moves trigger the first profit take", () => {
     minLiquidityUsd: 5000, liquidityExitRatio: 0.65,
     earlyExitLossPct: -10, earlyExitTrend1hPct: -8,
     momentumExitProfitPct: 8, momentumExitTrend1hPct: -10, momentumExitReboundPct: 2,
-    sellPressureExitRatio: 0.65, sellPressureMinVolumeMon: 20,
+    sellPressureExitRatio: 0.65, sellPressureMinVolumeUsd: 20,
     profitTake1Pct: 3, profitTake1SellPct: 25,
     profitTake2Pct: 15, profitTake2SellPct: 33,
     profitTake3Pct: 30, profitTake3SellPct: 50,
@@ -270,7 +270,7 @@ test("daily mean reversion exits when price returns to the rolling daily average
     minLiquidityUsd: 5000, liquidityExitRatio: 0.65,
     earlyExitLossPct: -10, earlyExitTrend1hPct: -8,
     momentumExitProfitPct: 8, momentumExitTrend1hPct: -10, momentumExitReboundPct: 2,
-    sellPressureExitRatio: 0.65, sellPressureMinVolumeMon: 20,
+    sellPressureExitRatio: 0.65, sellPressureMinVolumeUsd: 20,
     profitTake1Pct: 3, profitTake1SellPct: 40,
     profitTake2Pct: 30, profitTake2SellPct: 35,
     profitTake3Pct: 50, profitTake3SellPct: 100,
@@ -305,7 +305,7 @@ test("stale losing positions are fully exited", () => {
     minLiquidityUsd: 5000, liquidityExitRatio: 0.65,
     earlyExitLossPct: -10, earlyExitTrend1hPct: -8,
     momentumExitProfitPct: 8, momentumExitTrend1hPct: -10, momentumExitReboundPct: 2,
-    sellPressureExitRatio: 0.65, sellPressureMinVolumeMon: 20,
+    sellPressureExitRatio: 0.65, sellPressureMinVolumeUsd: 20,
     profitTake1Pct: 3, profitTake1SellPct: 40,
     profitTake2Pct: 30, profitTake2SellPct: 35,
     profitTake3Pct: 50, profitTake3SellPct: 100,

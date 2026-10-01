@@ -80,6 +80,7 @@ export interface EntryGateDiagnostics {
     marketCapUsd: number;
     holders: number;
     volumeMon: number;
+    volumeUsd: number;
     dipPct: number;
     drawdownFromRecentPeakPct: number;
     drawdownFromAthPct: number;

@@ -18,8 +18,8 @@ const responseSchema = {
     action:{type:"string",enum:["BUY","HOLD","SELL"]},
     confidence:{type:"number"},
     sizePct:{type:"number"},
-    reason:{type:"string"},
-    invalidation:{type:"string"}
+    reason:{type:"string",maxLength:240},
+    invalidation:{type:"string",maxLength:200}
   },
   required:["action","confidence","sizePct","reason","invalidation"]
 };

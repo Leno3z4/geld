@@ -224,13 +224,55 @@ export function isLowCapMomentumCandidate(
   const volume5mUsd = volume5mMon * (token.monUsdPrice ?? 0);
   const acceleration = token.volumeAcceleration5m ?? 0;
   const trend1h = token.trendPct1h ?? token.changePct ?? 0;
+  const surgeOverride =
+    (token.apiTrend5mPct ?? 0) >= 10 &&
+    ratio >= 2 &&
+    volume5mUsd >= rules.minVolume5mUsd * 0.65 &&
+    (token.apiBuyTx5m ?? 0) >= 3;
+
   return marketCap >= rules.minMarketCapUsd && marketCap <= rules.maxMarketCapUsd &&
     liquidity >= rules.minLiquidityUsd && holders >= rules.minHolders &&
     volumeUsd >= rules.minVolumeUsd && ageMinutes >= rules.minAgeMinutes &&
-    ratio >= rules.minBuySellRatio5m && volume5mUsd >= rules.minVolume5mUsd &&
-    acceleration >= rules.minVolumeAcceleration5m && trend1h >= rules.minTrend1hPct &&
+    ratio >= rules.minBuySellRatio5m && volume5mUsd >= rules.minVolume5mUsd * 0.65 &&
+    (acceleration >= rules.minVolumeAcceleration5m || surgeOverride) &&
+    trend1h >= rules.minTrend1hPct &&
     token.localScore >= rules.minLocalScore;
 }
+
+export function lowCapMomentumBlockers(
+  token: TokenSnapshot,
+  rules: Parameters<typeof isLowCapMomentumCandidate>[1]
+) {
+  const blockers: string[] = [];
+  const ageMinutes = Math.max(0, (Date.now() - token.createdAt) / 60000);
+  const marketCap = token.marketCapUsd ?? 0;
+  const liquidity = token.liquidityUsd ?? 0;
+  const holders = token.holders ?? 0;
+  const volumeUsd = (token.volumeMon ?? 0) * (token.monUsdPrice ?? 0);
+  const ratio = token.buySellRatio5m ?? 0;
+  const volume5mUsd = (token.volume5mMon ?? 0) * (token.monUsdPrice ?? 0);
+  const acceleration = token.volumeAcceleration5m ?? 0;
+  const trend1h = token.trendPct1h ?? token.changePct ?? 0;
+  const surgeOverride =
+    (token.apiTrend5mPct ?? 0) >= 10 &&
+    ratio >= 2 &&
+    volume5mUsd >= rules.minVolume5mUsd * 0.65 &&
+    (token.apiBuyTx5m ?? 0) >= 3;
+
+  if (marketCap < rules.minMarketCapUsd) blockers.push("MC $" + Math.round(marketCap) + " < $" + Math.round(rules.minMarketCapUsd));
+  if (marketCap > rules.maxMarketCapUsd) blockers.push("MC $" + Math.round(marketCap) + " > $" + Math.round(rules.maxMarketCapUsd));
+  if (liquidity < rules.minLiquidityUsd) blockers.push("liq $" + Math.round(liquidity) + " < $" + Math.round(rules.minLiquidityUsd));
+  if (holders < rules.minHolders) blockers.push("holders " + holders + " < " + rules.minHolders);
+  if (volumeUsd < rules.minVolumeUsd) blockers.push("volume $" + Math.round(volumeUsd) + " < $" + Math.round(rules.minVolumeUsd));
+  if (ageMinutes < rules.minAgeMinutes) blockers.push("age " + ageMinutes.toFixed(0) + "m < " + rules.minAgeMinutes + "m");
+  if (ratio < rules.minBuySellRatio5m) blockers.push("5m buy/sell " + ratio.toFixed(2) + " < " + rules.minBuySellRatio5m);
+  if (volume5mUsd < rules.minVolume5mUsd * 0.65) blockers.push("5m volume $" + Math.round(volume5mUsd) + " too low");
+  if (acceleration < rules.minVolumeAcceleration5m && !surgeOverride) blockers.push("5m acceleration " + acceleration.toFixed(2) + "x < " + rules.minVolumeAcceleration5m + "x");
+  if (trend1h < rules.minTrend1hPct) blockers.push("1h trend " + trend1h.toFixed(1) + "% < " + rules.minTrend1hPct + "%");
+  if (token.localScore < rules.minLocalScore) blockers.push("score " + token.localScore + " < " + rules.minLocalScore);
+  return blockers;
+}
+
 export function selectEntryStrategy(token: TokenSnapshot, minDailySamples = 24, minVolume5mUsd = 1000) {
   const dip = token.dipPct ?? 0;
   const trend1h = token.trendPct1h ?? 0;

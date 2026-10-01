@@ -110,7 +110,7 @@ export const config = {
   lowCapTrendExitPct: num("LOW_CAP_TREND_EXIT_PCT", -5),
   lowCapLossExitPct: num("LOW_CAP_LOSS_EXIT_PCT", -4),
   lowCapPeakDrawdownExitPct: Math.max(1, num("LOW_CAP_PEAK_DRAWDOWN_EXIT_PCT", 12)),
-  lowCapMaxLiquidityPositionPct: Math.min(10, Math.max(0.5, num("LOW_CAP_MAX_LIQUIDITY_POSITION_PCT", 2)),),
+  lowCapMaxLiquidityPositionPct: Math.min(10, Math.max(0.5, num("LOW_CAP_MAX_LIQUIDITY_POSITION_PCT", 2))),
   dipMinPct: Math.max(0, num("DIP_MIN_PCT", 3)),
   dipMaxPct: Math.max(1, num("DIP_MAX_PCT", 50)),
   recoveryMinPct: num("RECOVERY_MIN_PCT", -10),

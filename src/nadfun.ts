@@ -32,7 +32,7 @@ export const ADDRESSES = {
   CURVE: "0x9f3832732923252A21044F21eE6bd87F09514ae4" as Address,
   FACTORY: "0xA25b13127e63ddae6d0b35570FF3D39dBD621001" as Address,
   V1_LENS: "0x7e78A8DE94f21804F7a17F4E8BF9EC2c872187ea" as Address,
-  V1_DEX_ROUTER: "0x0B79d71AE99528D1dB24A4148b5f4F865cc2b137" as Address
+  V1_DEX_ROUTER: "0x0B79d71AE99528D1dB24A4148b5f4F865cc2b137" as Address,\n  V1_BONDING_ROUTER: "0x6F6B8F1a20703309951a5127c45B49b1CD981A22" as Address
 };
 
 export const routerAbi = parseAbi([
@@ -232,7 +232,7 @@ export async function buyNative(
 ): Promise<Hex> {
   const account = walletClient.account;
   const { amountIn, amountOut, router } = await quoteBuy(publicClient, token, amountMon);
-  if (router !== ADDRESSES.ROUTER) {
+  if (router.toLowerCase() !== ADDRESSES.ROUTER.toLowerCase()) {
     return walletClient.writeContract({
       account,
       chain: MONAD,

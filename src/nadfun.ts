@@ -32,7 +32,8 @@ export const ADDRESSES = {
   CURVE: "0x9f3832732923252A21044F21eE6bd87F09514ae4" as Address,
   FACTORY: "0xA25b13127e63ddae6d0b35570FF3D39dBD621001" as Address,
   V1_LENS: "0x7e78A8DE94f21804F7a17F4E8BF9EC2c872187ea" as Address,
-  V1_DEX_ROUTER: "0x0B79d71AE99528D1dB24A4148b5f4F865cc2b137" as Address,\n  V1_BONDING_ROUTER: "0x6F6B8F1a20703309951a5127c45B49b1CD981A22" as Address
+  V1_DEX_ROUTER: "0x0B79d71AE99528D1dB24A4148b5f4F865cc2b137" as Address,
+  V1_BONDING_ROUTER: "0x6F6B8F1a20703309951a5127c45B49b1CD981A22" as Address
 };
 
 export const routerAbi = parseAbi([
@@ -42,7 +43,18 @@ export const routerAbi = parseAbi([
   "function sellToNative((uint256 amountIn,uint256 amountOutMin,address token,address to,uint256 deadline) params) returns (uint256 amountOut)"
 ]);
 
-export const v1LensAbi = parseAbi([\n  "function getAmountOut(address token,uint256 amountIn,bool isBuy) view returns (address router,uint256 amountOut)",\n  "function isGraduated(address token) view returns (bool)",\n  "function isLocked(address token) view returns (bool)"\n]);\n\nexport const v1DexRouterAbi = parseAbi([\n  "function buy((uint256 amountOutMin,address token,address to,uint256 deadline) params) payable returns (uint256 amountOut)",\n  "function sell((uint256 amountIn,uint256 amountOutMin,address token,address to,uint256 deadline) params) returns (uint256 amountOut)"\n]);\n\nexport const factoryAbi = parseAbi([
+export const v1LensAbi = parseAbi([
+  "function getAmountOut(address token,uint256 amountIn,bool isBuy) view returns (address router,uint256 amountOut)",
+  "function isGraduated(address token) view returns (bool)",
+  "function isLocked(address token) view returns (bool)"
+]);
+
+export const v1DexRouterAbi = parseAbi([
+  "function buy((uint256 amountOutMin,address token,address to,uint256 deadline) params) payable returns (uint256 amountOut)",
+  "function sell((uint256 amountIn,uint256 amountOutMin,address token,address to,uint256 deadline) params) returns (uint256 amountOut)"
+]);
+
+export const factoryAbi = parseAbi([
   "function getPair(address tokenA,address tokenB) view returns (address pair)"
 ]);
 
@@ -321,83 +333,6 @@ export async function sellToNative(
     args: [{
       amountIn: amountRaw,
       amountOutMin: minOut(quote.amountOut, slippagePct),
-      token,
-      to: account.address,
-      deadline: BigInt(Math.floor(Date.now() / 1000) + 90)
-    }]
-  });
-}
-export function minOut(amount: bigint, slippagePct: number) {
-  const bps = BigInt(Math.floor(Math.max(0, Math.min(95, slippagePct)) * 100));
-  return amount * (10000n - bps) / 10000n;
-}
-
-export async function buyNative(
-  walletClient: any,
-  publicClient: any,
-  token: Address,
-  amountMon: number,
-  slippagePct: number
-): Promise<Hex> {
-  const account = walletClient.account;
-  const { amountIn, amountOut } = await quoteBuy(publicClient, token, amountMon);
-  return walletClient.writeContract({
-    account,
-    chain: MONAD,
-    address: ADDRESSES.ROUTER,
-    abi: routerAbi,
-    functionName: "buyWithNative",
-    args: [{
-      amountOutMin: minOut(amountOut, slippagePct),
-      token,
-      to: account.address,
-      deadline: BigInt(Math.floor(Date.now() / 1000) + 90)
-    }],
-    value: amountIn
-  });
-}
-
-export async function sellToNative(
-  walletClient: any,
-  publicClient: any,
-  token: Address,
-  amountRaw: bigint,
-  slippagePct: number
-): Promise<Hex> {
-  const account = walletClient.account;
-  const allowance = await publicClient.readContract({
-    address: token,
-    abi: erc20Abi,
-    functionName: "allowance",
-    args: [account.address, ADDRESSES.ROUTER]
-  }) as bigint;
-
-  if (allowance < amountRaw) {
-    const approvalTx = await walletClient.writeContract({
-      account,
-      chain: MONAD,
-      address: token,
-      abi: erc20Abi,
-      functionName: "approve",
-      args: [ADDRESSES.ROUTER, amountRaw]
-    });
-    await publicClient.waitForTransactionReceipt({ hash: approvalTx });
-  }
-
-  const amountOut = await quoteSell(publicClient, token, amountRaw);
-  return walletClient.writeContract({
-    account,
-    chain: MONAD,
-    address: ADDRESSES.ROUTER,
-    abi: routerAbi,
-    functionName: "sellToNative",
-    // Monad's RPC can reject viem's oversized gas estimate for NadFun sells.
-    // Keep the transaction below the network's per-transaction gas cap while
-    // leaving ample headroom for the V2 router path.
-    gas: BigInt(config.sellGasLimit),
-    args: [{
-      amountIn: amountRaw,
-      amountOutMin: minOut(amountOut, slippagePct),
       token,
       to: account.address,
       deadline: BigInt(Math.floor(Date.now() / 1000) + 90)

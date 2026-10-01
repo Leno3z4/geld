@@ -243,6 +243,104 @@ export class TradingEngine {
     await this.persist();
   }
 
+  private async pollNewEvents() {
+    const now = Date.now();
+    if (now - this.lastNewEventPollAt < config.newEventPollMs) return;
+    this.lastNewEventPollAt = now;
+
+    try {
+      const response = await fetch(config.nadfunApiUrl.replace(/\/api\/?$/, "") + "/api/token/new-event", {
+        headers: {
+          accept: "application/json",
+          ...(config.nadfunApiKey ? { "X-API-Key": config.nadfunApiKey } : {})
+        }
+      });
+      if (!response.ok) return;
+
+      const payload = decodeNadfunPayload(await response.text());
+      const events = Array.isArray(payload) ? payload : [];
+      const buyEvents = events
+        .map((event: any) => ({
+          event,
+          token: event?.token_info?.token_id,
+          createdAt: createdAtMs(event?.token_info?.created_at),
+          amountMon: numeric(event?.amount) / 1e18
+        }))
+        .filter((x) =>
+          /^0x[0-9a-fA-F]{40}$/.test(String(x.token ?? "")) &&
+          String(x.event?.type ?? "").toUpperCase() === "BUY" &&
+          x.createdAt > 0 &&
+          (now - x.createdAt) / 60000 <= config.earlyLaunchMaxAgeMinutes
+        )
+        .sort((a, b) => b.amountMon - a.amountMon);
+
+      const unique = new Map<string, { event: any; createdAt: number; amountMon: number }>();
+      for (const item of buyEvents) {
+        const key = String(item.token).toLowerCase();
+        if (!unique.has(key)) unique.set(key, item);
+      }
+
+      for (const [tokenAddress, item] of [...unique.entries()].slice(0, config.newEventCandidateLimit)) {
+        const tokenInfo = item.event.token_info ?? {};
+        let token = this.store.get().tokens[tokenAddress];
+
+        if (!token) {
+          token = {
+            token: tokenAddress,
+            symbol: String(tokenInfo.symbol ?? "?"),
+            name: String(tokenInfo.name ?? tokenInfo.symbol ?? "Unknown"),
+            creator: String(tokenInfo.creator?.account_id ?? ""),
+            pair: "",
+            quoteToken: "",
+            createdBlock: "",
+            createdAt: item.createdAt,
+            lastEventAt: now,
+            buys: 0,
+            sells: 0,
+            buyMon: 0,
+            sellMon: 0,
+            progressPct: 0,
+            graduated: Boolean(tokenInfo.is_graduated),
+            locked: false,
+            holders: 0,
+            volumeUsd: 0,
+            priceUsd: 0,
+            priceMon: 0,
+            peakPriceMon: 0,
+            localScore: 0
+          };
+        }
+
+        token.createdAt = item.createdAt;
+        token.symbol = String(tokenInfo.symbol ?? token.symbol);
+        token.name = String(tokenInfo.name ?? token.name);
+        token.creator = String(tokenInfo.creator?.account_id ?? token.creator);
+        token.lastEventAt = now;
+        this.store.upsertToken(token);
+
+        await this.enrichToken(token);
+        await this.enrichFlowMetrics(token);
+        updateMarketMetrics(token);
+        token.localScore = scoreToken(token, this.seasonality);
+        token.entryStrategy = selectEntryStrategy(token, config.dailyMinSamples);
+
+        if (isEarlyLaunchCandidate(token)) {
+          token.watchReason = "ENTRY SETUP: early-launch momentum; awaiting AI";
+          this.store.upsertToken(token);
+          await this.maybeEvaluateCandidate(token);
+        } else {
+          const blockers = earlyLaunchBlockers(token);
+          token.watchReason = blockers.length
+            ? "EARLY-LAUNCH BLOCKED: " + blockers.slice(0, 2).join("; ")
+            : "EARLY-LAUNCH WATCH";
+          this.store.upsertToken(token);
+        }
+      }
+    } catch {
+      // The on-chain event stream and scheduled discovery remain the fallback.
+    }
+  }
+
   private async discoverEstablishedTokens() {
     try {
       if (this.entryCircuitBreakerActive()) {

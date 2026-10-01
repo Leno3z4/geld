@@ -363,7 +363,7 @@ export class TradingEngine {
         } else if (diagnostics.blockers.length > 0) {
           token.watchReason = `Watching: ${diagnostics.primary}`;
         } else {
-          token.watchReason = "ENTRY SETUP: established dip candidate; awaiting AI";
+          token.watchReason = "ENTRY SETUP: established candidate; awaiting AI";
           eligible += 1;
         }
 
@@ -1012,7 +1012,7 @@ export class TradingEngine {
       );
       if (
         !watchable ||
-        token.watchReason !== "ENTRY SETUP: established dip candidate; awaiting AI" ||
+        token.watchReason !== "ENTRY SETUP: established candidate; awaiting AI" ||
         (Date.now() - token.lastMarketAt! > config.discoveryPollMs * 2)
       ) {
         return;

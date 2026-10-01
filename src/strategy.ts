@@ -650,12 +650,12 @@ export function positionExitSignal(
   const daySamples = token?.daySamples ?? 0;
   const marketCapUsd = token?.marketCapUsd ?? 0;
   const lowCapMode = marketCapUsd > 0 && marketCapUsd <= (rules.lowCapMaxMarketCapUsd ?? 0);
-  const lowCapLiquidityExitRatio = lowCapLiquidityExitRatio ?? 0.80;
-  const lowCapSellPressureRatio = lowCapSellPressureRatio ?? 0.75;
-  const lowCapSellPressureMinVolumeUsd = lowCapSellPressureMinVolumeUsd ?? 1000;
-  const lowCapTrendExitPct = lowCapTrendExitPct ?? -5;
-  const lowCapLossExitPct = lowCapLossExitPct ?? -4;
-  const lowCapPeakDrawdownExitPct = lowCapPeakDrawdownExitPct ?? 12;
+  const lowCapLiquidityExitRatio = rules.lowCapLiquidityExitRatio ?? 0.80;
+  const lowCapSellPressureRatio = rules.lowCapSellPressureRatio ?? 0.75;
+  const lowCapSellPressureMinVolumeUsd = rules.lowCapSellPressureMinVolumeUsd ?? 1000;
+  const lowCapTrendExitPct = rules.lowCapTrendExitPct ?? -5;
+  const lowCapLossExitPct = rules.lowCapLossExitPct ?? -4;
+  const lowCapPeakDrawdownExitPct = rules.lowCapPeakDrawdownExitPct ?? 12;
 
   // Protective conditions always win over profit-seeking AI guidance.
   if (lowCapMode && token) {

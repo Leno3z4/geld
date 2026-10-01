@@ -20,7 +20,7 @@ import {
 } from "./nadfun.js";
 import { StateStore } from "./store.js";
 import { GeminiBrain } from "./ai.js";
-import { SeasonalityModel, entryGateDiagnostics, positionExitSignal, scoreToken, selectEntryStrategy, shouldClose, shouldOpen, shouldWatch, updateMarketMetrics, curveProgressPct, type EntryGateRules, type PositionExitRules } from "./strategy.js";
+import { SeasonalityModel, entryGateDiagnostics, positionExitSignal, scoreToken, selectEntryStrategy, shouldClose, shouldOpen, shouldWatch, updateMarketMetrics, curveProgressPct, isLowCapMomentumCandidate, type EntryGateRules, type PositionExitRules } from "./strategy.js";
 import type { BotState, Position, TokenSnapshot } from "./types.js";
 import { formatUnits } from "viem";
 
@@ -814,7 +814,7 @@ export class TradingEngine {
         (parsed.eventName === "Buy" || parsed.eventName === "Sell" || parsed.eventName === "Sync") &&
         this.store.get().running &&
         token.localScore >= config.minLocalScore &&
-        (Date.now() - token.createdAt) / 1000 <= config.candidateMaxAgeSeconds
+        (Date.now() - token.createdAt) / 1000 <= (isLowCapMomentumCandidate(token, { enabled: config.lowCapMomentumEnabled, minMarketCapUsd: config.lowCapMinMarketCapUsd, maxMarketCapUsd: config.lowCapMaxMarketCapUsd, minLiquidityUsd: config.lowCapMinLiquidityUsd, minHolders: config.lowCapMinHolders, minVolumeMon: config.lowCapMinVolumeMon, minAgeMinutes: config.lowCapMinAgeMinutes, minBuySellRatio5m: config.lowCapMinBuySellRatio5m, minVolume5mMon: config.lowCapMinVolume5mMon, minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m, minTrend1hPct: config.lowCapMinTrend1hPct, minLocalScore: config.lowCapMinScore }) ? config.lowCapCandidateMaxAgeSeconds : config.candidateMaxAgeSeconds)
       ) {
         void this.maybeEvaluateCandidate(token);
       }
@@ -1030,10 +1030,27 @@ export class TradingEngine {
         config.minHolders,
         config.minVolumeMon
       );
+      const lowCapMomentum = isLowCapMomentumCandidate(token, {
+      enabled: config.lowCapMomentumEnabled,
+      minMarketCapUsd: config.lowCapMinMarketCapUsd,
+      maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
+      minLiquidityUsd: config.lowCapMinLiquidityUsd,
+      minHolders: config.lowCapMinHolders,
+      minVolumeMon: config.lowCapMinVolumeMon,
+      minAgeMinutes: config.lowCapMinAgeMinutes,
+      minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
+      minVolume5mMon: config.lowCapMinVolume5mMon,
+      minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
+      minTrend1hPct: config.lowCapMinTrend1hPct,
+      minLocalScore: config.lowCapMinScore
+    });
+      const candidateWatchReason = lowCapMomentum
+        ? "ENTRY SETUP: low-cap momentum; awaiting AI"
+        : "ENTRY SETUP: established candidate; awaiting AI";
       if (
-        !watchable ||
-        token.watchReason !== "ENTRY SETUP: established candidate; awaiting AI" ||
-        (Date.now() - token.lastMarketAt! > config.discoveryPollMs * 2)
+        (!watchable && !lowCapMomentum) ||
+        token.watchReason !== candidateWatchReason ||
+        (Date.now() - token.lastMarketAt! > (lowCapMomentum ? config.lowCapCandidateMaxAgeSeconds * 1000 : config.discoveryPollMs * 2))
       ) {
         return;
       }
@@ -1073,8 +1090,22 @@ export class TradingEngine {
           trend1h <= config.trendMax1hPct &&
           trend4h >= config.minTrend4hPct &&
           (buySell >= 0.85 || volume5m >= config.minVolumeMon * 0.20);
+        const lowCapSetup = isLowCapMomentumCandidate(token, {
+      enabled: config.lowCapMomentumEnabled,
+      minMarketCapUsd: config.lowCapMinMarketCapUsd,
+      maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
+      minLiquidityUsd: config.lowCapMinLiquidityUsd,
+      minHolders: config.lowCapMinHolders,
+      minVolumeMon: config.lowCapMinVolumeMon,
+      minAgeMinutes: config.lowCapMinAgeMinutes,
+      minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
+      minVolume5mMon: config.lowCapMinVolume5mMon,
+      minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
+      minTrend1hPct: config.lowCapMinTrend1hPct,
+      minLocalScore: config.lowCapMinScore
+    });
 
-        if (!pullbackSetup && !activeMomentumSetup) {
+        if (!pullbackSetup && !activeMomentumSetup && !lowCapSetup) {
           throw error;
         }
 
@@ -1115,8 +1146,22 @@ export class TradingEngine {
           trend1h <= config.trendMax1hPct &&
           trend4h >= config.minTrend4hPct &&
           (buySell >= 0.85 || volume5m >= config.minVolumeMon * 0.20);
+        const lowCapSetup = isLowCapMomentumCandidate(token, {
+      enabled: config.lowCapMomentumEnabled,
+      minMarketCapUsd: config.lowCapMinMarketCapUsd,
+      maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
+      minLiquidityUsd: config.lowCapMinLiquidityUsd,
+      minHolders: config.lowCapMinHolders,
+      minVolumeMon: config.lowCapMinVolumeMon,
+      minAgeMinutes: config.lowCapMinAgeMinutes,
+      minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
+      minVolume5mMon: config.lowCapMinVolume5mMon,
+      minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
+      minTrend1hPct: config.lowCapMinTrend1hPct,
+      minLocalScore: config.lowCapMinScore
+    });
 
-        if (token.localScore >= config.aiOverrideScore && (pullbackSetup || momentumSetup)) {
+        if (token.localScore >= config.aiOverrideScore && (pullbackSetup || momentumSetup || lowCapSetup)) {
           decision = {
             ...decision,
             action: "BUY",
@@ -1164,7 +1209,9 @@ export class TradingEngine {
 
       if (
         decision.action === "BUY" &&
-        shouldOpen(
+        (lowCapMomentum
+          ? decision.confidence >= config.aiMinConfidence && lowCapMomentum
+          : shouldOpen(
           token,
           decision.confidence,
           config.minLocalScore,
@@ -1179,7 +1226,7 @@ export class TradingEngine {
           config.recoveryMinPct,
           config.trendMax1hPct,
           config.minTrend4hPct
-        )
+        ))
       ) {
         await this.openPosition(token, Math.max(0.05, Math.min(1, decision.sizePct)));
       }
@@ -1196,8 +1243,23 @@ export class TradingEngine {
 
   private async openPosition(token: TokenSnapshot, aiSizePct: number) {
     const ageMinutes = (Date.now() - token.createdAt) / 60000;
+    const lowCapMomentum = isLowCapMomentumCandidate(token, {
+      enabled: config.lowCapMomentumEnabled,
+      minMarketCapUsd: config.lowCapMinMarketCapUsd,
+      maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
+      minLiquidityUsd: config.lowCapMinLiquidityUsd,
+      minHolders: config.lowCapMinHolders,
+      minVolumeMon: config.lowCapMinVolumeMon,
+      minAgeMinutes: config.lowCapMinAgeMinutes,
+      minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
+      minVolume5mMon: config.lowCapMinVolume5mMon,
+      minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
+      minTrend1hPct: config.lowCapMinTrend1hPct,
+      minLocalScore: config.lowCapMinScore
+    });
     if (
       config.establishedOnly &&
+      !lowCapMomentum &&
       (!token.graduated ||
         ageMinutes < config.minEstablishedAgeMinutes ||
         (token.liquidityUsd ?? 0) < config.minLiquidityUsd ||
@@ -1514,6 +1576,13 @@ export class TradingEngine {
       profitProtectionStartPct: config.profitProtectionStartPct,
       profitProtectionFloorPct: config.profitProtectionFloorPct,
       profitProtectionRatio: config.profitProtectionRatio
+      ,lowCapMaxMarketCapUsd: config.lowCapMaxMarketCapUsd,
+      lowCapLiquidityExitRatio: config.lowCapLiquidityExitRatio,
+      lowCapSellPressureRatio: config.lowCapSellPressureRatio,
+      lowCapSellPressureMinVolumeMon: config.lowCapSellPressureMinVolumeMon,
+      lowCapTrendExitPct: config.lowCapTrendExitPct,
+      lowCapLossExitPct: config.lowCapLossExitPct,
+      lowCapPeakDrawdownExitPct: config.lowCapPeakDrawdownExitPct
     };
 
     for (const position of positions) {

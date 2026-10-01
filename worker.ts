@@ -58,7 +58,6 @@ interface Env {
   MIN_LIQUIDITY_USD?: string;
   MIN_HOLDERS?: string;
   MIN_VOLUME_USD?: string;
-  MIN_VOLUME_5M_USD?: string;
   DIP_MIN_PCT?: string;
   DIP_MAX_PCT?: string;
   RECOVERY_MIN_PCT?: string;

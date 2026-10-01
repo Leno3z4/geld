@@ -251,7 +251,7 @@ export async function sellToNative(
       amountOutMin: minOut(amountOut, slippagePct),
       token,
       to: account.address,
-      deadline: BigInt(Math.floor(Date.now() / 1000) + 45)
+      deadline: BigInt(Math.floor(Date.now() / 1000) + 90)
     }]
   });
 }

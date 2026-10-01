@@ -1094,6 +1094,9 @@ export class TradingEngine {
         ? volume5mUsd / volumePrev5mUsd
         : volume5mUsd > 0 ? 2 : 0;
 
+      if (apiTrend5mPct !== undefined && Number.isFinite(apiTrend5mPct)) {
+        token.apiTrend5mPct = apiTrend5mPct;
+      }
       if (apiTrend15mPct !== undefined && Number.isFinite(apiTrend15mPct)) {
         token.apiTrend15mPct = apiTrend15mPct;
       }

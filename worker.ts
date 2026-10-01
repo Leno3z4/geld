@@ -81,6 +81,26 @@ interface Env {
   DUST_POSITION_MON?: string;
   DAILY_MEAN_EXIT_PCT?: string;
   DAILY_MIN_SAMPLES?: string;
+  FAST_CYCLE_MS?: string;
+  LOW_CAP_MOMENTUM_ENABLED?: string;
+  LOW_CAP_MIN_MARKET_CAP_USD?: string;
+  LOW_CAP_MAX_MARKET_CAP_USD?: string;
+  LOW_CAP_MIN_LIQUIDITY_USD?: string;
+  LOW_CAP_MIN_HOLDERS?: string;
+  LOW_CAP_MIN_VOLUME_MON?: string;
+  LOW_CAP_MIN_AGE_MINUTES?: string;
+  LOW_CAP_CANDIDATE_MAX_AGE_SECONDS?: string;
+  LOW_CAP_MIN_BUY_SELL_RATIO_5M?: string;
+  LOW_CAP_MIN_VOLUME_5M_MON?: string;
+  LOW_CAP_MIN_VOLUME_ACCELERATION_5M?: string;
+  LOW_CAP_MIN_TREND_1H_PCT?: string;
+  LOW_CAP_MIN_SCORE?: string;
+  LOW_CAP_LIQUIDITY_EXIT_RATIO?: string;
+  LOW_CAP_SELL_PRESSURE_RATIO?: string;
+  LOW_CAP_SELL_PRESSURE_MIN_VOLUME_MON?: string;
+  LOW_CAP_TREND_EXIT_PCT?: string;
+  LOW_CAP_LOSS_EXIT_PCT?: string;
+  LOW_CAP_PEAK_DRAWDOWN_EXIT_PCT?: string;
 }
 
 function isTrue(value?: string) {
@@ -197,7 +217,27 @@ function hydrateProcessEnv(env: Env) {
     DEAD_MONEY_MAX_PNL_PCT: env.DEAD_MONEY_MAX_PNL_PCT,
     DUST_POSITION_MON: env.DUST_POSITION_MON,
     DAILY_MEAN_EXIT_PCT: env.DAILY_MEAN_EXIT_PCT,
-    DAILY_MIN_SAMPLES: env.DAILY_MIN_SAMPLES
+    DAILY_MIN_SAMPLES: env.DAILY_MIN_SAMPLES,
+    FAST_CYCLE_MS: env.FAST_CYCLE_MS,
+    LOW_CAP_MOMENTUM_ENABLED: env.LOW_CAP_MOMENTUM_ENABLED,
+    LOW_CAP_MIN_MARKET_CAP_USD: env.LOW_CAP_MIN_MARKET_CAP_USD,
+    LOW_CAP_MAX_MARKET_CAP_USD: env.LOW_CAP_MAX_MARKET_CAP_USD,
+    LOW_CAP_MIN_LIQUIDITY_USD: env.LOW_CAP_MIN_LIQUIDITY_USD,
+    LOW_CAP_MIN_HOLDERS: env.LOW_CAP_MIN_HOLDERS,
+    LOW_CAP_MIN_VOLUME_MON: env.LOW_CAP_MIN_VOLUME_MON,
+    LOW_CAP_MIN_AGE_MINUTES: env.LOW_CAP_MIN_AGE_MINUTES,
+    LOW_CAP_CANDIDATE_MAX_AGE_SECONDS: env.LOW_CAP_CANDIDATE_MAX_AGE_SECONDS,
+    LOW_CAP_MIN_BUY_SELL_RATIO_5M: env.LOW_CAP_MIN_BUY_SELL_RATIO_5M,
+    LOW_CAP_MIN_VOLUME_5M_MON: env.LOW_CAP_MIN_VOLUME_5M_MON,
+    LOW_CAP_MIN_VOLUME_ACCELERATION_5M: env.LOW_CAP_MIN_VOLUME_ACCELERATION_5M,
+    LOW_CAP_MIN_TREND_1H_PCT: env.LOW_CAP_MIN_TREND_1H_PCT,
+    LOW_CAP_MIN_SCORE: env.LOW_CAP_MIN_SCORE,
+    LOW_CAP_LIQUIDITY_EXIT_RATIO: env.LOW_CAP_LIQUIDITY_EXIT_RATIO,
+    LOW_CAP_SELL_PRESSURE_RATIO: env.LOW_CAP_SELL_PRESSURE_RATIO,
+    LOW_CAP_SELL_PRESSURE_MIN_VOLUME_MON: env.LOW_CAP_SELL_PRESSURE_MIN_VOLUME_MON,
+    LOW_CAP_TREND_EXIT_PCT: env.LOW_CAP_TREND_EXIT_PCT,
+    LOW_CAP_LOSS_EXIT_PCT: env.LOW_CAP_LOSS_EXIT_PCT,
+    LOW_CAP_PEAK_DRAWDOWN_EXIT_PCT: env.LOW_CAP_PEAK_DRAWDOWN_EXIT_PCT
   };
 
   for (const [key, value] of Object.entries(mapping)) {
@@ -211,6 +251,24 @@ async function getRuntimeConfig(env: Env) {
 }
 
 export class GeldState extends DurableObject<Env> {
+  private async runFastCycle() {
+    if (this.cycleInFlight) return;
+    this.cycleInFlight = true;
+    try {
+      const engine = await this.getEngine();
+      if (engine.snapshot().running) await engine.runScheduledCycle();
+    } finally {
+      this.cycleInFlight = false;
+      if ((this.engine?.snapshot()?.running ?? false)) {
+        await this.ctx.storage.setAlarm(Date.now() + (await getRuntimeConfig(this.env)).fastCycleMs);
+      }
+    }
+  }
+
+  async alarm() {
+    await this.runFastCycle();
+  }
+
   async fetch(request: Request) {
     const secret = this.env.STATE_SYNC_SECRET;
 
@@ -236,6 +294,7 @@ export class GeldState extends DurableObject<Env> {
 
 export class GeldBot extends DurableObject<Env> {
   private engine: any = null;
+  private cycleInFlight = false;
 
   private async getEngine() {
     if (this.engine) return this.engine;
@@ -269,6 +328,7 @@ export class GeldBot extends DurableObject<Env> {
       } else {
         await engine.runScheduledCycle();
       }
+      await this.ctx.storage.setAlarm(Date.now() + (await getRuntimeConfig(this.env)).fastCycleMs);
 
       return Response.json(engine.snapshot());
     }
@@ -355,11 +415,13 @@ export class GeldBot extends DurableObject<Env> {
 
     if (request.method === "POST" && path === "/api/start") {
       await engine.startScheduled();
+      await this.ctx.storage.setAlarm(Date.now() + (await getRuntimeConfig(this.env)).fastCycleMs);
       return Response.json({ ok: true, state: engine.snapshot() });
     }
 
     if (request.method === "POST" && path === "/api/stop") {
       await engine.stop();
+      await this.ctx.storage.deleteAlarm();
       return Response.json({ ok: true, state: engine.snapshot() });
     }
 

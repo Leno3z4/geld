@@ -1482,28 +1482,35 @@ export class TradingEngine {
         config.minHolders,
         config.minVolumeUsd
       );
-      const lowCapMomentum = isLowCapMomentumCandidate(token, {
-      enabled: config.lowCapMomentumEnabled,
-      minMarketCapUsd: config.lowCapMinMarketCapUsd,
-      maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
-      minLiquidityUsd: config.lowCapMinLiquidityUsd,
-      minHolders: config.lowCapMinHolders,
-      minVolumeUsd: config.lowCapMinVolumeUsd,
-      minAgeMinutes: config.lowCapMinAgeMinutes,
-      minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
-      minVolume5mUsd: config.lowCapMinVolume5mUsd,
-      minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
-      minTrend1hPct: config.lowCapMinTrend1hPct,
-      minLocalScore: config.lowCapMinScore
-    });
-      const candidateWatchReason = lowCapMomentum
-        ? "ENTRY SETUP: low-cap momentum; awaiting AI"
-        : "ENTRY SETUP: established candidate; awaiting AI";
+      const lowCapMomentumBase = isLowCapMomentumCandidate(token, {
+        enabled: config.lowCapMomentumEnabled,
+        minMarketCapUsd: config.lowCapMinMarketCapUsd,
+        maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
+        minLiquidityUsd: config.lowCapMinLiquidityUsd,
+        minHolders: config.lowCapMinHolders,
+        minVolumeUsd: config.lowCapMinVolumeUsd,
+        minAgeMinutes: config.lowCapMinAgeMinutes,
+        minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
+        minVolume5mUsd: config.lowCapMinVolume5mUsd,
+        minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
+        minTrend1hPct: config.lowCapMinTrend1hPct,
+        minLocalScore: config.lowCapMinScore
+      });
+      const earlyLaunch = isEarlyLaunchCandidate(token);
+      const lowCapMomentum = lowCapMomentumBase || earlyLaunch;
+      const candidateWatchReason = earlyLaunch
+        ? "ENTRY SETUP: early launch momentum; awaiting AI"
+        : lowCapMomentum
+          ? "ENTRY SETUP: low-cap momentum; awaiting AI"
+          : "ENTRY SETUP: established candidate; awaiting AI";
       if (lowCapMomentum) token.watchReason = candidateWatchReason;
+      const candidateAgeLimitMs = earlyLaunch
+        ? config.earlyLaunchMaxAgeMinutes * 60 * 1000
+        : config.lowCapCandidateMaxAgeSeconds * 1000;
       if (
         (!watchable && !lowCapMomentum) ||
         (token.watchReason !== candidateWatchReason && !lowCapMomentum) ||
-        (Date.now() - token.lastMarketAt! > (lowCapMomentum ? config.lowCapCandidateMaxAgeSeconds * 1000 : config.discoveryPollMs * 2))
+        (Date.now() - (token.lastMarketAt ?? 0) > (lowCapMomentum ? candidateAgeLimitMs : config.discoveryPollMs * 2))
       ) {
         return;
       }

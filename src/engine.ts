@@ -20,7 +20,7 @@ import {
 } from "./nadfun.js";
 import { StateStore } from "./store.js";
 import { GeminiBrain } from "./ai.js";
-import { SeasonalityModel, entryGateDiagnostics, positionExitSignal, scoreToken, shouldClose, shouldOpen, shouldWatch, updateMarketMetrics, curveProgressPct, type EntryGateRules, type PositionExitRules } from "./strategy.js";
+import { SeasonalityModel, entryGateDiagnostics, positionExitSignal, scoreToken, selectEntryStrategy, shouldClose, shouldOpen, shouldWatch, updateMarketMetrics, curveProgressPct, type EntryGateRules, type PositionExitRules } from "./strategy.js";
 import type { BotState, Position, TokenSnapshot } from "./types.js";
 import { formatUnits } from "viem";
 
@@ -323,7 +323,7 @@ export class TradingEngine {
           const previous = history.at(-1);
           if (!previous || Date.now() - previous.ts >= config.priceSampleMs) {
             history.push({ ts: Date.now(), priceMon: token.priceMon });
-            token.priceHistory = history.slice(-72);
+            token.priceHistory = history.slice(-300);
             if (previous && previous.priceMon > 0) {
               const sampleReturn = (token.priceMon / previous.priceMon - 1) * 100;
               this.seasonality.observeReturn(Date.now(), sampleReturn);
@@ -1002,6 +1002,7 @@ export class TradingEngine {
       updateMarketMetrics(token);
       token.progressPct = curveProgressPct(token);
       token.localScore = scoreToken(token, this.seasonality);
+      token.entryStrategy = selectEntryStrategy(token, config.dailyMinSamples);
 
       const watchable = shouldWatch(
         token,
@@ -1422,8 +1423,10 @@ export class TradingEngine {
             pnlMon: 0,
             pnlPct: 0,
             peakMon: currentMon,
+            strategy: token.entryStrategy ?? "UNKNOWN",
             peakPnlPct: 0,
             entryLiquidityUsd: token.liquidityUsd ?? 0,
+            strategy: token.entryStrategy ?? "UNKNOWN",
             openedAt: Date.now(),
             lastAiAt: 0,
             entryTx: "RECOVERED_ONCHAIN_BALANCE",
@@ -1467,6 +1470,13 @@ export class TradingEngine {
       takeProfitPct: config.takeProfitPct,
       trailingPct: config.trailingPct,
       maxHoldMinutes: config.maxHoldMinutes,
+      staleLossExitMinutes: config.staleLossExitMinutes,
+      staleLossExitPct: config.staleLossExitPct,
+      deadMoneyExitMinutes: config.deadMoneyExitMinutes,
+      deadMoneyMaxPnlPct: config.deadMoneyMaxPnlPct,
+      dustPositionMon: config.dustPositionMon,
+      dailyMeanExitPct: config.dailyMeanExitPct,
+      dailyMinSamples: config.dailyMinSamples,
       minLiquidityUsd: config.minLiquidityUsd,
       liquidityExitRatio: config.liquidityExitRatio,
       earlyExitLossPct: config.earlyExitLossPct,
@@ -1494,6 +1504,7 @@ export class TradingEngine {
           await this.enrichToken(token);
           updateMarketMetrics(token);
           token.localScore = scoreToken(token, this.seasonality);
+          token.entryStrategy = selectEntryStrategy(token, config.dailyMinSamples);
           this.store.upsertToken(token);
         }
 
@@ -1582,7 +1593,10 @@ export class TradingEngine {
         });
 
         if (decision.action === "SELL" && decision.confidence >= config.aiMinConfidence) {
-          const aiSellPct = Math.max(5, Math.min(100, decision.sizePct * 100));
+          const aiSellPct =
+            position.pnlPct <= config.staleLossExitPct || decision.confidence >= 0.80
+              ? 100
+              : Math.max(25, Math.min(100, decision.sizePct * 100));
           await this.sellPosition(
             position,
             aiSellPct,

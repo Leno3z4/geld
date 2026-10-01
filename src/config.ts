@@ -144,6 +144,7 @@ export const config = {
   fastCycleMs: Math.max(10000, num("FAST_CYCLE_MS", 10000)),
 
   nadfunApiUrl: process.env.NADFUN_API_URL ?? "https://api.nad.fun",
+  nadfunSiteUrl: process.env.NADFUN_SITE_URL ?? "https://nad.fun",
   nadfunApiKey: process.env.NADFUN_API_KEY ?? "",
 
   geminiKeys: csv("GEMINI_API_KEYS"),

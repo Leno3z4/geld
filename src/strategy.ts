@@ -184,6 +184,40 @@ function historyMetrics(token: TokenSnapshot) {
   };
 }
 
+export function isLowCapMomentumCandidate(
+  token: TokenSnapshot,
+  rules: {
+    enabled: boolean;
+    minMarketCapUsd: number;
+    maxMarketCapUsd: number;
+    minLiquidityUsd: number;
+    minHolders: number;
+    minVolumeMon: number;
+    minAgeMinutes: number;
+    minBuySellRatio5m: number;
+    minVolume5mMon: number;
+    minVolumeAcceleration5m: number;
+    minTrend1hPct: number;
+    minLocalScore: number;
+  }
+) {
+  if (!rules.enabled) return false;
+  const ageMinutes = Math.max(0, (Date.now() - token.createdAt) / 60000);
+  const marketCap = token.marketCapUsd ?? 0;
+  const liquidity = token.liquidityUsd ?? 0;
+  const holders = token.holders ?? 0;
+  const volume = token.volumeMon ?? 0;
+  const ratio = token.buySellRatio5m ?? 0;
+  const volume5m = token.volume5mMon ?? 0;
+  const acceleration = token.volumeAcceleration5m ?? 0;
+  const trend1h = token.trendPct1h ?? token.changePct ?? 0;
+  return marketCap >= rules.minMarketCapUsd && marketCap <= rules.maxMarketCapUsd &&
+    liquidity >= rules.minLiquidityUsd && holders >= rules.minHolders &&
+    volume >= rules.minVolumeMon && ageMinutes >= rules.minAgeMinutes &&
+    ratio >= rules.minBuySellRatio5m && volume5m >= rules.minVolume5mMon &&
+    acceleration >= rules.minVolumeAcceleration5m && trend1h >= rules.minTrend1hPct &&
+    token.localScore >= rules.minLocalScore;
+}
 export function selectEntryStrategy(token: TokenSnapshot, minDailySamples = 24) {
   const dip = token.dipPct ?? 0;
   const trend1h = token.trendPct1h ?? 0;
@@ -576,6 +610,13 @@ export interface PositionExitRules {
   profitProtectionStartPct: number;
   profitProtectionFloorPct: number;
   profitProtectionRatio: number;
+  lowCapMaxMarketCapUsd: number;
+  lowCapLiquidityExitRatio: number;
+  lowCapSellPressureRatio: number;
+  lowCapSellPressureMinVolumeMon: number;
+  lowCapTrendExitPct: number;
+  lowCapLossExitPct: number;
+  lowCapPeakDrawdownExitPct: number;
 }
 
 export interface PositionExitSignal {
@@ -601,8 +642,27 @@ export function positionExitSignal(
   const dayLowDistance = token?.distanceFromDayLowPct ?? 0;
   const dayAvgDistance = token?.distanceFromDayAvgPct ?? 0;
   const daySamples = token?.daySamples ?? 0;
+  const marketCapUsd = token?.marketCapUsd ?? 0;
+  const lowCapMode = marketCapUsd > 0 && marketCapUsd <= rules.lowCapMaxMarketCapUsd;
 
   // Protective conditions always win over profit-seeking AI guidance.
+  if (lowCapMode && token) {
+    const liquidity = token.liquidityUsd ?? 0;
+    const liquidityBroken = liquidity > 0 && (
+      liquidity < rules.minLiquidityUsd ||
+      ((position.entryLiquidityUsd ?? 0) > 0 && liquidity < (position.entryLiquidityUsd ?? 0) * rules.lowCapLiquidityExitRatio)
+    );
+    if (liquidityBroken) return { kind: "FULL", sellPct: 100, reason: "LOW_CAP_LIQUIDITY_BREAK" };
+    if (flowVolume >= rules.lowCapSellPressureMinVolumeMon && flowRatio > 0 && flowRatio <= rules.lowCapSellPressureRatio && trend1h <= rules.lowCapTrendExitPct) {
+      return { kind: "FULL", sellPct: 100, reason: "LOW_CAP_SELL_PRESSURE" };
+    }
+    if (pnlPct <= rules.lowCapLossExitPct && trend1h <= rules.lowCapTrendExitPct) {
+      return { kind: "FULL", sellPct: 100, reason: "LOW_CAP_MOMENTUM_BREAK" };
+    }
+    if (position.peakMon > position.entryMon && position.currentMon <= position.peakMon * (1 - rules.lowCapPeakDrawdownExitPct / 100)) {
+      return { kind: "FULL", sellPct: 100, reason: "LOW_CAP_PEAK_REVERSAL" };
+    }
+  }
   if (pnlPct <= -rules.hardStopPct) {
     return { kind: "FULL", sellPct: 100, reason: "HARD_STOP" };
   }

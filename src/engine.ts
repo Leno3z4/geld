@@ -1609,19 +1609,20 @@ export class TradingEngine {
           trend4h >= config.minTrend4hPct &&
           (buySell >= 0.85 || volume5mUsd >= config.minVolume5mUsd * 0.20);
         const lowCapSetup = isLowCapMomentumCandidate(token, {
-      enabled: config.lowCapMomentumEnabled,
-      minMarketCapUsd: config.lowCapMinMarketCapUsd,
-      maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
-      minLiquidityUsd: config.lowCapMinLiquidityUsd,
-      minHolders: config.lowCapMinHolders,
-      minVolumeUsd: config.lowCapMinVolumeUsd,
-      minAgeMinutes: config.lowCapMinAgeMinutes,
-      minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
-      minVolume5mUsd: config.lowCapMinVolume5mUsd,
-      minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
-      minTrend1hPct: config.lowCapMinTrend1hPct,
-      minLocalScore: config.lowCapMinScore
-    });
+          enabled: config.lowCapMomentumEnabled,
+          minMarketCapUsd: config.lowCapMinMarketCapUsd,
+          maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
+          minLiquidityUsd: config.lowCapMinLiquidityUsd,
+          minHolders: config.lowCapMinHolders,
+          minVolumeUsd: config.lowCapMinVolumeUsd,
+          minAgeMinutes: config.lowCapMinAgeMinutes,
+          minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
+          minVolume5mUsd: config.lowCapMinVolume5mUsd,
+          minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
+          minTrend1hPct: config.lowCapMinTrend1hPct,
+          minLocalScore: config.lowCapMinScore
+        });
+        const earlyLaunchSetup = isEarlyLaunchCandidate(token);
 
         if (token.localScore >= config.aiOverrideScore && (pullbackSetup || momentumSetup || lowCapSetup || earlyLaunchSetup)) {
           decision = {
@@ -1660,7 +1661,13 @@ export class TradingEngine {
       // and sub-$25k assets. That is not the correct lane for low-cap momentum,
       // so present the low-cap gates instead of showing a misleading "not
       // graduated / MC < $25k" blocker in the dashboard.
-      if (lowCapMomentum) {
+      const earlyLaunch = isEarlyLaunchCandidate(token);
+      if (earlyLaunch) {
+        const earlyBlockers = earlyLaunchBlockers(token);
+        aiDiagnostics.primary = earlyBlockers[0] ?? "early-launch setup passed";
+        aiDiagnostics.blockers = earlyBlockers;
+        aiDiagnostics.readyForAi = earlyBlockers.length === 0;
+      } else if (lowCapMomentum) {
         const lowCapBlockers = lowCapMomentumBlockers(token, {
           enabled: config.lowCapMomentumEnabled,
           minMarketCapUsd: config.lowCapMinMarketCapUsd,

@@ -257,24 +257,6 @@ async function getRuntimeConfig(env: Env) {
 }
 
 export class GeldState extends DurableObject<Env> {
-  private async runFastCycle() {
-    if (this.cycleInFlight) return;
-    this.cycleInFlight = true;
-    try {
-      const engine = await this.getEngine();
-      if (engine.snapshot().running) await engine.runScheduledCycle();
-    } finally {
-      this.cycleInFlight = false;
-      if ((this.engine?.snapshot()?.running ?? false)) {
-        await this.ctx.storage.setAlarm(Date.now() + (await getRuntimeConfig(this.env)).fastCycleMs);
-      }
-    }
-  }
-
-  async alarm() {
-    await this.runFastCycle();
-  }
-
   async fetch(request: Request) {
     const secret = this.env.STATE_SYNC_SECRET;
 

@@ -973,39 +973,82 @@ export class TradingEngine {
     if (now - (token.lastFlowApiAt ?? 0) < config.flowApiRefreshMs) return;
 
     try {
-      const response = await fetch(
-        config.nadfunApiUrl + "/trade/swap-history/" + token.token + "?page=1&limit=100&direction=DESC",
-        {
-          headers: {
-            accept: "application/json",
-            ...(config.nadfunApiKey ? { "X-API-Key": config.nadfunApiKey } : {})
-          }
-        }
-      );
-      if (!response.ok) throw new Error("NadFun swap-history failed: HTTP " + response.status);
+      const headers = {
+        accept: "application/json",
+        ...(config.nadfunApiKey ? { "X-API-Key": config.nadfunApiKey } : {})
+      };
 
-      const payload = decodeNadfunPayload(await response.text());
-      const swaps = Array.isArray(payload?.swaps) ? payload.swaps : [];
-      const fiveAgo = now - 5 * 60 * 1000;
-      const tenAgo = now - 10 * 60 * 1000;
+      const [historyResponse, metricsResponse] = await Promise.all([
+        fetch(
+          config.nadfunApiUrl + "/trade/swap-history/" + token.token + "?page=1&limit=100&direction=DESC",
+          { headers }
+        ),
+        fetch(
+          config.nadfunApiUrl + "/trade/metrics/" + token.token + "?timeframes=1,5,15,30,60",
+          { headers }
+        )
+      ]);
+
+      if (!historyResponse.ok && !metricsResponse.ok) {
+        throw new Error(
+          "NadFun flow endpoints failed: swap-history=" +
+          historyResponse.status + " metrics=" + metricsResponse.status
+        );
+      }
 
       let buy5Usd = 0;
       let sell5Usd = 0;
       let buyPrev5Usd = 0;
       let sellPrev5Usd = 0;
 
-      for (const swap of swaps) {
-        const info = swap?.swap_info ?? {};
-        const ts = createdAtMs(info.created_at);
-        const valueUsd = numeric(info.value);
-        if (!(ts > tenAgo) || !(valueUsd > 0)) continue;
+      if (historyResponse.ok) {
+        const payload = decodeNadfunPayload(await historyResponse.text());
+        const swaps = Array.isArray(payload?.swaps) ? payload.swaps : [];
+        const fiveAgo = now - 5 * 60 * 1000;
+        const tenAgo = now - 10 * 60 * 1000;
 
-        if (ts > fiveAgo) {
-          if (String(info.event_type).toUpperCase() === "BUY") buy5Usd += valueUsd;
-          else if (String(info.event_type).toUpperCase() === "SELL") sell5Usd += valueUsd;
-        } else {
-          if (String(info.event_type).toUpperCase() === "BUY") buyPrev5Usd += valueUsd;
-          else if (String(info.event_type).toUpperCase() === "SELL") sellPrev5Usd += valueUsd;
+        for (const swap of swaps) {
+          const info = swap?.swap_info ?? {};
+          const ts = createdAtMs(info.created_at);
+          const valueUsd = numeric(info.value);
+          if (!(ts > tenAgo) || !(valueUsd > 0)) continue;
+
+          const eventType = String(info.event_type).toUpperCase();
+          if (ts > fiveAgo) {
+            if (eventType === "BUY") buy5Usd += valueUsd;
+            else if (eventType === "SELL") sell5Usd += valueUsd;
+          } else {
+            if (eventType === "BUY") buyPrev5Usd += valueUsd;
+            else if (eventType === "SELL") sellPrev5Usd += valueUsd;
+          }
+        }
+      }
+
+      let apiTrend15mPct: number | undefined;
+      let apiTrend1hPct: number | undefined;
+      let metrics5mBuyUsd: number | undefined;
+      let metrics5mSellUsd: number | undefined;
+      if (metricsResponse.ok) {
+        const payload = decodeNadfunPayload(await metricsResponse.text());
+        const metrics = Array.isArray(payload?.metrics) ? payload.metrics : [];
+        const byTimeframe = new Map(metrics.map((metric: any) => [String(metric?.timeframe), metric]));
+
+        const metric15 = byTimeframe.get("15");
+        const metric60 = byTimeframe.get("60");
+        const metric5 = byTimeframe.get("5");
+
+        apiTrend15mPct = Number(metric15?.percent);
+        apiTrend1hPct = Number(metric60?.percent);
+
+        const apiBuy5 = numeric(metric5?.volume?.buy);
+        const apiSell5 = numeric(metric5?.volume?.sell);
+        if (Number.isFinite(apiBuy5) && Number.isFinite(apiSell5)) {
+          metrics5mBuyUsd = apiBuy5;
+          metrics5mSellUsd = apiSell5;
+
+          // The metrics endpoint is authoritative for the current 5m window.
+          buy5Usd = apiBuy5;
+          sell5Usd = apiSell5;
         }
       }
 
@@ -1013,12 +1056,12 @@ export class TradingEngine {
       const volumePrev5mUsd = buyPrev5Usd + sellPrev5Usd;
       const quoteUsd = token.monUsdPrice ?? 0;
 
-      if (volume5mUsd > 0 && quoteUsd > 0) {
+      if (quoteUsd > 0) {
         token.volume5mMon = volume5mUsd / quoteUsd;
         token.volumePrev5mMon = volumePrev5mUsd / quoteUsd;
-      } else if (volume5mUsd === 0) {
+      } else {
         token.volume5mMon = 0;
-        token.volumePrev5mMon = volumePrev5mUsd > 0 && quoteUsd > 0 ? volumePrev5mUsd / quoteUsd : 0;
+        token.volumePrev5mMon = 0;
       }
 
       token.buySellRatio5m = volume5mUsd > 0
@@ -1027,6 +1070,17 @@ export class TradingEngine {
       token.volumeAcceleration5m = volumePrev5mUsd > 0
         ? volume5mUsd / volumePrev5mUsd
         : volume5mUsd > 0 ? 2 : 0;
+
+      if (apiTrend15mPct !== undefined && Number.isFinite(apiTrend15mPct)) {
+        token.apiTrend15mPct = apiTrend15mPct;
+      }
+      if (apiTrend1hPct !== undefined && Number.isFinite(apiTrend1hPct)) {
+        token.apiTrend1hPct = apiTrend1hPct;
+      }
+      if (metrics5mBuyUsd !== undefined) token.apiBuy5mUsd = metrics5mBuyUsd;
+      if (metrics5mSellUsd !== undefined) token.apiSell5mUsd = metrics5mSellUsd;
+      token.apiVolume5mUsd = volume5mUsd;
+
       token.lastFlowApiAt = now;
       updateMarketMetrics(token);
       token.localScore = scoreToken(token, this.seasonality);

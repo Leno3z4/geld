@@ -65,6 +65,8 @@ export const config = {
   positionLoopMs: num("POSITION_LOOP_MS", 2200),
   aiPositionReviewMs: num("AI_POSITION_REVIEW_MS", 30000),
   aiFastCooldownMs: num("AI_FAST_COOLDOWN_MS", 4000),
+  aiFallbackEnabled: bool("AI_FALLBACK_ENABLED", true),
+  aiFallbackMinScore: num("AI_FALLBACK_MIN_SCORE", 55),
   candidateMaxAgeSeconds: num("CANDIDATE_MAX_AGE_SECONDS", 180),
   eventBackfillBlocks: Math.max(0, Math.floor(num("EVENT_BACKFILL_BLOCKS", 1000))),
   // Monad currently rejects eth_getLogs ranges wider than 100 blocks.

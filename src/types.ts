@@ -161,6 +161,7 @@ export interface PendingExecution {
   amountRaw?: string;
   decimals?: number;
   txHash?: string;
+  submittedAt?: number;
   createdAt: number;
 }
 
@@ -172,6 +173,7 @@ export interface BotStats {
   losses: number;
   lastProcessedBlock?: string;
   lastCycleAt?: number;
+  lastRiskCycleAt?: number;
   lastError?: string;
   startedAt?: number;
   lastLogCount?: number;

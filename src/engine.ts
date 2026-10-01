@@ -1670,6 +1670,25 @@ export class TradingEngine {
         this.account.address
       );
 
+      const stateNow = this.store.get();
+      for (const position of Object.values(stateNow.positions)) {
+        if (position.status !== "OPEN" && position.status !== "CLOSING") continue;
+        const balanceRaw = balances.get(position.token.toLowerCase()) ?? 0n;
+        if (balanceRaw > 0n) continue;
+
+        // The wallet is the source of truth for whether tokens are still held.
+        // A prior successful sell can leave a stale OPEN position if the old
+        // reconciliation path refused to close on a zero on-chain balance.
+        position.status = "CLOSED";
+        position.currentMon = 0;
+        position.pnlMon = 0;
+        position.pnlPct = 0;
+        position.peakMon = 0;
+        position.closeReason = "ONCHAIN_BALANCE_ZERO_RECONCILED";
+        position.amountRaw = "0";
+        this.store.upsertPosition(position);
+      }
+
       const candidates: Array<{ token: TokenSnapshot; balanceRaw: bigint }> = [];
       const quoteRequests: Array<{ token: Address; amountRaw: bigint }> = [];
 

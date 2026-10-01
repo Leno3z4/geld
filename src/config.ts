@@ -118,7 +118,7 @@ export const config = {
   aiCandidateLimit: Math.max(1, Math.min(15, Math.floor(num("AI_CANDIDATE_LIMIT", 8)))),
   discoveryPollMs: Math.max(30000, num("DISCOVERY_POLL_MS", 60000)),
   priceSampleMs: Math.max(30000, num("PRICE_SAMPLE_MS", 60000)),
-  fastCycleMs: Math.max(30000, num("FAST_CYCLE_MS", 30000)),
+  fastCycleMs: Math.max(10000, num("FAST_CYCLE_MS", 10000)),
 
   nadfunApiUrl: process.env.NADFUN_API_URL ?? "https://api.nadapp.net",
   nadfunApiKey: process.env.NADFUN_API_KEY ?? "",

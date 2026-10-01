@@ -73,6 +73,7 @@ interface Env {
   AI_FAST_COOLDOWN_MS?: string;
   AI_FALLBACK_ENABLED?: string;
   AI_FALLBACK_MIN_SCORE?: string;
+  AI_OVERRIDE_SCORE?: string;
 }
 
 function isTrue(value?: string) {
@@ -181,7 +182,8 @@ function hydrateProcessEnv(env: Env) {
     AI_POSITION_REVIEW_MS: env.AI_POSITION_REVIEW_MS,
     AI_FAST_COOLDOWN_MS: env.AI_FAST_COOLDOWN_MS,
     AI_FALLBACK_ENABLED: env.AI_FALLBACK_ENABLED,
-    AI_FALLBACK_MIN_SCORE: env.AI_FALLBACK_MIN_SCORE
+    AI_FALLBACK_MIN_SCORE: env.AI_FALLBACK_MIN_SCORE,
+    AI_OVERRIDE_SCORE: env.AI_OVERRIDE_SCORE
   };
 
   for (const [key, value] of Object.entries(mapping)) {

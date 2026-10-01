@@ -23,6 +23,9 @@ export interface TokenSnapshot {
   buyMon: number;
   sellMon: number;
   progressPct: number;
+  progressVelocityPctPerMin?: number;
+  creatorInitialBuyMon?: number;
+  progressHistory?: Array<{ ts: number; progressPct: number }>;
   graduated: boolean;
   locked: boolean;
   holders: number;

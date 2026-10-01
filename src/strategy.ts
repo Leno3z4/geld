@@ -101,15 +101,25 @@ function historyMetrics(token: TokenSnapshot) {
       drawdownFromAthPct: 0,
       trend1hPct: 0,
       trend4hPct: 0,
-      rebound1hPct: 0
+      rebound1hPct: 0,
+      dayOpenPriceMon: 0,
+      dayHighPriceMon: 0,
+      dayLowPriceMon: 0,
+      dayAvgPriceMon: 0,
+      distanceFromDayLowPct: 0,
+      distanceFromDayAvgPct: 0,
+      distanceFromDayHighPct: 0
     };
   }
 
   const now = Date.now();
   const oneHourAgo = now - 60 * 60 * 1000;
   const fourHoursAgo = now - 4 * 60 * 60 * 1000;
+  const dayAgo = now - 24 * 60 * 60 * 1000;
   const recent = history.filter((x) => x.ts >= oneHourAgo);
   const fourHour = history.filter((x) => x.ts >= fourHoursAgo);
+  const day = history.filter((x) => x.ts >= dayAgo);
+  const daySeries = [...day, { ts: now, priceMon: token.priceMon }].sort((a, b) => a.ts - b.ts);
 
   const observedPeak4h = Math.max(token.priceMon, ...fourHour.map((x) => x.priceMon));
   const observedDipPct = observedPeak4h > 0
@@ -125,10 +135,6 @@ function historyMetrics(token: TokenSnapshot) {
 
   const oneHourBase = history.find((x) => x.ts <= oneHourAgo);
   const fourHourBase = history.find((x) => x.ts <= fourHoursAgo);
-
-  // Never relabel a short warm-up window as "1h" or "4h" history.
-  // Established tokens can enter after launch, so use the market snapshot
-  // change only for trend fallback; do not manufacture a dip without observed history.
   const marketChangePct = Number.isFinite(token.changePct) ? token.changePct! : 0;
 
   const trend1hPct = oneHourBase && oneHourBase.priceMon > 0
@@ -145,17 +151,82 @@ function historyMetrics(token: TokenSnapshot) {
     ? (token.priceMon / oneHourLow - 1) * 100
     : 0;
 
+  const dayOpenPriceMon = daySeries[0]?.priceMon ?? token.priceMon;
+  const dayHighPriceMon = Math.max(token.priceMon, ...daySeries.map((x) => x.priceMon));
+  const dayLowPriceMon = Math.min(token.priceMon, ...daySeries.map((x) => x.priceMon));
+  const dayAvgPriceMon =
+    daySeries.reduce((sum, x) => sum + x.priceMon, 0) / Math.max(1, daySeries.length);
+  const distanceFromDayLowPct = dayLowPriceMon > 0
+    ? (token.priceMon / dayLowPriceMon - 1) * 100
+    : 0;
+  const distanceFromDayAvgPct = dayAvgPriceMon > 0
+    ? (token.priceMon / dayAvgPriceMon - 1) * 100
+    : 0;
+  const distanceFromDayHighPct = dayHighPriceMon > 0
+    ? (token.priceMon / dayHighPriceMon - 1) * 100
+    : 0;
+
   return {
     peak4h: observedPeak4h,
-    // Keep the current/setup dip separate from all-time drawdown. An old ATH
-    // must not be mistaken for a fresh entry signal.
     dipPct: observedDipPct,
     drawdownFromRecentPeakPct: observedDipPct,
     drawdownFromAthPct,
     trend1hPct,
     trend4hPct,
-    rebound1hPct
+    rebound1hPct,
+    dayOpenPriceMon,
+    dayHighPriceMon,
+    dayLowPriceMon,
+    dayAvgPriceMon,
+    distanceFromDayLowPct,
+    distanceFromDayAvgPct,
+    distanceFromDayHighPct
   };
+}
+
+export function selectEntryStrategy(token: TokenSnapshot) {
+  const dip = token.dipPct ?? 0;
+  const trend1h = token.trendPct1h ?? 0;
+  const trend4h = token.trendPct4h ?? 0;
+  const dayAvg = token.dayAvgPriceMon ?? 0;
+  const dayLow = token.dayLowPriceMon ?? 0;
+  const dayLowDistance = token.distanceFromDayLowPct ?? 0;
+  const dayAvgDistance = token.distanceFromDayAvgPct ?? 0;
+  const buySell = token.buySellRatio5m ?? 0;
+  const volume5m = token.volume5mMon ?? 0;
+  const acceleration = token.volumeAcceleration5m ?? 0;
+
+  const dailyMeanReversion =
+    dayAvg > 0 &&
+    dayLow > 0 &&
+    dayAvgDistance <= -8 &&
+    dayLowDistance <= 6 &&
+    dayLowDistance >= 0 &&
+    trend4h >= -25;
+
+  const dipReversion =
+    dip >= 3 &&
+    dip <= 50 &&
+    trend1h <= 20 &&
+    trend4h >= -25;
+
+  const momentum =
+    trend1h > 0 &&
+    trend1h <= 20 &&
+    trend4h >= -25 &&
+    (buySell >= 0.95 || acceleration >= 1.10 || volume5m >= 5);
+
+  const flow =
+    buySell >= 1.25 &&
+    acceleration >= 1.05 &&
+    volume5m >= 5 &&
+    trend4h >= -25;
+
+  if (dailyMeanReversion) return "DAILY_MEAN_REVERSION" as const;
+  if (flow) return "FLOW" as const;
+  if (momentum) return "MOMENTUM" as const;
+  if (dipReversion) return "DIP_REVERSION" as const;
+  return "HYBRID" as const;
 }
 
 function flowMetrics(token: TokenSnapshot) {
@@ -204,6 +275,14 @@ export function updateMarketMetrics(token: TokenSnapshot) {
   token.trendPct1h = metrics.trend1hPct;
   token.trendPct4h = metrics.trend4hPct;
   token.reboundPct1h = metrics.rebound1hPct;
+  token.dayOpenPriceMon = metrics.dayOpenPriceMon;
+  token.dayHighPriceMon = metrics.dayHighPriceMon;
+  token.dayLowPriceMon = metrics.dayLowPriceMon;
+  token.dayAvgPriceMon = metrics.dayAvgPriceMon;
+  token.daySamples = (token.priceHistory ?? []).filter((x) => x.ts >= Date.now() - 24 * 60 * 60 * 1000).length + 1;
+  token.distanceFromDayLowPct = metrics.distanceFromDayLowPct;
+  token.distanceFromDayAvgPct = metrics.distanceFromDayAvgPct;
+  token.distanceFromDayHighPct = metrics.distanceFromDayHighPct;
   token.buySellRatio5m = flow.buySellRatio5m;
   token.volume5mMon = flow.volume5mMon;
   token.volumePrev5mMon = flow.volumePrev5mMon;
@@ -239,6 +318,14 @@ export function scoreToken(token: TokenSnapshot, seasonality: SeasonalityModel) 
 
   // A small rebound is preferable to catching a straight falling knife.
   const reboundScore = clamp(metrics.rebound1hPct * 2.5, 0, 10);
+  const dailyMeanScore =
+    metrics.dayAvgPriceMon > 0 && metrics.distanceFromDayAvgPct < 0
+      ? clamp(-metrics.distanceFromDayAvgPct * 0.75, 0, 9)
+      : 0;
+  const dayLowProximityScore =
+    metrics.distanceFromDayLowPct >= 0 && metrics.distanceFromDayLowPct <= 6
+      ? clamp(6 - metrics.distanceFromDayLowPct, 0, 6)
+      : 0;
   const flow = flowMetrics(token);
   const flowScore = flow.volume5mMon <= 0
     ? 0
@@ -252,6 +339,8 @@ export function scoreToken(token: TokenSnapshot, seasonality: SeasonalityModel) 
     momentumScore +
     dipScore +
     reboundScore +
+    dailyMeanScore +
+    dayLowProximityScore +
     flowScore +
     seasonalityAdjustment,
     0,
@@ -327,7 +416,21 @@ export function entryGateDiagnostics(
     metrics.trend1hPct <= rules.trendMax1hPct &&
     metrics.trend4hPct >= rules.minTrend4hPct;
 
-  if (!dipInEntryBand && !momentumEntry) {
+  const dailyMeanEntry =
+    metrics.dayAvgPriceMon > 0 &&
+    metrics.dayLowPriceMon > 0 &&
+    metrics.distanceFromDayAvgPct <= -8 &&
+    metrics.distanceFromDayLowPct <= 6 &&
+    metrics.distanceFromDayLowPct >= 0 &&
+    metrics.trend4hPct >= rules.minTrend4hPct;
+
+  const flowEntry =
+    metrics.trend4hPct >= rules.minTrend4hPct &&
+    token.buySellRatio5m !== undefined &&
+    token.buySellRatio5m >= 1.15 &&
+    (token.volume5mMon ?? 0) >= Math.max(2, rules.minVolumeMon * 0.10);
+
+  if (!dipInEntryBand && !momentumEntry && !dailyMeanEntry && !flowEntry) {
     if (metrics.dipPct < rules.dipMinPct) {
       blockers.push(`dip ${metrics.dipPct.toFixed(1)}% < ${rules.dipMinPct}% and momentum is not strong enough`);
     } else if (metrics.dipPct > rules.dipMaxPct) {
@@ -376,6 +479,10 @@ export function entryGateDiagnostics(
       rebound1hPct: metrics.rebound1hPct,
       trend1hPct: metrics.trend1hPct,
       trend4hPct: metrics.trend4hPct,
+      dayLowPriceMon: metrics.dayLowPriceMon,
+      dayAvgPriceMon: metrics.dayAvgPriceMon,
+      distanceFromDayLowPct: metrics.distanceFromDayLowPct,
+      distanceFromDayAvgPct: metrics.distanceFromDayAvgPct,
       localScore: token.localScore
     },
     aiConfidence

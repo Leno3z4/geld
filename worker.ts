@@ -87,6 +87,7 @@ interface Env {
   DISCOVERY_POLL_MS?: string;
   PRICE_SAMPLE_MS?: string;
   NADFUN_API_URL?: string;
+  NADFUN_SITE_URL?: string;
   EVENT_POLL_MS?: string;
   POSITION_LOOP_MS?: string;
   AI_POSITION_REVIEW_MS?: string;
@@ -203,6 +204,7 @@ function hydrateProcessEnv(env: Env) {
     STATE_SYNC_SECRET: env.STATE_SYNC_SECRET,
     STATE_SYNC_URL: valueFor("STATE_SYNC_URL", env.STATE_SYNC_URL),
     NADFUN_API_URL: valueFor("NADFUN_API_URL", env.NADFUN_API_URL),
+    NADFUN_SITE_URL: valueFor("NADFUN_SITE_URL", env.NADFUN_SITE_URL),
     MONAD_RPC_URL: valueFor("MONAD_RPC_URL", env.MONAD_RPC_URL),
     MONAD_WS_URL: valueFor("MONAD_WS_URL", env.MONAD_WS_URL),
     GEMINI_FAST_MODEL: valueFor("GEMINI_FAST_MODEL", env.GEMINI_FAST_MODEL),

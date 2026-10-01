@@ -351,14 +351,14 @@ export class TradingEngine {
 
         updateMarketMetrics(token);
         token.localScore = scoreToken(token, this.seasonality);
-        token.entryStrategy = selectEntryStrategy(token, config.dailyMinSamples);
+        token.entryStrategy = selectEntryStrategy(token, config.dailyMinSamples, config.minVolume5mUsd);
 
         const watchable = shouldWatch(
           token,
           config.minLiquidityUsd,
           config.minMarketCapUsd,
           config.minHolders,
-          config.minVolumeMon
+          config.minVolumeUsd
         );
 
         const entryRules: EntryGateRules = {
@@ -366,7 +366,7 @@ export class TradingEngine {
           minLiquidityUsd: config.minLiquidityUsd,
           minMarketCapUsd: config.minMarketCapUsd,
           minHolders: config.minHolders,
-          minVolumeMon: config.minVolumeMon,
+          minVolumeMon: config.minVolumeUsd,
           dipMinPct: config.dipMinPct,
           dipMaxPct: config.dipMaxPct,
           recoveryMinPct: config.recoveryMinPct,
@@ -814,7 +814,7 @@ export class TradingEngine {
         (parsed.eventName === "Buy" || parsed.eventName === "Sell" || parsed.eventName === "Sync") &&
         this.store.get().running &&
         token.localScore >= config.minLocalScore &&
-        (Date.now() - token.createdAt) / 1000 <= (isLowCapMomentumCandidate(token, { enabled: config.lowCapMomentumEnabled, minMarketCapUsd: config.lowCapMinMarketCapUsd, maxMarketCapUsd: config.lowCapMaxMarketCapUsd, minLiquidityUsd: config.lowCapMinLiquidityUsd, minHolders: config.lowCapMinHolders, minVolumeMon: config.lowCapMinVolumeMon, minAgeMinutes: config.lowCapMinAgeMinutes, minBuySellRatio5m: config.lowCapMinBuySellRatio5m, minVolume5mMon: config.lowCapMinVolume5mMon, minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m, minTrend1hPct: config.lowCapMinTrend1hPct, minLocalScore: config.lowCapMinScore }) ? config.lowCapCandidateMaxAgeSeconds : config.candidateMaxAgeSeconds)
+        (Date.now() - token.createdAt) / 1000 <= (isLowCapMomentumCandidate(token, { enabled: config.lowCapMomentumEnabled, minMarketCapUsd: config.lowCapMinMarketCapUsd, maxMarketCapUsd: config.lowCapMaxMarketCapUsd, minLiquidityUsd: config.lowCapMinLiquidityUsd, minHolders: config.lowCapMinHolders, minVolumeMon: config.lowCapMinVolumeUsd, minAgeMinutes: config.lowCapMinAgeMinutes, minBuySellRatio5m: config.lowCapMinBuySellRatio5m, minVolume5mMon: config.lowCapMinVolume5mUsd, minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m, minTrend1hPct: config.lowCapMinTrend1hPct, minLocalScore: config.lowCapMinScore }) ? config.lowCapCandidateMaxAgeSeconds : config.candidateMaxAgeSeconds)
       ) {
         void this.maybeEvaluateCandidate(token);
       }
@@ -1028,7 +1028,7 @@ export class TradingEngine {
         config.minLiquidityUsd,
         config.minMarketCapUsd,
         config.minHolders,
-        config.minVolumeMon
+        config.minVolumeUsd
       );
       const lowCapMomentum = isLowCapMomentumCandidate(token, {
       enabled: config.lowCapMomentumEnabled,
@@ -1036,10 +1036,10 @@ export class TradingEngine {
       maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
       minLiquidityUsd: config.lowCapMinLiquidityUsd,
       minHolders: config.lowCapMinHolders,
-      minVolumeMon: config.lowCapMinVolumeMon,
+      minVolumeMon: config.lowCapMinVolumeUsd,
       minAgeMinutes: config.lowCapMinAgeMinutes,
       minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
-      minVolume5mMon: config.lowCapMinVolume5mMon,
+      minVolume5mMon: config.lowCapMinVolume5mUsd,
       minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
       minTrend1hPct: config.lowCapMinTrend1hPct,
       minLocalScore: config.lowCapMinScore
@@ -1090,17 +1090,17 @@ export class TradingEngine {
           trend1h > 0 &&
           trend1h <= config.trendMax1hPct &&
           trend4h >= config.minTrend4hPct &&
-          (buySell >= 0.85 || volume5m >= config.minVolumeMon * 0.20);
+          (buySell >= 0.85 || volume5m >= config.minVolumeUsd * 0.20);
         const lowCapSetup = isLowCapMomentumCandidate(token, {
       enabled: config.lowCapMomentumEnabled,
       minMarketCapUsd: config.lowCapMinMarketCapUsd,
       maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
       minLiquidityUsd: config.lowCapMinLiquidityUsd,
       minHolders: config.lowCapMinHolders,
-      minVolumeMon: config.lowCapMinVolumeMon,
+      minVolumeMon: config.lowCapMinVolumeUsd,
       minAgeMinutes: config.lowCapMinAgeMinutes,
       minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
-      minVolume5mMon: config.lowCapMinVolume5mMon,
+      minVolume5mMon: config.lowCapMinVolume5mUsd,
       minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
       minTrend1hPct: config.lowCapMinTrend1hPct,
       minLocalScore: config.lowCapMinScore
@@ -1146,17 +1146,17 @@ export class TradingEngine {
           trend1h > 0 &&
           trend1h <= config.trendMax1hPct &&
           trend4h >= config.minTrend4hPct &&
-          (buySell >= 0.85 || volume5m >= config.minVolumeMon * 0.20);
+          (buySell >= 0.85 || volume5m >= config.minVolumeUsd * 0.20);
         const lowCapSetup = isLowCapMomentumCandidate(token, {
       enabled: config.lowCapMomentumEnabled,
       minMarketCapUsd: config.lowCapMinMarketCapUsd,
       maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
       minLiquidityUsd: config.lowCapMinLiquidityUsd,
       minHolders: config.lowCapMinHolders,
-      minVolumeMon: config.lowCapMinVolumeMon,
+      minVolumeMon: config.lowCapMinVolumeUsd,
       minAgeMinutes: config.lowCapMinAgeMinutes,
       minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
-      minVolume5mMon: config.lowCapMinVolume5mMon,
+      minVolume5mMon: config.lowCapMinVolume5mUsd,
       minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
       minTrend1hPct: config.lowCapMinTrend1hPct,
       minLocalScore: config.lowCapMinScore
@@ -1181,7 +1181,7 @@ export class TradingEngine {
           minLiquidityUsd: config.minLiquidityUsd,
           minMarketCapUsd: config.minMarketCapUsd,
           minHolders: config.minHolders,
-          minVolumeMon: config.minVolumeMon,
+          minVolumeMon: config.minVolumeUsd,
           dipMinPct: config.dipMinPct,
           dipMaxPct: config.dipMaxPct,
           recoveryMinPct: config.recoveryMinPct,
@@ -1221,7 +1221,7 @@ export class TradingEngine {
           config.minLiquidityUsd,
           config.minMarketCapUsd,
           config.minHolders,
-          config.minVolumeMon,
+          config.minVolumeUsd,
           config.dipMinPct,
           config.dipMaxPct,
           config.recoveryMinPct,
@@ -1251,10 +1251,10 @@ export class TradingEngine {
       maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
       minLiquidityUsd: config.lowCapMinLiquidityUsd,
       minHolders: config.lowCapMinHolders,
-      minVolumeMon: config.lowCapMinVolumeMon,
+      minVolumeMon: config.lowCapMinVolumeUsd,
       minAgeMinutes: config.lowCapMinAgeMinutes,
       minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
-      minVolume5mMon: config.lowCapMinVolume5mMon,
+      minVolume5mMon: config.lowCapMinVolume5mUsd,
       minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
       minTrend1hPct: config.lowCapMinTrend1hPct,
       minLocalScore: config.lowCapMinScore
@@ -1568,7 +1568,7 @@ export class TradingEngine {
       momentumExitTrend1hPct: config.momentumExitTrend1hPct,
       momentumExitReboundPct: config.momentumExitReboundPct,
       sellPressureExitRatio: config.sellPressureExitRatio,
-      sellPressureMinVolumeMon: config.sellPressureMinVolumeMon,
+      sellPressureMinVolumeMon: config.sellPressureMinVolumeUsd,
       profitTake1Pct: config.profitTake1Pct,
       profitTake1SellPct: config.profitTake1SellPct,
       profitTake2Pct: config.profitTake2Pct,
@@ -1581,7 +1581,7 @@ export class TradingEngine {
       ,lowCapMaxMarketCapUsd: config.lowCapMaxMarketCapUsd,
       lowCapLiquidityExitRatio: config.lowCapLiquidityExitRatio,
       lowCapSellPressureRatio: config.lowCapSellPressureRatio,
-      lowCapSellPressureMinVolumeMon: config.lowCapSellPressureMinVolumeMon,
+      lowCapSellPressureMinVolumeMon: config.lowCapSellPressureMinVolumeUsd,
       lowCapTrendExitPct: config.lowCapTrendExitPct,
       lowCapLossExitPct: config.lowCapLossExitPct,
       lowCapPeakDrawdownExitPct: config.lowCapPeakDrawdownExitPct

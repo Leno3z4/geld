@@ -20,7 +20,7 @@ import {
 } from "./nadfun.js";
 import { StateStore } from "./store.js";
 import { GeminiBrain } from "./ai.js";
-import { SeasonalityModel, entryGateDiagnostics, positionExitSignal, scoreToken, selectEntryStrategy, shouldClose, shouldOpen, shouldWatch, updateMarketMetrics, curveProgressPct, isLowCapMomentumCandidate, lowCapMomentumBlockers, entrySizeVolatilityFactor, type EntryGateRules, type PositionExitRules } from "./strategy.js";
+import { SeasonalityModel, entryGateDiagnostics, positionExitSignal, scoreToken, selectEntryStrategy, shouldClose, shouldOpen, shouldWatch, updateMarketMetrics, curveProgressPct, isLowCapMomentumCandidate, lowCapMomentumBlockers, isEarlyLaunchCandidate, earlyLaunchBlockers, entrySizeVolatilityFactor, type EntryGateRules, type PositionExitRules } from "./strategy.js";
 import type { BotState, Position, TokenSnapshot } from "./types.js";
 import { formatUnits } from "viem";
 
@@ -131,6 +131,7 @@ export class TradingEngine {
   private saveTimer?: NodeJS.Timeout;
   private lastBlock = 0n;
   private lastDexBlock = 0n;
+  private lastNewEventPollAt = 0;
   private pendingCandidates = new Set<string>();
   private reservedSpendMon = 0;
 

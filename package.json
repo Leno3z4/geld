@@ -11,7 +11,8 @@
     "build:web": "npm --prefix webapp run build",
     "start": "node dist/src/index.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test tests/strategy.test.ts"
+    "test": "node --import tsx --test tests/strategy.test.ts",
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
     "@google/genai": "latest",

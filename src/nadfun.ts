@@ -158,6 +158,22 @@ export async function getTokenDecimals(publicClient: any, token: Address) {
   }));
 }
 
+export async function isNadFunToken(publicClient: any, token: Address): Promise<boolean> {
+  try {
+    // This call succeeds for both pre- and post-graduation NadFun tokens.
+    // A non-NadFun token causes the router to revert with TokenNotFound.
+    await publicClient.readContract({
+      address: ADDRESSES.ROUTER,
+      abi: routerAbi,
+      functionName: "isGraduated",
+      args: [token]
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function quoteBuy(publicClient: any, token: Address, amountMon: number) {
   const amountIn = parseEther(amountMon.toFixed(18));
   const amountOut = await publicClient.readContract({

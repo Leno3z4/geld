@@ -318,10 +318,21 @@ export function entryGateDiagnostics(
     blockers.push(`age ${age.toFixed(0)}m < ${rules.minEstablishedAgeMinutes}m`);
   }
 
-  if (metrics.dipPct < rules.dipMinPct) {
-    blockers.push(`dip ${metrics.dipPct.toFixed(1)}% < ${rules.dipMinPct}%`);
-  } else if (metrics.dipPct > rules.dipMaxPct) {
-    blockers.push(`dip ${metrics.dipPct.toFixed(1)}% > ${rules.dipMaxPct}%`);
+  const dipInEntryBand =
+    metrics.dipPct >= rules.dipMinPct &&
+    metrics.dipPct <= rules.dipMaxPct;
+  const momentumEntry =
+    metrics.dipPct <= rules.dipMaxPct &&
+    metrics.trend1hPct > 0 &&
+    metrics.trend1hPct <= rules.trendMax1hPct &&
+    metrics.trend4hPct >= rules.minTrend4hPct;
+
+  if (!dipInEntryBand && !momentumEntry) {
+    if (metrics.dipPct < rules.dipMinPct) {
+      blockers.push(`dip ${metrics.dipPct.toFixed(1)}% < ${rules.dipMinPct}% and momentum is not strong enough`);
+    } else if (metrics.dipPct > rules.dipMaxPct) {
+      blockers.push(`dip ${metrics.dipPct.toFixed(1)}% > ${rules.dipMaxPct}%`);
+    }
   }
 
   if (metrics.rebound1hPct < rules.recoveryMinPct) {

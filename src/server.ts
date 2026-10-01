@@ -31,7 +31,7 @@ export function createApp(engine: TradingEngine, existingApp?: Express) {
       minMarketCapUsd: config.minMarketCapUsd,
       minEstablishedAgeMinutes: config.minEstablishedAgeMinutes,
       minHolders: config.minHolders,
-      minVolumeMon: config.minVolumeMon,
+      minVolumeUsd: config.minVolumeUsd,
       dipMinPct: config.dipMinPct,
       dipMaxPct: config.dipMaxPct,
       trendMax1hPct: config.trendMax1hPct,

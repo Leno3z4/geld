@@ -1817,6 +1817,7 @@ export class TradingEngine {
 
     const stateBeforeBuy = this.store.get();
     const normalizedToken = token.token.toLowerCase();
+    if ((token.buyBlockedUntil ?? 0) > Date.now()) return;
     const hasOpenPosition = Object.values(stateBeforeBuy.positions).some(
       (p) => p.token.toLowerCase() === normalizedToken && (p.status === "OPEN" || p.status === "CLOSING")
     );
@@ -1872,6 +1873,8 @@ export class TradingEngine {
     this.reservedSpendMon += spend;
 
     const pendingId = "BUY:" + token.token.toLowerCase() + ":" + Date.now();
+    token.lastBuyAttemptAt = Date.now();
+    this.store.upsertToken(token);
     this.store.update((s) => {
       s.pendingExecutions[pendingId] = {
         id: pendingId,
@@ -1898,6 +1901,9 @@ export class TradingEngine {
         config.slippagePct
       );
 
+      token.lastBuyTx = tx;
+      token.lastBuyAttemptAt = Date.now();
+      this.store.upsertToken(token);
       this.store.update((s) => {
         const pending = s.pendingExecutions[pendingId];
         if (pending) {
@@ -1979,6 +1985,8 @@ export class TradingEngine {
       status: "OPEN"
     };
 
+      token.buyBlockedUntil = undefined;
+      this.store.upsertToken(token);
       this.store.upsertPosition(position);
       this.store.addTrade({
       id: "BUY:" + id,
@@ -1994,19 +2002,18 @@ export class TradingEngine {
       });
       this.emit();
     } catch (error) {
-      // Once a transaction hash exists, the transaction was already submitted.
-      // Never retry it in-place. Keep a short-lived record so reconciliation
-      // can settle the result after a Worker restart without double-buying.
-      if (this.store.get().pendingExecutions[pendingId]?.txHash) {
-        await this.persist();
-        throw error;
+      const submittedTx = this.store.get().pendingExecutions[pendingId]?.txHash ?? token.lastBuyTx;
+      if (submittedTx) {
+        token.buyBlockedUntil = Date.now() + 15 * 60 * 1000;
+        token.lastBuyTx = submittedTx;
+        this.store.upsertToken(token);
       }
       throw error;
     } finally {
-      const pendingStillExists = Boolean(this.store.get().pendingExecutions[pendingId]);
-      if (!pendingStillExists) {
-        this.reservedSpendMon = Math.max(0, this.reservedSpendMon - spend);
-      }
+      this.store.update((s) => {
+        delete s.pendingExecutions[pendingId];
+      });
+      this.reservedSpendMon = Math.max(0, this.reservedSpendMon - spend);
     }
   }
 

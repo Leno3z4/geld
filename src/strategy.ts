@@ -549,6 +549,13 @@ export interface PositionExitRules {
   takeProfitPct: number;
   trailingPct: number;
   maxHoldMinutes: number;
+  staleLossExitMinutes: number;
+  staleLossExitPct: number;
+  deadMoneyExitMinutes: number;
+  deadMoneyMaxPnlPct: number;
+  dustPositionMon: number;
+  dailyMeanExitPct: number;
+  dailyMinSamples: number;
   minLiquidityUsd: number;
   liquidityExitRatio: number;
   earlyExitLossPct: number;
@@ -588,6 +595,10 @@ export function positionExitSignal(
   const dipPct = token?.dipPct ?? 0;
   const flowRatio = token?.buySellRatio5m ?? 0;
   const flowVolume = token?.volume5mMon ?? 0;
+  const dayAvg = token?.dayAvgPriceMon ?? 0;
+  const dayLowDistance = token?.distanceFromDayLowPct ?? 0;
+  const dayAvgDistance = token?.distanceFromDayAvgPct ?? 0;
+  const daySamples = token?.daySamples ?? 0;
 
   // Protective conditions always win over profit-seeking AI guidance.
   if (pnlPct <= -rules.hardStopPct) {
@@ -631,6 +642,47 @@ export function positionExitSignal(
     ) {
       return { kind: "FULL", sellPct: 100, reason: "MOMENTUM_FAILURE" };
     }
+  }
+
+  // Daily mean-reversion is an exit target only when the position was
+  // opened as that strategy and enough rolling-24h samples exist. Other
+  // strategies keep their own momentum/profit exits.
+  if (
+    position.strategy === "DAILY_MEAN_REVERSION" &&
+    token &&
+    daySamples >= rules.dailyMinSamples &&
+    dayAvg > 0 &&
+    pnlPct >= rules.dailyMeanExitPct &&
+    dayAvgDistance >= -0.5 &&
+    dayLowDistance > 0
+  ) {
+    return { kind: "FULL", sellPct: 100, reason: "DAILY_MEAN_REVERSION_EXIT" };
+  }
+
+  // Kill dead-money positions instead of letting a small remainder decay for
+  // hours. This is deliberately separate from the hard stop.
+  if (
+    heldMinutes >= rules.staleLossExitMinutes &&
+    pnlPct <= rules.staleLossExitPct &&
+    trend1h <= 0
+  ) {
+    return { kind: "FULL", sellPct: 100, reason: "STALE_LOSS_EXIT" };
+  }
+
+  if (
+    heldMinutes >= rules.deadMoneyExitMinutes &&
+    pnlPct <= rules.deadMoneyMaxPnlPct &&
+    pnlPct >= rules.staleLossExitPct &&
+    trend1h <= 2
+  ) {
+    return { kind: "FULL", sellPct: 100, reason: "DEAD_MONEY_EXIT" };
+  }
+
+  if (
+    position.currentMon > 0 &&
+    position.currentMon <= rules.dustPositionMon
+  ) {
+    return { kind: "FULL", sellPct: 100, reason: "DUST_SWEEP" };
   }
 
   // Once the trade has made real money, protect part of that profit instead

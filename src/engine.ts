@@ -1017,6 +1017,8 @@ export class TradingEngine {
       let sell5Usd = 0;
       let buyPrev5Usd = 0;
       let sellPrev5Usd = 0;
+      let buy5Tx = 0;
+      let sell5Tx = 0;
 
       if (historyResponse.ok) {
         const payload = decodeNadfunPayload(await historyResponse.text());

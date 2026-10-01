@@ -1379,10 +1379,7 @@ export class TradingEngine {
         .reduce((sum: bigint, log: any) => sum + BigInt(log.args?.value ?? 0n), 0n);
 
       if (amountRaw <= 0n) {
-        // Fallback for providers/routers whose receipt does not expose the
-        // token Transfer log in the parsed receipt.
-        const after = await getTokenBalance(this.publicClient, token.token as Address, this.account.address);
-        amountRaw = after;
+        throw new Error("Buy confirmed but token Transfer log could not be reconciled: " + tx);
       }
 
       if (amountRaw <= 0n) {

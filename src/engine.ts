@@ -265,7 +265,7 @@ export class TradingEngine {
     this.lastNewEventPollAt = now;
 
     try {
-      const response = await fetch(config.nadfunApiUrl.replace(/\/api\/?$/, "") + "/api/token/new-event", {
+      const response = await fetch(config.nadfunSiteUrl + "/api/token/new-event", {
         headers: {
           accept: "application/json",
           ...(config.nadfunApiKey ? { "X-API-Key": config.nadfunApiKey } : {})

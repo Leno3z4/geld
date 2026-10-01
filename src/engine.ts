@@ -275,7 +275,7 @@ export class TradingEngine {
 
       const payload = decodeNadfunPayload(await response.text());
       const events = Array.isArray(payload) ? payload : [];
-      const buyEvents = events
+      const recentEvents = events
         .map((event: any) => ({
           event,
           token: event?.token_info?.token_id,
@@ -284,14 +284,15 @@ export class TradingEngine {
         }))
         .filter((x) =>
           /^0x[0-9a-fA-F]{40}$/.test(String(x.token ?? "")) &&
-          String(x.event?.type ?? "").toUpperCase() === "BUY" &&
+          ["CREATE", "BUY", "SELL"].includes(String(x.event?.type ?? "").toUpperCase()) &&
           x.createdAt > 0 &&
           (now - x.createdAt) / 60000 <= config.earlyLaunchMaxAgeMinutes
         )
-        .sort((a, b) => b.amountMon - a.amountMon);
+        .sort((a, b) => b.createdAt - a.createdAt);
+
 
       const unique = new Map<string, { event: any; createdAt: number; amountMon: number }>();
-      for (const item of buyEvents) {
+      for (const item of recentEvents) {
         const key = String(item.token).toLowerCase();
         if (!unique.has(key)) unique.set(key, item);
       }

@@ -193,7 +193,7 @@ export class TradingEngine {
   private cleanupStalePendingExecutions() {
     const cutoff = Date.now() - config.pendingExecutionTimeoutMs;
     const stale = Object.values(this.store.get().pendingExecutions).filter(
-      (pending) => pending.createdAt < cutoff && !pending.txHash
+      (pending) => pending.createdAt < cutoff
     );
 
     if (stale.length === 0) return 0;
@@ -774,11 +774,6 @@ export class TradingEngine {
     // Discovery must never delay a protective sell on an existing position.
     await this.managePositions();
     this.entryCircuitBreakerActive();
-    await this.discoverEstablishedTokens();
-    await this.pollLogs();
-    await this.pollDexLogs();
-    await this.reviewOpenPositions();
-
     this.store.update((s) => {
       s.stats.lastCycleAt = Date.now();
       s.stats.lastProcessedBlock = this.lastBlock.toString();
@@ -1998,11 +1993,20 @@ export class TradingEngine {
       aiConfidence: token.aiConfidence
       });
       this.emit();
+    } catch (error) {
+      // Once a transaction hash exists, the transaction was already submitted.
+      // Never retry it in-place. Keep a short-lived record so reconciliation
+      // can settle the result after a Worker restart without double-buying.
+      if (this.store.get().pendingExecutions[pendingId]?.txHash) {
+        await this.persist();
+        throw error;
+      }
+      throw error;
     } finally {
-      this.store.update((s) => {
-        delete s.pendingExecutions[pendingId];
-      });
-      this.reservedSpendMon = Math.max(0, this.reservedSpendMon - spend);
+      const pendingStillExists = Boolean(this.store.get().pendingExecutions[pendingId]);
+      if (!pendingStillExists) {
+        this.reservedSpendMon = Math.max(0, this.reservedSpendMon - spend);
+      }
     }
   }
 

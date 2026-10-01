@@ -1765,7 +1765,7 @@ export class TradingEngine {
     if (
       config.establishedOnly &&
       !lowCapMomentum &&
-      !earlyLaunchForSizing &&
+      !earlyLaunch &&
       (!token.graduated ||
         ageMinutes < config.minEstablishedAgeMinutes ||
         (token.liquidityUsd ?? 0) < config.minLiquidityUsd ||
@@ -1809,13 +1809,13 @@ export class TradingEngine {
     const availableCapacity = Math.max(0, capacity - this.reservedSpendMon);
     const volatilityFactor = entrySizeVolatilityFactor(token);
     const baseSpend = Math.min(perTrade, availableCapacity, freeBalance) * aiSizePct * volatilityFactor;
-    const earlyProbeCap = earlyLaunchForSizing
+    const earlyProbeCap = earlyLaunch
       ? state.balanceMon * config.earlyLaunchProbePortfolioPct / 100
       : Number.POSITIVE_INFINITY;
     // On low-cap pools, size the order against available quote liquidity so the
     // bot does not become the market. The 2% default is a risk guard, not a
     // claim about an optimal market-impact threshold.
-    const lowCapLiquidityMon = (lowCapMomentum || earlyLaunchForSizing) && (token.liquidityMon ?? 0) > 0
+    const lowCapLiquidityMon = (lowCapMomentum || earlyLaunch) && (token.liquidityMon ?? 0) > 0
       ? token.liquidityMon!
       : Number.POSITIVE_INFINITY;
     const liquidityCap = Number.isFinite(lowCapLiquidityMon)

@@ -11,6 +11,7 @@ import {
   getTokenBalances,
   quoteSells,
   getTokenDecimals,
+  isNadFunToken,
   quoteBuy,
   quoteSell,
   buyNative,
@@ -1319,6 +1320,16 @@ export class TradingEngine {
     const spend = Math.min(perTrade, availableCapacity, freeBalance) * aiSizePct;
 
     if (spend <= 0.001) return;
+
+    // Never send a token from a different DEX/route into the NadFun router.
+    // NadFun's router reverts with TokenNotFound for tokens such as CHOG that
+    // are traded on an external DEX instead of the NadFun market.
+    if (config.liveTrading && !(await isNadFunToken(this.publicClient, token.token as Address))) {
+      this.store.update((s) => {
+        s.stats.lastError = "Skipped unsupported NadFun token: " + token.token;
+      });
+      return;
+    }
 
     this.reservedSpendMon += spend;
 

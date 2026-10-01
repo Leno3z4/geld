@@ -34,7 +34,7 @@ export const config = {
   aiMinConfidence: num("AI_MIN_CONFIDENCE", 0.45),
   slippagePct: num("SLIPPAGE_PCT", 6),
   sellGasLimit: Math.max(250000, Math.floor(num("SELL_GAS_LIMIT", 1_000_000))),
-  hardStopPct: num("HARD_STOP_LOSS_PCT", 18),
+  hardStopPct: num("HARD_STOP_LOSS_PCT", 22),
   takeProfitPct: num("TAKE_PROFIT_PCT", 55),
   trailingPct: num("TRAILING_STOP_PCT", 15),
   maxHoldMinutes: num("MAX_HOLD_MINUTES", 180),
@@ -95,7 +95,7 @@ export const config = {
   discoveryLimit: Math.max(10, Math.min(50, Math.floor(num("DISCOVERY_LIMIT", 50)))),
   aiCandidateLimit: Math.max(1, Math.min(15, Math.floor(num("AI_CANDIDATE_LIMIT", 8)))),
   discoveryPollMs: Math.max(30000, num("DISCOVERY_POLL_MS", 60000)),
-  priceSampleMs: Math.max(60000, num("PRICE_SAMPLE_MS", 60000)),
+  priceSampleMs: Math.max(60000, num("PRICE_SAMPLE_MS", 300000)),
 
   nadfunApiUrl: process.env.NADFUN_API_URL ?? "https://api.nadapp.net",
   nadfunApiKey: process.env.NADFUN_API_KEY ?? "",

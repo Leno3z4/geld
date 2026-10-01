@@ -28,11 +28,11 @@
     "TRAILING_STOP_PCT": "15",
     "MAX_HOLD_MINUTES": "180",
     "PROFIT_TAKE_1_PCT": "3",
-    "PROFIT_TAKE_1_SELL_PCT": "25",
+    "PROFIT_TAKE_1_SELL_PCT": "40",
     "PROFIT_TAKE_2_PCT": "30",
-    "PROFIT_TAKE_2_SELL_PCT": "33",
+    "PROFIT_TAKE_2_SELL_PCT": "35",
     "PROFIT_TAKE_3_PCT": "50",
-    "PROFIT_TAKE_3_SELL_PCT": "50",
+    "PROFIT_TAKE_3_SELL_PCT": "100",
     "PROFIT_PROTECTION_START_PCT": "12",
     "PROFIT_PROTECTION_FLOOR_PCT": "5",
     "PROFIT_PROTECTION_RATIO": "0.40",
@@ -50,7 +50,14 @@
     "MAX_LOG_CHUNKS_PER_CYCLE": "4",
     "STATE_SYNC_URL": "https://geld.mahoraga6190.workers.dev/internal/state/singleton",
     "AI_OVERRIDE_SCORE": "75",
-    "PRICE_SAMPLE_MS": "60000"
+    "PRICE_SAMPLE_MS": "300000",
+    "STALE_LOSS_EXIT_MINUTES": "45",
+    "STALE_LOSS_EXIT_PCT": "-4",
+    "DEAD_MONEY_EXIT_MINUTES": "90",
+    "DEAD_MONEY_MAX_PNL_PCT": "3",
+    "DUST_POSITION_MON": "0.05",
+    "DAILY_MEAN_EXIT_PCT": "1.5",
+    "DAILY_MIN_SAMPLES": "24"
   },
   "durable_objects": {
     "bindings": [

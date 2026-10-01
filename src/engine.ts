@@ -1364,7 +1364,17 @@ export class TradingEngine {
     const maxExposure = Math.max(0, state.balanceMon * config.maxTotalExposurePct / 100);
     const capacity = Math.max(0, maxExposure - state.openExposureMon);
     const availableCapacity = Math.max(0, capacity - this.reservedSpendMon);
-    const spend = Math.min(perTrade, availableCapacity, freeBalance) * aiSizePct;
+    const baseSpend = Math.min(perTrade, availableCapacity, freeBalance) * aiSizePct;
+    // On low-cap pools, size the order against available quote liquidity so the
+    // bot does not become the market. The 2% default is a risk guard, not a
+    // claim about an optimal market-impact threshold.
+    const lowCapLiquidityMon = lowCapMomentum && (token.liquidityMon ?? 0) > 0
+      ? token.liquidityMon!
+      : Number.POSITIVE_INFINITY;
+    const liquidityCap = Number.isFinite(lowCapLiquidityMon)
+      ? lowCapLiquidityMon * config.lowCapMaxLiquidityPositionPct / 100
+      : Number.POSITIVE_INFINITY;
+    const spend = Math.min(baseSpend, liquidityCap);
 
     if (spend <= 0.001) return;
 

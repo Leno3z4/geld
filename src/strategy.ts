@@ -668,7 +668,7 @@ export function positionExitSignal(
     if (flowVolumeUsd >= Math.min(lowCapSellPressureMinVolumeUsd, 750) && flowRatio > 0 && flowRatio <= lowCapSellPressureRatio && trend1h < 0) {
       return { kind: "FULL", sellPct: 100, reason: "LOW_CAP_SELL_PRESSURE" };
     }
-    if (pnlPct <= Math.min(lowCapLossExitPct, -3) && trend1h < 0) {
+    if (pnlPct <= Math.max(lowCapLossExitPct, -3) && trend1h < 0) {
       return { kind: "FULL", sellPct: 100, reason: "LOW_CAP_MOMENTUM_BREAK" };
     }
     if (position.peakMon > position.entryMon && position.currentMon <= position.peakMon * (1 - lowCapPeakDrawdownExitPct / 100)) {

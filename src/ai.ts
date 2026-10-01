@@ -49,7 +49,7 @@ export class GeminiBrain {
       "Do not chase a fresh vertical pump. Do not invent liquidity, social sentiment, holders, whale behavior or catalysts.",
       "Use the supplied dip, trend, liquidity, holders, volume and seasonality fields as factual inputs. Treat seasonality as evidence, not certainty.",
       "Choose BUY, HOLD or SELL. sizePct is a fraction of the configured trade budget for BUY or current position for SELL.",
-      "Return only JSON matching the schema. Give a concise reason and one concrete invalidation condition.",
+      "Return only JSON matching the schema. Keep reason under 240 characters and invalidation under 200 characters. Give one concise reason and one concrete invalidation condition.",
       JSON.stringify({mode:input.mode,token:input.token,position:input.position??null,seasonality:input.seasonality})
     ].join("\n");
 
@@ -66,7 +66,16 @@ export class GeminiBrain {
             store:false,
             response_format:{type:"text",mime_type:"application/json",schema:responseSchema}
           });
-          const decision=Decision.parse(JSON.parse(interaction.output_text??""));
+          const raw = JSON.parse(interaction.output_text ?? "");
+           const clip = (value: unknown, max: number) => {
+             const text = String(value ?? "").trim();
+             return text.length <= max ? text : text.slice(0, max - 3).trimEnd() + "...";
+           };
+           const decision=Decision.parse({
+             ...raw,
+             reason: clip(raw?.reason, 240),
+             invalidation: clip(raw?.invalidation, 200)
+           });
           this.keyCursor=(index+1)%config.geminiKeys.length;
           this.lastCall=Date.now();
           return decision;

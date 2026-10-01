@@ -20,7 +20,7 @@ import {
 } from "./nadfun.js";
 import { StateStore } from "./store.js";
 import { GeminiBrain } from "./ai.js";
-import { SeasonalityModel, entryGateDiagnostics, positionExitSignal, scoreToken, selectEntryStrategy, shouldClose, shouldOpen, shouldWatch, updateMarketMetrics, curveProgressPct, isLowCapMomentumCandidate, type EntryGateRules, type PositionExitRules } from "./strategy.js";
+import { SeasonalityModel, entryGateDiagnostics, positionExitSignal, scoreToken, selectEntryStrategy, shouldClose, shouldOpen, shouldWatch, updateMarketMetrics, curveProgressPct, isLowCapMomentumCandidate, entrySizeVolatilityFactor, type EntryGateRules, type PositionExitRules } from "./strategy.js";
 import type { BotState, Position, TokenSnapshot } from "./types.js";
 import { formatUnits } from "viem";
 
@@ -154,6 +154,41 @@ export class TradingEngine {
     for (const listener of this.listeners) listener(this.store.get());
   }
 
+  private entryCircuitBreakerActive() {
+    const now = Date.now();
+    const today = new Date(now).toISOString().slice(0, 10);
+    const state = this.store.get();
+    const equity = Math.max(0, state.balanceMon + state.openExposureMon);
+
+    if (state.stats.dailyRiskDay !== today || !(state.stats.dailyRiskStartEquityMon! > 0)) {
+      this.store.update((s) => {
+        s.stats.dailyRiskDay = today;
+        s.stats.dailyRiskStartEquityMon = equity;
+        s.stats.dailyRiskDrawdownPct = 0;
+        s.stats.entryCircuitBreakerUntil = undefined;
+        s.stats.entryCircuitBreakerReason = undefined;
+      });
+      return false;
+    }
+
+    const startEquity = state.stats.dailyRiskStartEquityMon!;
+    const drawdownPct = startEquity > 0 ? ((equity / startEquity) - 1) * 100 : 0;
+    const nextDay = Date.parse(today + "T23:59:59.999Z") + 1;
+    const triggered = drawdownPct <= -config.dailyLossLimitPct;
+    const stillBlocked = (state.stats.entryCircuitBreakerUntil ?? 0) > now;
+
+    this.store.update((s) => {
+      s.stats.dailyRiskDrawdownPct = drawdownPct;
+      if (triggered) {
+        s.stats.entryCircuitBreakerUntil = nextDay;
+        s.stats.entryCircuitBreakerReason =
+          "DAILY_LOSS_LIMIT: " + drawdownPct.toFixed(2) + "%";
+      }
+    });
+
+    return triggered || stillBlocked;
+  }
+
   private cleanupStalePendingExecutions() {
     const cutoff = Date.now() - config.pendingExecutionTimeoutMs;
     const stale = Object.values(this.store.get().pendingExecutions).filter(
@@ -209,6 +244,12 @@ export class TradingEngine {
 
   private async discoverEstablishedTokens() {
     try {
+      if (this.entryCircuitBreakerActive()) {
+        this.store.update((s) => {
+          s.stats.lastIdleReason = "ENTRY CIRCUIT BREAKER: daily loss limit reached; exits remain active";
+        });
+        return;
+      }
       const url =
         config.nadfunApiUrl +
         "/order/market_cap?page=1&limit=" +
@@ -576,6 +617,7 @@ export class TradingEngine {
     // Exit/risk management gets first priority on the one-minute Worker cycle.
     // Discovery must never delay a protective sell on an existing position.
     await this.managePositions();
+    this.entryCircuitBreakerActive();
     await this.discoverEstablishedTokens();
     await this.pollLogs();
     await this.pollDexLogs();
@@ -1436,6 +1478,7 @@ export class TradingEngine {
 
   private async openPosition(token: TokenSnapshot, aiSizePct: number) {
     const ageMinutes = (Date.now() - token.createdAt) / 60000;
+    if (this.entryCircuitBreakerActive()) return;
     const lowCapMomentum = isLowCapMomentumCandidate(token, {
       enabled: config.lowCapMomentumEnabled,
       minMarketCapUsd: config.lowCapMinMarketCapUsd,
@@ -1494,7 +1537,8 @@ export class TradingEngine {
     const maxExposure = Math.max(0, state.balanceMon * config.maxTotalExposurePct / 100);
     const capacity = Math.max(0, maxExposure - state.openExposureMon);
     const availableCapacity = Math.max(0, capacity - this.reservedSpendMon);
-    const baseSpend = Math.min(perTrade, availableCapacity, freeBalance) * aiSizePct;
+    const volatilityFactor = entrySizeVolatilityFactor(token);
+    const baseSpend = Math.min(perTrade, availableCapacity, freeBalance) * aiSizePct * volatilityFactor;
     // On low-cap pools, size the order against available quote liquidity so the
     // bot does not become the market. The 2% default is a risk guard, not a
     // claim about an optimal market-impact threshold.

@@ -1134,7 +1134,8 @@ export class TradingEngine {
 
         this.store.update((s) => {
           s.stats.aiFailures += 1;
-          s.stats.lastError = error instanceof Error ? error.message : String(error);
+          s.stats.lastAiError = error instanceof Error ? error.message : String(error);
+          s.stats.lastAiFailureAt = Date.now();
         });
       }
 
@@ -1220,6 +1221,12 @@ export class TradingEngine {
           current.entryDiagnostics = aiDiagnostics;
         }
       });
+
+      if (decision.action !== "BUY") {
+        this.store.update((s) => {
+          s.stats.lastIdleReason = token.symbol + ": AI " + decision.action + " (" + Math.round(decision.confidence * 100) + "%) — " + decision.reason;
+        });
+      }
 
       if (
         decision.action === "BUY" &&
@@ -1720,7 +1727,8 @@ export class TradingEngine {
       } catch (error) {
         this.store.update((s) => {
           s.stats.aiFailures += 1;
-          s.stats.lastError = error instanceof Error ? error.message : String(error);
+          s.stats.lastAiError = error instanceof Error ? error.message : String(error);
+          s.stats.lastAiFailureAt = Date.now();
         });
       }
     }

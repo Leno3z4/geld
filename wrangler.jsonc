@@ -48,7 +48,9 @@
     "MAX_QUOTE_FAILURES": "3",
     "LOG_CHUNK_BLOCKS": "100",
     "MAX_LOG_CHUNKS_PER_CYCLE": "4",
-    "STATE_SYNC_URL": "https://geld.mahoraga6190.workers.dev/internal/state/singleton"
+    "STATE_SYNC_URL": "https://geld.mahoraga6190.workers.dev/internal/state/singleton",
+    "AI_OVERRIDE_SCORE": "75",
+    "PRICE_SAMPLE_MS": "60000"
   },
   "durable_objects": {
     "bindings": [

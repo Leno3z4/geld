@@ -1502,6 +1502,30 @@ export class TradingEngine {
       );
       aiDiagnostics.aiAction = decision.action;
       aiDiagnostics.aiConfidence = decision.confidence;
+
+      // The established-token diagnostics intentionally reject pre-graduation
+      // and sub-$25k assets. That is not the correct lane for low-cap momentum,
+      // so present the low-cap gates instead of showing a misleading "not
+      // graduated / MC < $25k" blocker in the dashboard.
+      if (lowCapMomentum) {
+        const lowCapBlockers = lowCapMomentumBlockers(token, {
+          enabled: config.lowCapMomentumEnabled,
+          minMarketCapUsd: config.lowCapMinMarketCapUsd,
+          maxMarketCapUsd: config.lowCapMaxMarketCapUsd,
+          minLiquidityUsd: config.lowCapMinLiquidityUsd,
+          minHolders: config.lowCapMinHolders,
+          minVolumeUsd: config.lowCapMinVolumeUsd,
+          minAgeMinutes: config.lowCapMinAgeMinutes,
+          minBuySellRatio5m: config.lowCapMinBuySellRatio5m,
+          minVolume5mUsd: config.lowCapMinVolume5mUsd,
+          minVolumeAcceleration5m: config.lowCapMinVolumeAcceleration5m,
+          minTrend1hPct: config.lowCapMinTrend1hPct,
+          minLocalScore: config.lowCapMinScore
+        });
+        aiDiagnostics.primary = lowCapBlockers[0] ?? "low-cap momentum setup passed";
+        aiDiagnostics.blockers = lowCapBlockers;
+        aiDiagnostics.readyForAi = lowCapBlockers.length === 0;
+      }
       token.entryDiagnostics = aiDiagnostics;
 
       this.store.update((s) => {

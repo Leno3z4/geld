@@ -615,13 +615,13 @@ export interface PositionExitRules {
   profitProtectionStartPct: number;
   profitProtectionFloorPct: number;
   profitProtectionRatio: number;
-  lowCapMaxMarketCapUsd: number;
-  lowCapLiquidityExitRatio: number;
-  lowCapSellPressureRatio: number;
-  lowCapSellPressureMinVolumeUsd: number;
-  lowCapTrendExitPct: number;
-  lowCapLossExitPct: number;
-  lowCapPeakDrawdownExitPct: number;
+  lowCapMaxMarketCapUsd?: number;
+  lowCapLiquidityExitRatio?: number;
+  lowCapSellPressureRatio?: number;
+  lowCapSellPressureMinVolumeUsd?: number;
+  lowCapTrendExitPct?: number;
+  lowCapLossExitPct?: number;
+  lowCapPeakDrawdownExitPct?: number;
 }
 
 export interface PositionExitSignal {
@@ -649,23 +649,29 @@ export function positionExitSignal(
   const dayAvgDistance = token?.distanceFromDayAvgPct ?? 0;
   const daySamples = token?.daySamples ?? 0;
   const marketCapUsd = token?.marketCapUsd ?? 0;
-  const lowCapMode = marketCapUsd > 0 && marketCapUsd <= rules.lowCapMaxMarketCapUsd;
+  const lowCapMode = marketCapUsd > 0 && marketCapUsd <= (rules.lowCapMaxMarketCapUsd ?? 0);
+  const lowCapLiquidityExitRatio = lowCapLiquidityExitRatio ?? 0.80;
+  const lowCapSellPressureRatio = lowCapSellPressureRatio ?? 0.75;
+  const lowCapSellPressureMinVolumeUsd = lowCapSellPressureMinVolumeUsd ?? 1000;
+  const lowCapTrendExitPct = lowCapTrendExitPct ?? -5;
+  const lowCapLossExitPct = lowCapLossExitPct ?? -4;
+  const lowCapPeakDrawdownExitPct = lowCapPeakDrawdownExitPct ?? 12;
 
   // Protective conditions always win over profit-seeking AI guidance.
   if (lowCapMode && token) {
     const liquidity = token.liquidityUsd ?? 0;
     const liquidityBroken = liquidity > 0 && (
       liquidity < rules.minLiquidityUsd ||
-      ((position.entryLiquidityUsd ?? 0) > 0 && liquidity < (position.entryLiquidityUsd ?? 0) * rules.lowCapLiquidityExitRatio)
+      ((position.entryLiquidityUsd ?? 0) > 0 && liquidity < (position.entryLiquidityUsd ?? 0) * lowCapLiquidityExitRatio)
     );
     if (liquidityBroken) return { kind: "FULL", sellPct: 100, reason: "LOW_CAP_LIQUIDITY_BREAK" };
-    if (flowVolumeUsd >= rules.lowCapSellPressureMinVolumeUsd && flowRatio > 0 && flowRatio <= rules.lowCapSellPressureRatio && trend1h <= rules.lowCapTrendExitPct) {
+    if (flowVolumeUsd >= lowCapSellPressureMinVolumeUsd && flowRatio > 0 && flowRatio <= lowCapSellPressureRatio && trend1h <= lowCapTrendExitPct) {
       return { kind: "FULL", sellPct: 100, reason: "LOW_CAP_SELL_PRESSURE" };
     }
-    if (pnlPct <= rules.lowCapLossExitPct && trend1h <= rules.lowCapTrendExitPct) {
+    if (pnlPct <= lowCapLossExitPct && trend1h <= lowCapTrendExitPct) {
       return { kind: "FULL", sellPct: 100, reason: "LOW_CAP_MOMENTUM_BREAK" };
     }
-    if (position.peakMon > position.entryMon && position.currentMon <= position.peakMon * (1 - rules.lowCapPeakDrawdownExitPct / 100)) {
+    if (position.peakMon > position.entryMon && position.currentMon <= position.peakMon * (1 - lowCapPeakDrawdownExitPct / 100)) {
       return { kind: "FULL", sellPct: 100, reason: "LOW_CAP_PEAK_REVERSAL" };
     }
   }

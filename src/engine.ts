@@ -1184,7 +1184,9 @@ export class TradingEngine {
       if (metricsResponse.ok) {
         const payload = decodeNadfunPayload(await metricsResponse.text());
         const metrics = Array.isArray(payload?.metrics) ? payload.metrics : [];
-        const byTimeframe = new Map(metrics.map((metric: any) => [String(metric?.timeframe), metric]));
+        const byTimeframe = new Map<string, any>(
+          metrics.map((metric: any) => [String(metric?.timeframe), metric] as [string, any])
+        );
 
         const metric1 = byTimeframe.get("1");
         const metric15 = byTimeframe.get("15");
@@ -1661,7 +1663,7 @@ export class TradingEngine {
       // and sub-$25k assets. That is not the correct lane for low-cap momentum,
       // so present the low-cap gates instead of showing a misleading "not
       // graduated / MC < $25k" blocker in the dashboard.
-      const earlyLaunch = isEarlyLaunchCandidate(token);
+      const earlyLaunchForSizing = isEarlyLaunchCandidate(token);
       if (earlyLaunch) {
         const earlyBlockers = earlyLaunchBlockers(token);
         aiDiagnostics.primary = earlyBlockers[0] ?? "early-launch setup passed";
@@ -1763,7 +1765,7 @@ export class TradingEngine {
     if (
       config.establishedOnly &&
       !lowCapMomentum &&
-      !earlyLaunch &&
+      !earlyLaunchForSizing &&
       (!token.graduated ||
         ageMinutes < config.minEstablishedAgeMinutes ||
         (token.liquidityUsd ?? 0) < config.minLiquidityUsd ||
@@ -1807,13 +1809,13 @@ export class TradingEngine {
     const availableCapacity = Math.max(0, capacity - this.reservedSpendMon);
     const volatilityFactor = entrySizeVolatilityFactor(token);
     const baseSpend = Math.min(perTrade, availableCapacity, freeBalance) * aiSizePct * volatilityFactor;
-    const earlyProbeCap = earlyLaunch
+    const earlyProbeCap = earlyLaunchForSizing
       ? state.balanceMon * config.earlyLaunchProbePortfolioPct / 100
       : Number.POSITIVE_INFINITY;
     // On low-cap pools, size the order against available quote liquidity so the
     // bot does not become the market. The 2% default is a risk guard, not a
     // claim about an optimal market-impact threshold.
-    const lowCapLiquidityMon = (lowCapMomentum || earlyLaunch) && (token.liquidityMon ?? 0) > 0
+    const lowCapLiquidityMon = (lowCapMomentum || earlyLaunchForSizing) && (token.liquidityMon ?? 0) > 0
       ? token.liquidityMon!
       : Number.POSITIVE_INFINITY;
     const liquidityCap = Number.isFinite(lowCapLiquidityMon)

@@ -1112,12 +1112,19 @@ export class TradingEngine {
         );
       }
 
+      let buy1Usd = 0;
+      let sell1Usd = 0;
+      let buy1Tx = 0;
+      let sell1Tx = 0;
+      let uniqueBuyers1m = new Set<string>();
+      let topBuyer1m = 0;
       let buy5Usd = 0;
       let sell5Usd = 0;
       let buyPrev5Usd = 0;
       let sellPrev5Usd = 0;
       let buy5Tx = 0;
       let sell5Tx = 0;
+      let creatorBuy5Usd = 0;
 
       if (historyResponse.ok) {
         const payload = decodeNadfunPayload(await historyResponse.text());
@@ -1136,9 +1143,28 @@ export class TradingEngine {
             if (eventType === "BUY") {
               buy5Usd += valueUsd;
               buy5Tx += 1;
+              const buyer = String(swap?.account_info?.account_id ?? "").toLowerCase();
+              if (buyer && /^0x[0-9a-f]{40}$/.test(buyer)) {
+                if (ts > now - 60 * 1000) {
+                  uniqueBuyers1m.add(buyer);
+                  topBuyer1m = Math.max(topBuyer1m, valueUsd);
+                }
+              }
+              if (buyer && token.creator && buyer === token.creator.toLowerCase()) {
+                creatorBuy5Usd += valueUsd;
+              }
             } else if (eventType === "SELL") {
               sell5Usd += valueUsd;
               sell5Tx += 1;
+            }
+            if (ts > now - 60 * 1000) {
+              if (eventType === "BUY") {
+                buy1Usd += valueUsd;
+                buy1Tx += 1;
+              } else if (eventType === "SELL") {
+                sell1Usd += valueUsd;
+                sell1Tx += 1;
+              }
             }
           } else {
             if (eventType === "BUY") buyPrev5Usd += valueUsd;
@@ -1147,6 +1173,7 @@ export class TradingEngine {
         }
       }
 
+      let apiTrend1mPct: number | undefined;
       let apiTrend5mPct: number | undefined;
       let apiTrend15mPct: number | undefined;
       let apiTrend1hPct: number | undefined;
@@ -1159,10 +1186,12 @@ export class TradingEngine {
         const metrics = Array.isArray(payload?.metrics) ? payload.metrics : [];
         const byTimeframe = new Map(metrics.map((metric: any) => [String(metric?.timeframe), metric]));
 
+        const metric1 = byTimeframe.get("1");
         const metric15 = byTimeframe.get("15");
         const metric60 = byTimeframe.get("60");
         const metric5 = byTimeframe.get("5");
 
+        apiTrend1mPct = Number(metric1?.percent);
         apiTrend5mPct = Number(metric5?.percent);
         apiTrend15mPct = Number(metric15?.percent);
         apiTrend1hPct = Number(metric60?.percent);
@@ -1200,6 +1229,9 @@ export class TradingEngine {
         ? volume5mUsd / volumePrev5mUsd
         : volume5mUsd > 0 ? 2 : 0;
 
+      if (apiTrend1mPct !== undefined && Number.isFinite(apiTrend1mPct)) {
+        token.apiTrend1mPct = apiTrend1mPct;
+      }
       if (apiTrend5mPct !== undefined && Number.isFinite(apiTrend5mPct)) {
         token.apiTrend5mPct = apiTrend5mPct;
       }
@@ -1214,6 +1246,13 @@ export class TradingEngine {
       if (metrics5mBuyTx !== undefined) token.apiBuyTx5m = metrics5mBuyTx;
       if (metrics5mSellTx !== undefined) token.apiSellTx5m = metrics5mSellTx;
       token.apiVolume5mUsd = volume5mUsd;
+      token.apiBuy1mUsd = buy1Usd;
+      token.apiSell1mUsd = sell1Usd;
+      token.apiBuyTx1m = buy1Tx;
+      token.apiSellTx1m = sell1Tx;
+      token.apiUniqueBuyers1m = uniqueBuyers1m.size;
+      token.apiTopBuyerShare1m = buy1Usd > 0 ? topBuyer1m / buy1Usd : 1;
+      token.apiCreatorBuyShare5m = buy5Usd > 0 ? creatorBuy5Usd / buy5Usd : 0;
 
       token.lastFlowApiAt = now;
       updateMarketMetrics(token);

@@ -325,10 +325,10 @@ export class GeldBot extends DurableObject<Env> {
 
       if (!engine.snapshot().running) {
         await engine.startScheduled();
+        await this.ctx.storage.setAlarm(Date.now() + (await getRuntimeConfig(this.env)).fastCycleMs);
       } else {
-        await engine.runScheduledCycle();
+        await this.runFastCycle();
       }
-      await this.ctx.storage.setAlarm(Date.now() + (await getRuntimeConfig(this.env)).fastCycleMs);
 
       return Response.json(engine.snapshot());
     }

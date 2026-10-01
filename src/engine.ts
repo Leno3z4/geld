@@ -243,6 +243,25 @@ export class TradingEngine {
     await this.persist();
   }
 
+  private recordCurveProgress(token: TokenSnapshot) {
+    const now = Date.now();
+    const history = token.progressHistory ?? [];
+    const last = history.at(-1);
+
+    if (!last || now - last.ts >= 10000) {
+      history.push({ ts: now, progressPct: token.progressPct });
+      token.progressHistory = history.slice(-20);
+    }
+
+    const cutoff = now - 60 * 1000;
+    const base = [...history].reverse().find((point) => point.ts <= cutoff) ?? history[0];
+
+    if (base && now > base.ts && token.progressPct >= base.progressPct) {
+      token.progressVelocityPctPerMin =
+        (token.progressPct - base.progressPct) / ((now - base.ts) / 60000);
+    }
+  }
+
   private updateCreatorHistory(token: TokenSnapshot) {
     const creator = token.creator?.toLowerCase();
     if (!creator) return;
@@ -1023,6 +1042,7 @@ export class TradingEngine {
           creator: String(args.creator ?? ""),
           pair: String(args.pair ?? ""),
           quoteToken: String(args.quoteToken ?? "").toLowerCase(),
+          virtualQuoteReserve: String(args.virtualQuoteReserve ?? "0"),
           createdBlock: log.blockNumber?.toString(),
           virtualTokenStart: String(args.virtualTokenReserve ?? "0"),
           virtualTokenReserve: String(args.virtualTokenReserve ?? "0"),
@@ -1081,6 +1101,11 @@ export class TradingEngine {
       }
 
       token.progressPct = curveProgressPct(token);
+      this.recordCurveProgress(token);
+      if (token.virtualQuoteReserve) {
+        const virtualQuoteMon = Number(formatUnits(BigInt(token.virtualQuoteReserve), 18));
+        token.creatorInitialBuyMon = Math.max(0, virtualQuoteMon - 70000);
+      }
       updateMarketMetrics(token);
       token.localScore = scoreToken(token, this.seasonality);
 

@@ -10,15 +10,15 @@
     "GELD_LIVE_TRADING": "true",
     "GELD_AUTO_START": "true",
     "MONAD_RPC_URL": "https://rpc.monad.xyz",
-    "MIN_LIQUIDITY_USD": "2500"
-    , "MIN_LOCAL_SCORE": "35"
-    , "AI_MIN_CONFIDENCE": "0.45"
-    , "DIP_MIN_PCT": "3"
-    , "DIP_MAX_PCT": "50"
-    , "RECOVERY_MIN_PCT": "-10"
-    , "TREND_MAX_1H_PCT": "20"
-    , "AI_FALLBACK_ENABLED": "true"
-    , "AI_FALLBACK_MIN_SCORE": "55",
+    "MIN_LIQUIDITY_USD": "2500",
+    "MIN_LOCAL_SCORE": "35",
+    "AI_MIN_CONFIDENCE": "0.45",
+    "DIP_MIN_PCT": "3",
+    "DIP_MAX_PCT": "50",
+    "RECOVERY_MIN_PCT": "-10",
+    "TREND_MAX_1H_PCT": "20",
+    "AI_FALLBACK_ENABLED": "true",
+    "AI_FALLBACK_MIN_SCORE": "55",
     "MIN_MARKET_CAP_USD": "25000",
     "MIN_ESTABLISHED_AGE_MINUTES": "10",
     "MIN_HOLDERS": "10",

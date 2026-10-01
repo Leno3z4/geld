@@ -1034,8 +1034,13 @@ export class TradingEngine {
 
           const eventType = String(info.event_type).toUpperCase();
           if (ts > fiveAgo) {
-            if (eventType === "BUY") buy5Usd += valueUsd;
-            else if (eventType === "SELL") sell5Usd += valueUsd;
+            if (eventType === "BUY") {
+              buy5Usd += valueUsd;
+              buy5Tx += 1;
+            } else if (eventType === "SELL") {
+              sell5Usd += valueUsd;
+              sell5Tx += 1;
+            }
           } else {
             if (eventType === "BUY") buyPrev5Usd += valueUsd;
             else if (eventType === "SELL") sellPrev5Usd += valueUsd;

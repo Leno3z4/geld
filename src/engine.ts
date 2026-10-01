@@ -438,6 +438,19 @@ export class TradingEngine {
     await this.runScheduledCycle();
   }
 
+  async runRiskCycle() {
+    if (!this.store.get().running) return;
+
+    this.cleanupStalePendingExecutions();
+    await this.reconcileWalletPositions();
+    await this.managePositions();
+
+    this.store.update((s) => {
+      s.stats.lastRiskCycleAt = Date.now();
+    });
+    await this.persist();
+  }
+
   async runScheduledCycle() {
     if (!this.store.get().running) return;
 
@@ -1003,7 +1016,7 @@ export class TradingEngine {
     );
     if (hasOpenPosition) return;
 
-    if (token.lastCandidateAiAt && Date.now() - token.lastCandidateAiAt < 30000) return;
+    if (token.lastCandidateAiAt && Date.now() - token.lastCandidateAiAt < config.aiCandidateCooldownMs) return;
 
     this.pendingCandidates.add(token.token);
     try {
@@ -1078,7 +1091,7 @@ export class TradingEngine {
         const trend1h = token.trendPct1h ?? 0;
         const trend4h = token.trendPct4h ?? 0;
         const buySell = token.buySellRatio5m ?? 0;
-        const volume5m = token.volume5mMon ?? 0;
+        const volume5mUsd = (token.volume5mMon ?? 0) * (token.monUsdPrice ?? 0);
 
         const pullbackSetup =
           dip >= config.dipMinPct &&
@@ -1090,7 +1103,7 @@ export class TradingEngine {
           trend1h > 0 &&
           trend1h <= config.trendMax1hPct &&
           trend4h >= config.minTrend4hPct &&
-          (buySell >= 0.85 || volume5m >= config.minVolumeUsd * 0.20);
+          (buySell >= 0.85 || volume5mUsd >= config.minVolume5mUsd * 0.20);
         const lowCapSetup = isLowCapMomentumCandidate(token, {
       enabled: config.lowCapMomentumEnabled,
       minMarketCapUsd: config.lowCapMinMarketCapUsd,
@@ -1135,7 +1148,7 @@ export class TradingEngine {
         const trend1h = token.trendPct1h ?? 0;
         const trend4h = token.trendPct4h ?? 0;
         const buySell = token.buySellRatio5m ?? 0;
-        const volume5m = token.volume5mMon ?? 0;
+        const volume5mUsd = (token.volume5mMon ?? 0) * (token.monUsdPrice ?? 0);
         const pullbackSetup =
           dip >= config.dipMinPct &&
           dip <= config.dipMaxPct &&
@@ -1146,7 +1159,7 @@ export class TradingEngine {
           trend1h > 0 &&
           trend1h <= config.trendMax1hPct &&
           trend4h >= config.minTrend4hPct &&
-          (buySell >= 0.85 || volume5m >= config.minVolumeUsd * 0.20);
+          (buySell >= 0.85 || volume5mUsd >= config.minVolume5mUsd * 0.20);
         const lowCapSetup = isLowCapMomentumCandidate(token, {
       enabled: config.lowCapMomentumEnabled,
       minMarketCapUsd: config.lowCapMinMarketCapUsd,
@@ -1271,19 +1284,33 @@ export class TradingEngine {
     }
 
     const stateBeforeBuy = this.store.get();
+    const normalizedToken = token.token.toLowerCase();
+    const hasOpenPosition = Object.values(stateBeforeBuy.positions).some(
+      (p) => p.token.toLowerCase() === normalizedToken && (p.status === "OPEN" || p.status === "CLOSING")
+    );
+    const hasPendingBuy = Object.values(stateBeforeBuy.pendingExecutions).some(
+      (pending) => pending.side === "BUY" && pending.token.toLowerCase() === normalizedToken
+    );
+    if (hasOpenPosition || hasPendingBuy) return;
+
     const activePositionCount = Object.values(stateBeforeBuy.positions).filter(
       (p) => p.status === "OPEN" || p.status === "CLOSING"
     ).length;
     const pendingBuyCount = Object.values(stateBeforeBuy.pendingExecutions).filter(
       (pending) => pending.side === "BUY"
     ).length;
-    // Count in-flight BUYs as reserved position slots so concurrent AI
-    // candidate evaluations cannot race past maxOpenPositions.
     if (activePositionCount + pendingBuyCount >= config.maxOpenPositions) return;
 
     await this.refreshBalance();
 
     const state = this.store.get();
+    const hasOpenPositionAfterRefresh = Object.values(state.positions).some(
+      (p) => p.token.toLowerCase() === normalizedToken && (p.status === "OPEN" || p.status === "CLOSING")
+    );
+    const hasPendingBuyAfterRefresh = Object.values(state.pendingExecutions).some(
+      (pending) => pending.side === "BUY" && pending.token.toLowerCase() === normalizedToken
+    );
+    if (hasOpenPositionAfterRefresh || hasPendingBuyAfterRefresh) return;
     const freeBalance = Math.max(0, state.balanceMon - config.gasReserveMon);
     const perTrade = freeBalance * config.positionSizePct / 100;
     const maxExposure = Math.max(0, state.balanceMon * config.maxTotalExposurePct / 100);
@@ -1316,13 +1343,6 @@ export class TradingEngine {
     if (config.liveTrading) {
       if (!this.walletClient || !this.account) throw new Error("No live wallet");
 
-      decimals = await getTokenDecimals(this.publicClient, token.token as Address);
-      this.store.update((s) => {
-        const pending = s.pendingExecutions[pendingId];
-        if (pending) pending.decimals = decimals;
-      });
-      const before = await getTokenBalance(this.publicClient, token.token as Address, this.account.address);
-
       tx = await buyNative(
         this.walletClient,
         this.publicClient,
@@ -1333,7 +1353,10 @@ export class TradingEngine {
 
       this.store.update((s) => {
         const pending = s.pendingExecutions[pendingId];
-        if (pending) pending.txHash = tx;
+        if (pending) {
+          pending.txHash = tx;
+          pending.submittedAt = Date.now();
+        }
       });
       await this.persist();
 
@@ -1361,7 +1384,7 @@ export class TradingEngine {
         // Fallback for providers/routers whose receipt does not expose the
         // token Transfer log in the parsed receipt.
         const after = await getTokenBalance(this.publicClient, token.token as Address, this.account.address);
-        amountRaw = after - before;
+        amountRaw = after;
       }
 
       if (amountRaw <= 0n) {
@@ -1372,6 +1395,9 @@ export class TradingEngine {
       amountRaw = quote.amountOut;
     }
 
+    if (config.liveTrading) {
+      try { decimals = await getTokenDecimals(this.publicClient, token.token as Address); } catch {}
+    }
     const tokenAmount = Number(formatUnits(amountRaw, decimals));
     if (!Number.isFinite(tokenAmount) || tokenAmount <= 0) {
       throw new Error("Invalid token amount received");

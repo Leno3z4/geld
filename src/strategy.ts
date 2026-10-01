@@ -211,6 +211,20 @@ export function isEarlyLaunchCandidate(token: TokenSnapshot) {
   const uniqueBuyers = token.apiUniqueBuyers1m ?? 0;
   const topBuyerShare = token.apiTopBuyerShare1m ?? 1;
   const trend1m = token.apiTrend1mPct ?? 0;
+  const curveVelocity = token.progressVelocityPctPerMin ?? 0;
+
+  const healthyFlow =
+    volume1m >= config.earlyLaunchMinVolume1mUsd &&
+    ratio1m >= config.earlyLaunchMinBuySell1m &&
+    uniqueBuyers >= config.earlyLaunchMinUniqueBuyers1m &&
+    topBuyerShare <= config.earlyLaunchMaxTopBuyerShare1m;
+
+  const curveVelocityBackup =
+    curveVelocity >= config.earlyLaunchMinCurveVelocityPctPerMin &&
+    volume1m >= config.earlyLaunchMinVolume1mUsd * 0.65 &&
+    ratio1m >= 1.5 &&
+    uniqueBuyers >= 2 &&
+    topBuyerShare <= config.earlyLaunchMaxTopBuyerShare1m;
 
   return ageSeconds >= config.earlyLaunchMinAgeSeconds &&
     ageSeconds <= config.earlyLaunchMaxAgeMinutes * 60 &&
@@ -218,10 +232,7 @@ export function isEarlyLaunchCandidate(token: TokenSnapshot) {
     marketCap <= config.earlyLaunchMaxMarketCapUsd &&
     liquidity >= config.earlyLaunchMinLiquidityUsd &&
     holders >= config.earlyLaunchMinHolders &&
-    volume1m >= config.earlyLaunchMinVolume1mUsd &&
-    ratio1m >= config.earlyLaunchMinBuySell1m &&
-    uniqueBuyers >= config.earlyLaunchMinUniqueBuyers1m &&
-    topBuyerShare <= config.earlyLaunchMaxTopBuyerShare1m &&
+    (healthyFlow || curveVelocityBackup) &&
     trend1m >= config.earlyLaunchMinTrend1mPct &&
     trend1m <= config.earlyLaunchMaxTrend1mPct &&
     token.localScore >= config.earlyLaunchMinScore;
@@ -240,6 +251,18 @@ export function earlyLaunchBlockers(token: TokenSnapshot) {
   const uniqueBuyers = token.apiUniqueBuyers1m ?? 0;
   const topBuyerShare = token.apiTopBuyerShare1m ?? 1;
   const trend1m = token.apiTrend1mPct ?? 0;
+  const curveVelocity = token.progressVelocityPctPerMin ?? 0;
+  const healthyFlow =
+    volume1m >= config.earlyLaunchMinVolume1mUsd &&
+    ratio1m >= config.earlyLaunchMinBuySell1m &&
+    uniqueBuyers >= config.earlyLaunchMinUniqueBuyers1m &&
+    topBuyerShare <= config.earlyLaunchMaxTopBuyerShare1m;
+  const curveVelocityBackup =
+    curveVelocity >= config.earlyLaunchMinCurveVelocityPctPerMin &&
+    volume1m >= config.earlyLaunchMinVolume1mUsd * 0.65 &&
+    ratio1m >= 1.5 &&
+    uniqueBuyers >= 2 &&
+    topBuyerShare <= config.earlyLaunchMaxTopBuyerShare1m;
 
   if (ageSeconds < config.earlyLaunchMinAgeSeconds) blockers.push("age " + ageSeconds.toFixed(0) + "s < " + config.earlyLaunchMinAgeSeconds + "s");
   if (ageSeconds > config.earlyLaunchMaxAgeMinutes * 60) blockers.push("age > " + config.earlyLaunchMaxAgeMinutes + "m");
@@ -248,9 +271,14 @@ export function earlyLaunchBlockers(token: TokenSnapshot) {
   if (liquidity < config.earlyLaunchMinLiquidityUsd) blockers.push("liq $" + Math.round(liquidity) + " < $" + Math.round(config.earlyLaunchMinLiquidityUsd));
   if (holders < config.earlyLaunchMinHolders) blockers.push("holders " + holders + " < " + config.earlyLaunchMinHolders);
   if (volume1m < config.earlyLaunchMinVolume1mUsd) blockers.push("1m volume $" + Math.round(volume1m) + " < $" + Math.round(config.earlyLaunchMinVolume1mUsd));
-  if (ratio1m < config.earlyLaunchMinBuySell1m) blockers.push("1m buy/sell " + ratio1m.toFixed(2) + " < " + config.earlyLaunchMinBuySell1m);
-  if (uniqueBuyers < config.earlyLaunchMinUniqueBuyers1m) blockers.push("unique buyers " + uniqueBuyers + " < " + config.earlyLaunchMinUniqueBuyers1m);
-  if (topBuyerShare > config.earlyLaunchMaxTopBuyerShare1m) blockers.push("top buyer share " + Math.round(topBuyerShare * 100) + "% > " + Math.round(config.earlyLaunchMaxTopBuyerShare1m * 100) + "%");
+  if (!healthyFlow && !curveVelocityBackup) {
+    blockers.push(
+      "early flow not confirmed: 1m volume $" + Math.round(volume1m) +
+      ", buy/sell " + ratio1m.toFixed(2) +
+      ", buyers " + uniqueBuyers +
+      ", curve velocity " + curveVelocity.toFixed(2) + "%/min"
+    );
+  }
   if (trend1m < config.earlyLaunchMinTrend1mPct) blockers.push("1m trend " + trend1m.toFixed(1) + "% < " + config.earlyLaunchMinTrend1mPct + "%");
   if (trend1m > config.earlyLaunchMaxTrend1mPct) blockers.push("1m trend " + trend1m.toFixed(1) + "% > " + config.earlyLaunchMaxTrend1mPct + "%");
   if (token.localScore < config.earlyLaunchMinScore) blockers.push("score " + token.localScore + " < " + config.earlyLaunchMinScore);

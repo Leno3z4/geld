@@ -243,6 +243,22 @@ export class TradingEngine {
     await this.persist();
   }
 
+  private updateCreatorHistory(token: TokenSnapshot) {
+    const creator = token.creator?.toLowerCase();
+    if (!creator) return;
+
+    const prior = Object.values(this.store.get().tokens).filter(
+      (candidate) =>
+        candidate.token.toLowerCase() !== token.token.toLowerCase() &&
+        candidate.creator?.toLowerCase() === creator &&
+        candidate.createdAt > 0 &&
+        candidate.createdAt < token.createdAt
+    );
+
+    token.creatorPriorLaunches = prior.length;
+    token.creatorPriorGraduations = prior.filter((candidate) => candidate.graduated).length;
+  }
+
   private async pollNewEvents() {
     const now = Date.now();
     if (now - this.lastNewEventPollAt < config.newEventPollMs) return;
@@ -316,6 +332,7 @@ export class TradingEngine {
         token.name = String(tokenInfo.name ?? token.name);
         token.creator = String(tokenInfo.creator?.account_id ?? token.creator);
         token.lastEventAt = now;
+        this.updateCreatorHistory(token);
         this.store.upsertToken(token);
 
         await this.enrichToken(token);
@@ -511,6 +528,8 @@ export class TradingEngine {
           token.pair = marketPair.toLowerCase();
         }
 
+        this.updateCreatorHistory(token);
+
         token.lastMarketAt = Date.now();
 
         if (token.priceMon > 0) {
@@ -582,6 +601,7 @@ export class TradingEngine {
           watched += 1;
         }
 
+        this.updateCreatorHistory(token);
         this.store.upsertToken(token);
 
         const entrySetup = lowCapBaseCandidate || diagnostics.blockers.length === 0;

@@ -64,6 +64,11 @@ export interface TokenSnapshot {
   lastCandidateAiAt?: number;
   lastEnrichedAt?: number;
   lastFlowApiAt?: number;
+  apiTrend15mPct?: number;
+  apiTrend1hPct?: number;
+  apiVolume5mUsd?: number;
+  apiBuy5mUsd?: number;
+  apiSell5mUsd?: number;
   aiAction?: DecisionAction;
   aiConfidence?: number;
   aiReason?: string;

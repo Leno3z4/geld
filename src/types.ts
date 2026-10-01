@@ -154,6 +154,11 @@ export interface Position {
   status: "OPEN" | "CLOSED" | "CLOSING" | "FAILED";
   closeTx?: string;
   closeReason?: string;
+  lastSellAttemptAt?: number;
+  lastSellTx?: string;
+  lastSellFailureAt?: number;
+  sellBlockedUntil?: number;
+  lastSellError?: string;
 }
 
 export interface TradeRecord {
@@ -190,6 +195,7 @@ export interface PendingExecution {
   decimals?: number;
   txHash?: string;
   submittedAt?: number;
+  positionId?: string;
   createdAt: number;
 }
 

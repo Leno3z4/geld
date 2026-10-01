@@ -200,6 +200,19 @@ export class TradingEngine {
 
     this.store.update((s) => {
       for (const pending of stale) {
+        if (pending.side === "SELL" && pending.txHash) continue;
+
+        if (pending.side === "SELL" && pending.positionId) {
+          const position = s.positions[pending.positionId];
+          if (position && position.status === "CLOSING") {
+            const now = Date.now();
+            position.status = "OPEN";
+            position.lastSellFailureAt = now;
+            position.sellBlockedUntil = now + config.sellFailureCooldownMs;
+            position.lastSellError = "SELL_PENDING_TIMEOUT: transaction hash was not recorded";
+            position.closeReason = position.lastSellError;
+          }
+        }
         delete s.pendingExecutions[pending.id];
       }
     });
@@ -207,8 +220,53 @@ export class TradingEngine {
     return stale.length;
   }
 
+  private lastPendingSellReconcileAt = 0;
+
+  private async reconcilePendingSellExecutions(force = false) {
+    const now = Date.now();
+    if (!force && now - this.lastPendingSellReconcileAt < 5000) return 0;
+    this.lastPendingSellReconcileAt = now;
+
+    const pendingSells = Object.values(this.store.get().pendingExecutions).filter(
+      (pending) => pending.side === "SELL" && pending.positionId && pending.txHash
+    );
+    let resolved = 0;
+
+    for (const pending of pendingSells) {
+      try {
+        const receipt = await this.publicClient.getTransactionReceipt({
+          hash: pending.txHash as any
+        });
+        const position = this.store.get().positions[pending.positionId!];
+
+        if (receipt.status === "reverted" && position) {
+          const failureAt = Date.now();
+          position.status = "OPEN";
+          position.lastSellFailureAt = failureAt;
+          position.sellBlockedUntil = failureAt + config.sellFailureCooldownMs;
+          position.lastSellTx = pending.txHash;
+          position.lastSellError = "SELL transaction reverted: " + pending.txHash;
+          position.closeReason = position.lastSellError;
+        } else if (receipt.status === "success" && position) {
+          position.lastSellTx = pending.txHash;
+          position.closeReason = "SELL transaction confirmed; reconciling on-chain balance";
+        }
+
+        this.store.update((s) => {
+          delete s.pendingExecutions[pending.id];
+        });
+        resolved += 1;
+      } catch {
+        // Receipt is still pending or the RPC is temporarily unavailable.
+      }
+    }
+
+    return resolved;
+  }
+
   async init() {
     await this.store.load();
+    await this.reconcilePendingSellExecutions(true);
     this.cleanupStalePendingExecutions();
     this.store.update((s) => {
       s.walletAddress = this.account?.address ?? "";
@@ -2067,7 +2125,24 @@ export class TradingEngine {
       for (const position of Object.values(stateNow.positions)) {
         if (position.status !== "OPEN" && position.status !== "CLOSING") continue;
         const balanceRaw = balances.get(position.token.toLowerCase()) ?? 0n;
-        if (balanceRaw > 0n) continue;
+        if (balanceRaw > 0n) {
+          const pendingSell = Object.values(stateNow.pendingExecutions).some(
+            (pending) =>
+              pending.side === "SELL" &&
+              (pending.positionId === position.id ||
+                (!pending.positionId &&
+                  pending.token.toLowerCase() === position.token.toLowerCase()))
+          );
+          if (position.status === "CLOSING" && !pendingSell) {
+            position.status = "OPEN";
+            position.amountRaw = balanceRaw.toString();
+            position.sellBlockedUntil = undefined;
+            position.lastSellError = undefined;
+            position.closeReason = "CLOSING_RECONCILED_ONCHAIN_BALANCE";
+            this.store.upsertPosition(position);
+          }
+          continue;
+        }
 
         // The wallet is the source of truth for whether tokens are still held.
         // A prior successful sell can leave a stale OPEN position if the old
@@ -2168,6 +2243,11 @@ export class TradingEngine {
   }
 
   private async managePositions() {
+    const resolvedPendingSells = await this.reconcilePendingSellExecutions();
+    if (resolvedPendingSells > 0) {
+      await this.reconcileWalletPositions();
+    }
+
     const positions = Object.values(this.store.get().positions).filter((p) => p.status === "OPEN");
     let unrealized = 0;
     let exposure = 0;
@@ -2244,8 +2324,9 @@ export class TradingEngine {
         position.peakMon = Math.max(position.peakMon, position.currentMon);
         position.peakPnlPct = Math.max(position.peakPnlPct ?? position.pnlPct, position.pnlPct);
 
+        const sellBlocked = (position.sellBlockedUntil ?? 0) > Date.now();
         const signal = positionExitSignal(position, token, exitRules);
-        if (signal) {
+        if (signal && !sellBlocked) {
           if (signal.kind === "PARTIAL") {
             await this.sellPosition(position, signal.sellPct, signal.reason);
           } else {
@@ -2260,7 +2341,7 @@ export class TradingEngine {
             config.trailingPct,
             config.maxHoldMinutes
           );
-          if (exit) await this.sellPosition(position, 100, exit);
+          if (exit && !sellBlocked) await this.sellPosition(position, 100, exit);
           if (position.status !== "OPEN") continue;
         }
 
@@ -2285,6 +2366,7 @@ export class TradingEngine {
   private async reviewOpenPositions() {
     for (const position of Object.values(this.store.get().positions).filter((p) => p.status === "OPEN")) {
       if (!this.store.get().running) return;
+      if ((position.sellBlockedUntil ?? 0) > Date.now()) continue;
 
       const token = this.store.get().tokens[position.token];
       if (!token) continue;
@@ -2329,13 +2411,48 @@ export class TradingEngine {
     this.emit();
   }
 
-  private async sellPosition(position: Position, sellPct: number, reason: string) {
+  private async sellPosition(
+    position: Position,
+    sellPct: number,
+    reason: string,
+    force = false
+  ) {
     if (position.status !== "OPEN") return;
 
+    const now = Date.now();
+    if (!force && (position.sellBlockedUntil ?? 0) > now) return;
+
+    const hasPendingSell = Object.values(this.store.get().pendingExecutions).some(
+      (pending) =>
+        pending.side === "SELL" &&
+        (pending.positionId === position.id ||
+          (!pending.positionId &&
+            pending.token.toLowerCase() === position.token.toLowerCase()))
+    );
+    if (hasPendingSell) return;
+
     position.status = "CLOSING";
+    position.lastSellAttemptAt = now;
+
+    const pendingId = "SELL:" + position.id + ":" + now;
+    this.store.update((s) => {
+      s.pendingExecutions[pendingId] = {
+        id: pendingId,
+        side: "SELL",
+        token: position.token,
+        symbol: position.symbol,
+        positionId: position.id,
+        amountRaw: position.amountRaw,
+        decimals: position.decimals,
+        createdAt: now
+      };
+    });
     this.emit();
+    await this.persist();
 
     const fractionPct = Math.max(1, Math.min(100, sellPct));
+    let keepPending = false;
+    let confirmedRevert = false;
 
     try {
       let tx = "PAPER";
@@ -2366,6 +2483,11 @@ export class TradingEngine {
       const safeSoldFraction = Math.max(0, Math.min(1, soldFraction));
       const costBasisSold = position.entryMon * safeSoldFraction;
 
+      this.store.update((s) => {
+        const pending = s.pendingExecutions[pendingId];
+        if (pending) pending.amountRaw = soldAmountRaw.toString();
+      });
+
       if (config.liveTrading) {
         const nativeBefore = BigInt(String(
           await this.publicClient.getBalance({ address: this.account.address })
@@ -2379,8 +2501,19 @@ export class TradingEngine {
           config.slippagePct
         );
 
+        position.lastSellTx = tx;
+        this.store.update((s) => {
+          const pending = s.pendingExecutions[pendingId];
+          if (pending) {
+            pending.txHash = tx;
+            pending.submittedAt = Date.now();
+          }
+        });
+        await this.persist();
+
         const receipt = await this.publicClient.waitForTransactionReceipt({ hash: tx });
         if (receipt.status === "reverted") {
+          confirmedRevert = true;
           throw new Error("Sell transaction reverted: " + tx);
         }
         const nativeAfter = await this.readNativeBalanceWithRetry();
@@ -2429,6 +2562,8 @@ export class TradingEngine {
       position.realizedPnlMon = totalRealizedPnl;
       position.amountRaw = remainingAmountRaw.toString();
       position.entryMon = remainingCostBasis;
+      position.sellBlockedUntil = undefined;
+      position.lastSellError = undefined;
 
       if (remainingAmountRaw === 0n || safeSoldFraction >= 0.999999) {
         position.currentMon = 0;
@@ -2461,21 +2596,44 @@ export class TradingEngine {
         this.store.upsertPosition(position);
       }
     } catch (error) {
-      position.status = "OPEN";
-      position.closeReason = error instanceof Error ? error.message : String(error);
-      this.store.update((s) => {
-        s.stats.lastError = position.closeReason;
-      });
-    }
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const pendingTx = this.store.get().pendingExecutions[pendingId]?.txHash;
 
-    if (position.status === "CLOSED") {
+      if (pendingTx && !confirmedRevert) {
+        keepPending = true;
+        position.status = "CLOSING";
+        position.lastSellTx = pendingTx;
+        position.lastSellError = "SELL receipt pending/unknown: " + errorMessage;
+        position.closeReason = position.lastSellError;
+        this.store.update((s) => {
+          s.stats.lastError = position.lastSellError;
+        });
+      } else {
+        const failureAt = Date.now();
+        position.status = "OPEN";
+        position.lastSellFailureAt = failureAt;
+        position.sellBlockedUntil = failureAt + config.sellFailureCooldownMs;
+        position.lastSellTx = pendingTx ?? position.lastSellTx;
+        position.lastSellError = errorMessage;
+        position.closeReason = errorMessage;
+        this.store.update((s) => {
+          s.stats.lastError = errorMessage;
+        });
+      }
+    } finally {
+      if (!keepPending) {
+        this.store.update((s) => {
+          delete s.pendingExecutions[pendingId];
+        });
+      }
       this.store.upsertPosition(position);
+      await this.persist();
     }
     this.emit();
   }
 
   private async closePosition(position: Position, reason: string) {
-    await this.sellPosition(position, 100, reason);
+    await this.sellPosition(position, 100, reason, true);
   }
 
   private async readNativeBalanceWithRetry() {

@@ -44,6 +44,7 @@ export const config = {
   earlyLaunchMinUniqueBuyers1m: Math.max(2, Math.floor(num("EARLY_LAUNCH_MIN_UNIQUE_BUYERS_1M", 3))),
   earlyLaunchMaxTopBuyerShare1m: Math.min(1, Math.max(0.1, num("EARLY_LAUNCH_MAX_TOP_BUYER_SHARE_1M", 0.60))),
   earlyLaunchMinTrend1mPct: num("EARLY_LAUNCH_MIN_TREND_1M_PCT", 3),
+  earlyLaunchMinCurveVelocityPctPerMin: Math.max(0.25, num("EARLY_LAUNCH_MIN_CURVE_VELOCITY_PCT_PER_MIN", 2)),
   earlyLaunchMaxTrend1mPct: Math.max(5, num("EARLY_LAUNCH_MAX_TREND_1M_PCT", 50)),
   earlyLaunchMinScore: Math.max(0, num("EARLY_LAUNCH_MIN_SCORE", 30)),
   earlyLaunchProbePortfolioPct: Math.min(5, Math.max(0.25, num("EARLY_LAUNCH_PROBE_PORTFOLIO_PCT", 2))),

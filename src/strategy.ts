@@ -605,7 +605,7 @@ export interface PositionExitRules {
   momentumExitTrend1hPct: number;
   momentumExitReboundPct: number;
   sellPressureExitRatio: number;
-  sellPressureMinVolumeMon: number;
+  sellPressureMinVolumeUsd: number;
   profitTake1Pct: number;
   profitTake1SellPct: number;
   profitTake2Pct: number;
@@ -618,7 +618,7 @@ export interface PositionExitRules {
   lowCapMaxMarketCapUsd: number;
   lowCapLiquidityExitRatio: number;
   lowCapSellPressureRatio: number;
-  lowCapSellPressureMinVolumeMon: number;
+  lowCapSellPressureMinVolumeUsd: number;
   lowCapTrendExitPct: number;
   lowCapLossExitPct: number;
   lowCapPeakDrawdownExitPct: number;

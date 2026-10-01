@@ -184,7 +184,7 @@ function historyMetrics(token: TokenSnapshot) {
   };
 }
 
-export function selectEntryStrategy(token: TokenSnapshot) {
+export function selectEntryStrategy(token: TokenSnapshot, minDailySamples = 24) {
   const dip = token.dipPct ?? 0;
   const trend1h = token.trendPct1h ?? 0;
   const trend4h = token.trendPct4h ?? 0;
@@ -197,6 +197,8 @@ export function selectEntryStrategy(token: TokenSnapshot) {
   const acceleration = token.volumeAcceleration5m ?? 0;
 
   const dailyMeanReversion =
+    token.daySamples !== undefined &&
+    token.daySamples >= minDailySamples &&
     dayAvg > 0 &&
     dayLow > 0 &&
     dayAvgDistance <= -8 &&

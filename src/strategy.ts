@@ -348,6 +348,14 @@ export function updateMarketMetrics(token: TokenSnapshot) {
   return { ...metrics, ...flow };
 }
 
+export function entrySizeVolatilityFactor(token: TokenSnapshot) {
+  const trend1h = Math.abs(token.trendPct1h ?? 0);
+  if (trend1h >= 50) return 0.25;
+  if (trend1h >= 35) return 0.50;
+  if (trend1h >= 25) return 0.75;
+  return 1;
+}
+
 export function scoreToken(token: TokenSnapshot, seasonality: SeasonalityModel) {
   const age = ageMinutes(token);
   const liquidity = token.liquidityMon ?? 0;

@@ -138,24 +138,24 @@ Watch for `geld container started`, followed by engine events / state updates. T
 The current high-aggression defaults are:
 
 - established-token DEX trading only; new-token launch buys are disabled
-- $5,000 minimum liquidity before a token can become an entry candidate
-- $50,000 minimum market cap before a token can become an entry candidate
-- 30-minute minimum token age
-- 25 minimum holders
-- 100 MON minimum tracked volume
-- 8-35% pullback entry band
+- $2,500 minimum liquidity before a token can become an entry candidate
+- $25,000 minimum market cap before a token can become an entry candidate
+- 10-minute minimum token age
+- 10 minimum holders
+- 25 MON minimum tracked volume
+- 3-50% pullback entry band, plus controlled positive-momentum entries
 - 24% of current free balance per planned trade
 - 90% max portfolio exposure
 - up to 5 open positions
-- 0.58 minimum AI confidence
+- 0.45 minimum AI confidence
 - 6% quote slippage
-- 30% hard stop
+- 22% hard stop
 - 70% take profit
-- 20% trailing stop
-- 240-minute maximum hold
-- market discovery every minute in the free Worker architecture
+- 15% trailing stop
+- 180-minute maximum hold
+- market discovery every minute; 1-minute local price sampling
 
-These settings are intentionally aggressive and can lose capital quickly. There is no guaranteed profit.
+These settings are intentionally aggressive. AI is advisory for strong setups, and a deterministic fallback can enter qualified setups during Gemini outages/rate limits. Trading can lose capital quickly; there is no guaranteed profit.
 
 ## API endpoints
 

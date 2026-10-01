@@ -1073,8 +1073,8 @@ export class TradingEngine {
         if (Number.isFinite(apiBuy5) && Number.isFinite(apiSell5)) {
           metrics5mBuyUsd = apiBuy5;
           metrics5mSellUsd = apiSell5;
-          metrics5mBuyTx = numeric(metric5?.transactions?.buy);
-          metrics5mSellTx = numeric(metric5?.transactions?.sell);
+          metrics5mBuyTx = buy5Tx > 0 ? buy5Tx : numeric(metric5?.transactions?.buy);
+          metrics5mSellTx = sell5Tx > 0 ? sell5Tx : numeric(metric5?.transactions?.sell);
 
           // The metrics endpoint is authoritative for the current 5m window.
           buy5Usd = apiBuy5;

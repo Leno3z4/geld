@@ -192,10 +192,10 @@ export function isLowCapMomentumCandidate(
     maxMarketCapUsd: number;
     minLiquidityUsd: number;
     minHolders: number;
-    minVolumeMon: number;
+    minVolumeUsd: number;
     minAgeMinutes: number;
     minBuySellRatio5m: number;
-    minVolume5mMon: number;
+    minVolume5mUsd: number;
     minVolumeAcceleration5m: number;
     minTrend1hPct: number;
     minLocalScore: number;
@@ -206,19 +206,21 @@ export function isLowCapMomentumCandidate(
   const marketCap = token.marketCapUsd ?? 0;
   const liquidity = token.liquidityUsd ?? 0;
   const holders = token.holders ?? 0;
-  const volume = token.volumeMon ?? 0;
+  const volumeMon = token.volumeMon ?? 0;
+  const volumeUsd = volumeMon * (token.monUsdPrice ?? 0);
   const ratio = token.buySellRatio5m ?? 0;
-  const volume5m = token.volume5mMon ?? 0;
+  const volume5mMon = token.volume5mMon ?? 0;
+  const volume5mUsd = volume5mMon * (token.monUsdPrice ?? 0);
   const acceleration = token.volumeAcceleration5m ?? 0;
   const trend1h = token.trendPct1h ?? token.changePct ?? 0;
   return marketCap >= rules.minMarketCapUsd && marketCap <= rules.maxMarketCapUsd &&
     liquidity >= rules.minLiquidityUsd && holders >= rules.minHolders &&
-    volume >= rules.minVolumeMon && ageMinutes >= rules.minAgeMinutes &&
-    ratio >= rules.minBuySellRatio5m && volume5m >= rules.minVolume5mMon &&
+    volumeUsd >= rules.minVolumeUsd && ageMinutes >= rules.minAgeMinutes &&
+    ratio >= rules.minBuySellRatio5m && volume5mUsd >= rules.minVolume5mUsd &&
     acceleration >= rules.minVolumeAcceleration5m && trend1h >= rules.minTrend1hPct &&
     token.localScore >= rules.minLocalScore;
 }
-export function selectEntryStrategy(token: TokenSnapshot, minDailySamples = 24) {
+export function selectEntryStrategy(token: TokenSnapshot, minDailySamples = 24, minVolume5mUsd = 1000) {
   const dip = token.dipPct ?? 0;
   const trend1h = token.trendPct1h ?? 0;
   const trend4h = token.trendPct4h ?? 0;
@@ -227,7 +229,8 @@ export function selectEntryStrategy(token: TokenSnapshot, minDailySamples = 24) 
   const dayLowDistance = token.distanceFromDayLowPct ?? 0;
   const dayAvgDistance = token.distanceFromDayAvgPct ?? 0;
   const buySell = token.buySellRatio5m ?? 0;
-  const volume5m = token.volume5mMon ?? 0;
+  const volume5mMon = token.volume5mMon ?? 0;
+  const volume5mUsd = volume5mMon * (token.monUsdPrice ?? 0);
   const acceleration = token.volumeAcceleration5m ?? 0;
 
   const dailyMeanReversion =
@@ -250,12 +253,12 @@ export function selectEntryStrategy(token: TokenSnapshot, minDailySamples = 24) 
     trend1h > 0 &&
     trend1h <= 20 &&
     trend4h >= -25 &&
-    (buySell >= 0.95 || acceleration >= 1.10 || volume5m >= 5);
+    (buySell >= 0.95 || acceleration >= 1.10 || volume5mUsd >= minVolume5mUsd);
 
   const flow =
     buySell >= 1.25 &&
     acceleration >= 1.05 &&
-    volume5m >= 5 &&
+    volume5mUsd >= minVolume5mUsd &&
     trend4h >= -25;
 
   if (dailyMeanReversion) return "DAILY_MEAN_REVERSION" as const;
@@ -389,7 +392,7 @@ export interface EntryGateRules {
   minLiquidityUsd: number;
   minMarketCapUsd: number;
   minHolders: number;
-  minVolumeMon: number;
+  minVolumeUsd: number;
   dipMinPct: number;
   dipMaxPct: number;
   recoveryMinPct: number;
@@ -435,8 +438,9 @@ export function entryGateDiagnostics(
   }
 
   const volumeMon = token.volumeMon ?? 0;
-  if (volumeMon < rules.minVolumeMon) {
-    blockers.push(`volume ${volumeMon.toFixed(1)} MON < ${rules.minVolumeMon.toFixed(1)} MON`);
+  const volumeUsd = volumeMon * (token.monUsdPrice ?? 0);
+  if (volumeUsd < rules.minVolumeUsd) {
+    blockers.push(`volume ${money(volumeUsd)} < ${money(rules.minVolumeUsd)}`);
   }
 
   if (age < rules.minEstablishedAgeMinutes) {
@@ -464,7 +468,7 @@ export function entryGateDiagnostics(
     metrics.trend4hPct >= rules.minTrend4hPct &&
     token.buySellRatio5m !== undefined &&
     token.buySellRatio5m >= 1.15 &&
-    (token.volume5mMon ?? 0) >= Math.max(2, rules.minVolumeMon * 0.10);
+    (token.volume5mMon ?? 0) * (token.monUsdPrice ?? 0) >= rules.minVolumeUsd;
 
   if (!dipInEntryBand && !momentumEntry && !dailyMeanEntry && !flowEntry) {
     if (metrics.dipPct < rules.dipMinPct) {
@@ -509,6 +513,7 @@ export function entryGateDiagnostics(
       marketCapUsd,
       holders,
       volumeMon,
+      volumeUsd,
       dipPct: metrics.dipPct,
       drawdownFromRecentPeakPct: metrics.drawdownFromRecentPeakPct,
       drawdownFromAthPct: metrics.drawdownFromAthPct,
@@ -530,7 +535,7 @@ export function shouldWatch(
   minLiquidityUsd: number,
   minMarketCapUsd: number,
   minHolders: number,
-  minVolumeMon: number
+  minVolumeUsd: number
 ) {
   return (
     token.createdAt > 0 &&
@@ -539,7 +544,7 @@ export function shouldWatch(
     (token.liquidityUsd ?? 0) >= minLiquidityUsd &&
     (token.marketCapUsd ?? 0) >= minMarketCapUsd &&
     (token.holders ?? 0) >= minHolders &&
-    (token.volumeMon ?? 0) >= minVolumeMon
+    (token.volumeMon ?? 0) * (token.monUsdPrice ?? 0) >= minVolumeUsd
   );
 }
 
@@ -552,7 +557,7 @@ export function shouldOpen(
   minLiquidityUsd: number,
   minMarketCapUsd: number,
   minHolders: number,
-  minVolumeMon: number,
+  minVolumeUsd: number,
   dipMinPct: number,
   dipMaxPct: number,
   recoveryMinPct: number,
@@ -566,7 +571,7 @@ export function shouldOpen(
       minLiquidityUsd,
       minMarketCapUsd,
       minHolders,
-      minVolumeMon,
+      minVolumeUsd,
       dipMinPct,
       dipMaxPct,
       recoveryMinPct,
@@ -637,7 +642,8 @@ export function positionExitSignal(
   const rebound1h = token?.reboundPct1h ?? 0;
   const dipPct = token?.dipPct ?? 0;
   const flowRatio = token?.buySellRatio5m ?? 0;
-  const flowVolume = token?.volume5mMon ?? 0;
+  const flowVolumeMon = token?.volume5mMon ?? 0;
+  const flowVolumeUsd = flowVolumeMon * (token?.monUsdPrice ?? 0);
   const dayAvg = token?.dayAvgPriceMon ?? 0;
   const dayLowDistance = token?.distanceFromDayLowPct ?? 0;
   const dayAvgDistance = token?.distanceFromDayAvgPct ?? 0;
@@ -653,7 +659,7 @@ export function positionExitSignal(
       ((position.entryLiquidityUsd ?? 0) > 0 && liquidity < (position.entryLiquidityUsd ?? 0) * rules.lowCapLiquidityExitRatio)
     );
     if (liquidityBroken) return { kind: "FULL", sellPct: 100, reason: "LOW_CAP_LIQUIDITY_BREAK" };
-    if (flowVolume >= rules.lowCapSellPressureMinVolumeMon && flowRatio > 0 && flowRatio <= rules.lowCapSellPressureRatio && trend1h <= rules.lowCapTrendExitPct) {
+    if (flowVolumeUsd >= rules.lowCapSellPressureMinVolumeUsd && flowRatio > 0 && flowRatio <= rules.lowCapSellPressureRatio && trend1h <= rules.lowCapTrendExitPct) {
       return { kind: "FULL", sellPct: 100, reason: "LOW_CAP_SELL_PRESSURE" };
     }
     if (pnlPct <= rules.lowCapLossExitPct && trend1h <= rules.lowCapTrendExitPct) {
@@ -689,7 +695,7 @@ export function positionExitSignal(
     }
 
     if (
-      flowVolume >= rules.sellPressureMinVolumeMon &&
+      flowVolumeUsd >= rules.sellPressureMinVolumeUsd &&
       flowRatio > 0 &&
       flowRatio <= rules.sellPressureExitRatio &&
       trend1h < 0

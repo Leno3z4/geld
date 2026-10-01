@@ -180,6 +180,11 @@ export interface BotStats {
   lastAiError?: string;
   lastAiFailureAt?: number;
   lastIdleReason?: string;
+  dailyRiskDay?: string;
+  dailyRiskStartEquityMon?: number;
+  dailyRiskDrawdownPct?: number;
+  entryCircuitBreakerUntil?: number;
+  entryCircuitBreakerReason?: string;
   startedAt?: number;
   lastLogCount?: number;
   lastLogPollAt?: number;

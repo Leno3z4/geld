@@ -123,7 +123,7 @@ export async function quoteSells(
 ): Promise<Map<string, bigint>> {
   if (requests.length === 0) return new Map();
 
-  const results = await publicClient.multicall({
+  const v2Results = await publicClient.multicall({
     contracts: requests.map(({ token, amountRaw }) => ({
       address: ADDRESSES.ROUTER,
       abi: routerAbi,
@@ -134,12 +134,35 @@ export async function quoteSells(
   });
 
   const quotes = new Map<string, bigint>();
+  const fallback = requests.filter((_, i) => {
+    const result = v2Results[i];
+    return !(result?.status === "success" && typeof result.result === "bigint");
+  });
+
   requests.forEach(({ token }, i) => {
-    const result = results[i];
+    const result = v2Results[i];
     if (result?.status === "success" && typeof result.result === "bigint") {
       quotes.set(token.toLowerCase(), result.result);
     }
   });
+
+  if (fallback.length) {
+    const lensResults = await publicClient.multicall({
+      contracts: fallback.map(({ token, amountRaw }) => ({
+        address: ADDRESSES.V1_LENS,
+        abi: v1LensAbi,
+        functionName: "getAmountOut",
+        args: [token, amountRaw, false]
+      })),
+      allowFailure: true
+    });
+    fallback.forEach(({ token }, i) => {
+      const result = lensResults[i];
+      const value = result?.status === "success" ? result.result as readonly [Address, bigint] : null;
+      if (value && typeof value[1] === "bigint") quotes.set(token.toLowerCase(), value[1]);
+    });
+  }
+
   return quotes;
 }
 
@@ -208,7 +231,23 @@ export async function buyNative(
   slippagePct: number
 ): Promise<Hex> {
   const account = walletClient.account;
-  const { amountIn, amountOut } = await quoteBuy(publicClient, token, amountMon);
+  const { amountIn, amountOut, router } = await quoteBuy(publicClient, token, amountMon);
+  if (router !== ADDRESSES.ROUTER) {
+    return walletClient.writeContract({
+      account,
+      chain: MONAD,
+      address: router,
+      abi: v1DexRouterAbi,
+      functionName: "buy",
+      args: [{
+        amountOutMin: minOut(amountOut, slippagePct),
+        token,
+        to: account.address,
+        deadline: BigInt(Math.floor(Date.now() / 1000) + 90)
+      }],
+      value: amountIn
+    });
+  }
   return walletClient.writeContract({
     account,
     chain: MONAD,

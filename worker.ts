@@ -71,6 +71,8 @@ interface Env {
   POSITION_LOOP_MS?: string;
   AI_POSITION_REVIEW_MS?: string;
   AI_FAST_COOLDOWN_MS?: string;
+  AI_FALLBACK_ENABLED?: string;
+  AI_FALLBACK_MIN_SCORE?: string;
 }
 
 function isTrue(value?: string) {
@@ -177,7 +179,9 @@ function hydrateProcessEnv(env: Env) {
     EVENT_POLL_MS: env.EVENT_POLL_MS,
     POSITION_LOOP_MS: env.POSITION_LOOP_MS,
     AI_POSITION_REVIEW_MS: env.AI_POSITION_REVIEW_MS,
-    AI_FAST_COOLDOWN_MS: env.AI_FAST_COOLDOWN_MS
+    AI_FAST_COOLDOWN_MS: env.AI_FAST_COOLDOWN_MS,
+    AI_FALLBACK_ENABLED: env.AI_FALLBACK_ENABLED,
+    AI_FALLBACK_MIN_SCORE: env.AI_FALLBACK_MIN_SCORE
   };
 
   for (const [key, value] of Object.entries(mapping)) {

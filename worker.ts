@@ -373,7 +373,25 @@ export class GeldBot extends DurableObject<Env> {
           dipMinPct: runtimeConfig.dipMinPct,
           dipMaxPct: runtimeConfig.dipMaxPct,
           trendMax1hPct: runtimeConfig.trendMax1hPct,
-          minTrend4hPct: runtimeConfig.minTrend4hPct
+          minTrend4hPct: runtimeConfig.minTrend4hPct,
+          fastCycleMs: runtimeConfig.fastCycleMs,
+          lowCapMomentumEnabled: runtimeConfig.lowCapMomentumEnabled,
+          lowCapMinMarketCapUsd: runtimeConfig.lowCapMinMarketCapUsd,
+          lowCapMaxMarketCapUsd: runtimeConfig.lowCapMaxMarketCapUsd,
+          lowCapMinLiquidityUsd: runtimeConfig.lowCapMinLiquidityUsd,
+          lowCapMinHolders: runtimeConfig.lowCapMinHolders,
+          lowCapMinVolumeMon: runtimeConfig.lowCapMinVolumeMon,
+          lowCapMinAgeMinutes: runtimeConfig.lowCapMinAgeMinutes,
+          lowCapMinBuySellRatio5m: runtimeConfig.lowCapMinBuySellRatio5m,
+          lowCapMinVolume5mMon: runtimeConfig.lowCapMinVolume5mMon,
+          lowCapMinVolumeAcceleration5m: runtimeConfig.lowCapMinVolumeAcceleration5m,
+          lowCapMinTrend1hPct: runtimeConfig.lowCapMinTrend1hPct,
+          lowCapMinScore: runtimeConfig.lowCapMinScore,
+          lowCapLiquidityExitRatio: runtimeConfig.lowCapLiquidityExitRatio,
+          lowCapSellPressureRatio: runtimeConfig.lowCapSellPressureRatio,
+          lowCapTrendExitPct: runtimeConfig.lowCapTrendExitPct,
+          lowCapLossExitPct: runtimeConfig.lowCapLossExitPct,
+          lowCapPeakDrawdownExitPct: runtimeConfig.lowCapPeakDrawdownExitPct
         }
       });
     }

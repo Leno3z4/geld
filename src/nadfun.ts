@@ -33,7 +33,9 @@ export const ADDRESSES = {
   FACTORY: "0xA25b13127e63ddae6d0b35570FF3D39dBD621001" as Address,
   V1_LENS: "0x7e78A8DE94f21804F7a17F4E8BF9EC2c872187ea" as Address,
   V1_DEX_ROUTER: "0x0B79d71AE99528D1dB24A4148b5f4F865cc2b137" as Address,
-  V1_BONDING_ROUTER: "0x6F6B8F1a20703309951a5127c45B49b1CD981A22" as Address
+  V1_BONDING_ROUTER: "0x6F6B8F1a20703309951a5127c45B49b1CD981A22" as Address,
+  LVMON: "0x91b81bfbe3A747230F0529Aa28d8b2Bc898E6D56" as Address,
+  LVMON_FAST_REDEEM_VAULT: "0x06058fE1FcFAD19181438508600925106309e5fe" as Address
 };
 
 export const routerAbi = parseAbi([
@@ -47,6 +49,14 @@ export const v1LensAbi = parseAbi([
   "function getAmountOut(address token,uint256 amountIn,bool isBuy) view returns (address router,uint256 amountOut)",
   "function isGraduated(address token) view returns (bool)",
   "function isLocked(address token) view returns (bool)"
+]);
+
+export const lvmonFastRedeemAbi = parseAbi([
+  "function redeem(address tokenVault,uint256 amount)"
+]);
+
+export const wmonAbi = parseAbi([
+  "function withdraw(uint256 amount)"
 ]);
 
 export const v1DexRouterAbi = parseAbi([
@@ -281,33 +291,87 @@ export async function sellToNative(
   publicClient: any,
   token: Address,
   amountRaw: bigint,
-  slippagePct: number
-): Promise<Hex> {
+  slippagePct: number,
+  onTxSubmitted?: (hash: Hex, stage: "V1_SELL" | "V2_SELL" | "V2_LVMON_REDEEM" | "V2_WMON_UNWRAP") => Promise<void>
+): Promise<{ txHash: Hex; gasCostRaw: bigint }> {
   const account = walletClient.account;
   const quote = await resolveQuote(publicClient, token, amountRaw, false);
   let router = quote.router;
 
-  const allowance = await publicClient.readContract({
-    address: token,
-    abi: erc20Abi,
-    functionName: "allowance",
-    args: [account.address, router]
-  }) as bigint;
+  const ensureAllowance = async (spender: Address) => {
+    const allowance = await publicClient.readContract({
+      address: token,
+      abi: erc20Abi,
+      functionName: "allowance",
+      args: [account.address, spender]
+    }) as bigint;
 
-  if (allowance < amountRaw) {
-    const approvalTx = await walletClient.writeContract({
-      account,
-      chain: MONAD,
+    if (allowance >= amountRaw) return;
+
+    const simulation = await publicClient.simulateContract({
+      account: account.address,
       address: token,
       abi: erc20Abi,
       functionName: "approve",
-      args: [router, amountRaw]
+      args: [spender, amountRaw]
+    });
+    const gasEstimate = await publicClient.estimateContractGas({
+      account: account.address,
+      address: token,
+      abi: erc20Abi,
+      functionName: "approve",
+      args: [spender, amountRaw]
+    });
+    const gasLimit = gasEstimate + (gasEstimate * 20n + 99n) / 100n;
+    const approvalTx = await walletClient.writeContract({
+      ...simulation.request,
+      gas: gasLimit
     });
     const approvalReceipt = await publicClient.waitForTransactionReceipt({ hash: approvalTx });
     if (approvalReceipt.status === "reverted") {
       throw new Error("Sell token approval reverted: " + approvalTx);
     }
-  }
+  };
+
+  const simulateAndEstimate = async (
+    address: Address,
+    abi: any,
+    functionName: string,
+    args: readonly unknown[],
+    label: string
+  ) => {
+    const simulation = await publicClient.simulateContract({
+      account: account.address,
+      address,
+      abi,
+      functionName,
+      args
+    });
+    const gasEstimate = await publicClient.estimateContractGas({
+      account: account.address,
+      address,
+      abi,
+      functionName,
+      args
+    });
+    const paddedGas = gasEstimate + (gasEstimate * BigInt(Math.round(config.sellGasPaddingPct * 100)) + 9999n) / 10000n;
+    const cap = BigInt(config.sellGasLimit);
+    if (paddedGas > cap) {
+      throw new Error(
+        label + " gas estimate exceeds safety cap: estimate=" +
+        gasEstimate.toString() + " padded=" + paddedGas.toString() + " cap=" + cap.toString()
+      );
+    }
+    return { simulation, gas: paddedGas };
+  };
+
+  const receiptGasCost = (receipt: any) => {
+    const gasUsed = BigInt(String(receipt.gasUsed ?? 0));
+    const effectiveGasPrice = BigInt(String(receipt.effectiveGasPrice ?? 0));
+    return gasUsed * effectiveGasPrice;
+  };
+
+  await ensureAllowance(router);
 
   const freshQuote = await resolveQuote(publicClient, token, amountRaw, false);
   if (freshQuote.router.toLowerCase() !== router.toLowerCase()) {
@@ -319,79 +383,132 @@ export async function sellToNative(
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 90);
   const isV2 = router.toLowerCase() === ADDRESSES.ROUTER.toLowerCase();
 
-  const gasEstimate = isV2
-    ? await publicClient.estimateContractGas({
-        account: account.address,
-        address: ADDRESSES.ROUTER,
-        abi: routerAbi,
-        functionName: "sellToNative",
-        args: [{
-          amountIn: amountRaw,
-          amountOutMin,
-          token,
-          to: account.address,
-          deadline
-        }]
-      })
-    : await publicClient.estimateContractGas({
-        account: account.address,
-        address: router,
-        abi: v1DexRouterAbi,
-        functionName: "sell",
-        args: [{
-          amountIn: amountRaw,
-          amountOutMin,
-          token,
-          to: account.address,
-          deadline
-        }]
-      });
+  if (!isV2) {
+    const preflight = await simulateAndEstimate(
+      router,
+      v1DexRouterAbi,
+      "sell",
+      [{ amountIn: amountRaw, amountOutMin, token, to: account.address, deadline }],
+      "V1 SELL"
+    );
+    const txHash = await walletClient.writeContract({
+      ...preflight.simulation.request,
+      gas: preflight.gas
+    });
+    await onTxSubmitted?.(txHash, "V1_SELL");
+    const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+    if (receipt.status === "reverted") {
+      throw new Error("V1 SELL transaction reverted: " + txHash);
+    }
+    return { txHash, gasCostRaw: receiptGasCost(receipt) };
+  }
 
-  const paddingBps = BigInt(Math.round(config.sellGasPaddingPct * 100));
-  const paddedGas = gasEstimate + (gasEstimate * paddingBps + 9999n) / 10000n;
-  const gasLimitCap = BigInt(config.sellGasLimit);
-  if (paddedGas > gasLimitCap) {
+  const lvmonBefore = await getTokenBalance(publicClient, ADDRESSES.LVMON, account.address);
+  const wmonBefore = await getTokenBalance(publicClient, ADDRESSES.WMON, account.address);
+
+  const sellPreflight = await simulateAndEstimate(
+    ADDRESSES.ROUTER,
+    routerAbi,
+    "sell",
+    [{ amountIn: amountRaw, amountOutMin, token, to: account.address, deadline }],
+    "V2 SELL"
+  );
+  const sellTx = await walletClient.writeContract({
+    ...sellPreflight.simulation.request,
+    gas: sellPreflight.gas
+  });
+  await onTxSubmitted?.(sellTx, "V2_SELL");
+  const sellReceipt = await publicClient.waitForTransactionReceipt({ hash: sellTx });
+  if (sellReceipt.status === "reverted") {
+    throw new Error("V2 SELL transaction reverted: " + sellTx);
+  }
+
+  let totalGasCostRaw = receiptGasCost(sellReceipt);
+  const lvmonAfterSell = await getTokenBalance(publicClient, ADDRESSES.LVMON, account.address);
+  const wmonAfterSell = await getTokenBalance(publicClient, ADDRESSES.WMON, account.address);
+  const lvmonDelta = lvmonAfterSell > lvmonBefore ? lvmonAfterSell - lvmonBefore : 0n;
+  let wmonDelta = wmonAfterSell > wmonBefore ? wmonAfterSell - wmonBefore : 0n;
+
+  if (lvmonDelta > 0n) {
+    const lvmonAllowance = await publicClient.readContract({
+      address: ADDRESSES.LVMON,
+      abi: erc20Abi,
+      functionName: "allowance",
+      args: [account.address, ADDRESSES.LVMON_FAST_REDEEM_VAULT]
+    }) as bigint;
+
+    if (lvmonAllowance < lvmonDelta) {
+      const approvalSimulation = await publicClient.simulateContract({
+        account: account.address,
+        address: ADDRESSES.LVMON,
+        abi: erc20Abi,
+        functionName: "approve",
+        args: [ADDRESSES.LVMON_FAST_REDEEM_VAULT, lvmonDelta]
+      });
+      const approvalGas = await publicClient.estimateContractGas({
+        account: account.address,
+        address: ADDRESSES.LVMON,
+        abi: erc20Abi,
+        functionName: "approve",
+        args: [ADDRESSES.LVMON_FAST_REDEEM_VAULT, lvmonDelta]
+      });
+      const approvalTx = await walletClient.writeContract({
+        ...approvalSimulation.request,
+        gas: approvalGas + (approvalGas * 20n + 99n) / 100n
+      });
+      const approvalReceipt = await publicClient.waitForTransactionReceipt({ hash: approvalTx });
+      if (approvalReceipt.status === "reverted") {
+        throw new Error("LVMON redeem approval reverted: " + approvalTx);
+      }
+      totalGasCostRaw += receiptGasCost(approvalReceipt);
+    }
+
+    const redeemPreflight = await simulateAndEstimate(
+      ADDRESSES.LVMON_FAST_REDEEM_VAULT,
+      lvmonFastRedeemAbi,
+      "redeem",
+      [account.address, lvmonDelta],
+      "LVMON FAST REDEEM"
+    );
+    const redeemTx = await walletClient.writeContract({
+      ...redeemPreflight.simulation.request,
+      gas: redeemPreflight.gas
+    });
+    await onTxSubmitted?.(redeemTx, "V2_LVMON_REDEEM");
+    const redeemReceipt = await publicClient.waitForTransactionReceipt({ hash: redeemTx });
+    if (redeemReceipt.status === "reverted") {
+      throw new Error("LVMON fast redeem transaction reverted: " + redeemTx);
+    }
+    totalGasCostRaw += receiptGasCost(redeemReceipt);
+
+    const wmonAfterRedeem = await getTokenBalance(publicClient, ADDRESSES.WMON, account.address);
+    if (wmonAfterRedeem > wmonBefore) wmonDelta = wmonAfterRedeem - wmonBefore;
+  }
+
+  if (wmonDelta <= 0n) {
     throw new Error(
-      "Sell gas estimate exceeds safety cap: estimate=" +
-      gasEstimate.toString() +
-      " padded=" +
-      paddedGas.toString() +
-      " cap=" +
-      gasLimitCap.toString()
+      "V2 native conversion failed: sell produced neither LVMON nor WMON for wallet " +
+      account.address
     );
   }
 
-  if (isV2) {
-    return walletClient.writeContract({
-      account,
-      chain: MONAD,
-      address: ADDRESSES.ROUTER,
-      abi: routerAbi,
-      functionName: "sellToNative",
-      gas: paddedGas,
-      args: [{
-        amountIn: amountRaw,
-        amountOutMin,
-        token,
-        to: account.address,
-        deadline
-      }]
-    });
-  }
-
-  return walletClient.writeContract({
-    account,
-    chain: MONAD,
-    address: router,
-    abi: v1DexRouterAbi,
-    functionName: "sell",
-    gas: paddedGas,
-    args: [{
-      amountIn: amountRaw,
-      amountOutMin,
-      token,
-      to: account.address,
-      deadline
-    }]
+  const unwrapPreflight = await simulateAndEstimate(
+    ADDRESSES.WMON,
+    wmonAbi,
+    "withdraw",
+    [wmonDelta],
+    "WMON UNWRAP"
+  );
+  const unwrapTx = await walletClient.writeContract({
+    ...unwrapPreflight.simulation.request,
+    gas: unwrapPreflight.gas
   });
+  await onTxSubmitted?.(unwrapTx, "V2_WMON_UNWRAP");
+  const unwrapReceipt = await publicClient.waitForTransactionReceipt({ hash: unwrapTx });
+  if (unwrapReceipt.status === "reverted") {
+    throw new Error("WMON unwrap transaction reverted: " + unwrapTx);
+  }
+  totalGasCostRaw += receiptGasCost(unwrapReceipt);
+
+  return { txHash: unwrapTx, gasCostRaw: totalGasCostRaw };
 }

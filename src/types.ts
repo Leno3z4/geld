@@ -201,6 +201,7 @@ export interface PendingExecution {
   decimals?: number;
   txHash?: string;
   submittedAt?: number;
+  stage?: "V1_SELL" | "V2_SELL" | "V2_LVMON_REDEEM" | "V2_WMON_UNWRAP";
   positionId?: string;
   createdAt: number;
 }

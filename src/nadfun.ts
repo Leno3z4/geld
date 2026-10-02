@@ -299,7 +299,7 @@ export async function sellToNative(
   const quote = await resolveQuote(publicClient, token, amountRaw, false);
   let router = quote.router;
 
-  const ensureAllowance = async (spender: Address) => {
+  const ensureAllowance = async (spender: Address): Promise<bigint> => {
     const allowance = await publicClient.readContract({
       address: token,
       abi: erc20Abi,
@@ -307,7 +307,7 @@ export async function sellToNative(
       args: [account.address, spender]
     }) as bigint;
 
-    if (allowance >= amountRaw) return;
+    if (allowance >= amountRaw) return 0n;
 
     const simulation = await publicClient.simulateContract({
       account: account.address,
@@ -332,6 +332,7 @@ export async function sellToNative(
     if (approvalReceipt.status === "reverted") {
       throw new Error("Sell token approval reverted: " + approvalTx);
     }
+    return receiptGasCost(approvalReceipt);
   };
 
   const simulateAndEstimate = async (
@@ -372,7 +373,7 @@ export async function sellToNative(
     return gasUsed * effectiveGasPrice;
   };
 
-  await ensureAllowance(router);
+  const initialApprovalGasCost = await ensureAllowance(router);
 
   const freshQuote = await resolveQuote(publicClient, token, amountRaw, false);
   if (freshQuote.router.toLowerCase() !== router.toLowerCase()) {
@@ -401,7 +402,7 @@ export async function sellToNative(
     if (receipt.status === "reverted") {
       throw new Error("V1 SELL transaction reverted: " + txHash);
     }
-    return { txHash, gasCostRaw: receiptGasCost(receipt) };
+    return { txHash, gasCostRaw: initialApprovalGasCost + receiptGasCost(receipt) };
   }
 
   const lvmonBefore = await getTokenBalance(publicClient, ADDRESSES.LVMON, account.address);
@@ -424,7 +425,7 @@ export async function sellToNative(
     throw new Error("V2 SELL transaction reverted: " + sellTx);
   }
 
-  let totalGasCostRaw = receiptGasCost(sellReceipt);
+  let totalGasCostRaw = initialApprovalGasCost + receiptGasCost(sellReceipt);
   const lvmonAfterSell = await getTokenBalance(publicClient, ADDRESSES.LVMON, account.address);
   const wmonAfterSell = await getTokenBalance(publicClient, ADDRESSES.WMON, account.address);
   const lvmonDelta = lvmonAfterSell > lvmonBefore ? lvmonAfterSell - lvmonBefore : 0n;

@@ -42,6 +42,7 @@ export const routerAbi = parseAbi([
   "function getAmountOut(address token,uint256 amountIn,bool isBuy) view returns (uint256)",
   "function isGraduated(address token) view returns (bool)",
   "function buyWithNative((uint256 amountOutMin,address token,address to,uint256 deadline) params) payable returns (uint256 amountOut)",
+  "function sell((uint256 amountIn,uint256 amountOutMin,address token,address to,uint256 deadline) params) returns (uint256 amountOut)",
   "function sellToNative((uint256 amountIn,uint256 amountOutMin,address token,address to,uint256 deadline) params) returns (uint256 amountOut)"
 ]);
 

@@ -285,8 +285,7 @@ export async function sellToNative(
 ): Promise<Hex> {
   const account = walletClient.account;
   const quote = await resolveQuote(publicClient, token, amountRaw, false);
-  let router = quote.router;
-
+  const router = quote.router;
   const allowance = await publicClient.readContract({
     address: token,
     abi: erc20Abi,
@@ -303,78 +302,23 @@ export async function sellToNative(
       functionName: "approve",
       args: [router, amountRaw]
     });
-    const approvalReceipt = await publicClient.waitForTransactionReceipt({ hash: approvalTx });
-    if (approvalReceipt.status === "reverted") {
-      throw new Error("Sell token approval reverted: " + approvalTx);
-    }
+    await publicClient.waitForTransactionReceipt({ hash: approvalTx });
   }
 
-  const freshQuote = await resolveQuote(publicClient, token, amountRaw, false);
-  if (freshQuote.router.toLowerCase() !== router.toLowerCase()) {
-    throw new Error("Sell route changed during preflight: " + router + " -> " + freshQuote.router);
-  }
-  router = freshQuote.router;
-
-  const amountOutMin = minOut(freshQuote.amountOut, slippagePct);
-  const deadline = BigInt(Math.floor(Date.now() / 1000) + 90);
-  const isV2 = router.toLowerCase() === ADDRESSES.ROUTER.toLowerCase();
-
-  const gasEstimate = isV2
-    ? await publicClient.estimateContractGas({
-        account: account.address,
-        address: ADDRESSES.ROUTER,
-        abi: routerAbi,
-        functionName: "sellToNative",
-        args: [{
-          amountIn: amountRaw,
-          amountOutMin,
-          token,
-          to: account.address,
-          deadline
-        }]
-      })
-    : await publicClient.estimateContractGas({
-        account: account.address,
-        address: router,
-        abi: v1DexRouterAbi,
-        functionName: "sell",
-        args: [{
-          amountIn: amountRaw,
-          amountOutMin,
-          token,
-          to: account.address,
-          deadline
-        }]
-      });
-
-  const paddingBps = BigInt(Math.round(config.sellGasPaddingPct * 100));
-  const paddedGas = gasEstimate + (gasEstimate * paddingBps + 9999n) / 10000n;
-  const gasLimitCap = BigInt(config.sellGasLimit);
-  if (paddedGas > gasLimitCap) {
-    throw new Error(
-      "Sell gas estimate exceeds safety cap: estimate=" +
-      gasEstimate.toString() +
-      " padded=" +
-      paddedGas.toString() +
-      " cap=" +
-      gasLimitCap.toString()
-    );
-  }
-
-  if (isV2) {
+  if (router !== ADDRESSES.ROUTER) {
     return walletClient.writeContract({
       account,
       chain: MONAD,
-      address: ADDRESSES.ROUTER,
-      abi: routerAbi,
-      functionName: "sellToNative",
-      gas: paddedGas,
+      address: router,
+      abi: v1DexRouterAbi,
+      functionName: "sell",
+      gas: BigInt(config.sellGasLimit),
       args: [{
         amountIn: amountRaw,
-        amountOutMin,
+        amountOutMin: minOut(quote.amountOut, slippagePct),
         token,
         to: account.address,
-        deadline
+        deadline: BigInt(Math.floor(Date.now() / 1000) + 90)
       }]
     });
   }
@@ -382,16 +326,16 @@ export async function sellToNative(
   return walletClient.writeContract({
     account,
     chain: MONAD,
-    address: router,
-    abi: v1DexRouterAbi,
-    functionName: "sell",
-    gas: paddedGas,
+    address: ADDRESSES.ROUTER,
+    abi: routerAbi,
+    functionName: "sellToNative",
+    gas: BigInt(config.sellGasLimit),
     args: [{
       amountIn: amountRaw,
-      amountOutMin,
+      amountOutMin: minOut(quote.amountOut, slippagePct),
       token,
       to: account.address,
-      deadline
+      deadline: BigInt(Math.floor(Date.now() / 1000) + 90)
     }]
   });
 }

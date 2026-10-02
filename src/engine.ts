@@ -134,6 +134,7 @@ export class TradingEngine {
   private lastNewEventPollAt = 0;
   private pendingCandidates = new Set<string>();
   private reservedSpendMon = 0;
+  private aiCallsThisCycle = 0;
 
   constructor() {
     const c = clients();
@@ -797,6 +798,7 @@ export class TradingEngine {
   async runScheduledCycle() {
     if (!this.store.get().running) return;
 
+    this.aiCallsThisCycle = 0;
     assertLiveConfig();
 
     const persistedBlock = this.store.get().stats.lastProcessedBlock;
@@ -841,13 +843,13 @@ export class TradingEngine {
     await this.pollDexLogs();
     await this.reviewOpenPositions();
 
-    if (!entriesBlocked) {
-      await this.pollNewEvents();
-      await this.discoverEstablishedTokens();
-    } else {
+    await this.pollNewEvents();
+    await this.discoverEstablishedTokens();
+
+    if (entriesBlocked) {
       this.store.update((s) => {
         s.stats.lastIdleReason =
-          "ENTRY CIRCUIT BREAKER: daily loss limit reached; exits remain active";
+          "ENTRY CIRCUIT BREAKER: scanning/monitoring continues; new entries blocked";
       });
     }
 
@@ -1028,8 +1030,9 @@ export class TradingEngine {
           const args = parsed.args as any;
           const tokenIs0 = meta.token0 === meta.token.token.toLowerCase();
           const tokenIs1 = meta.token1 === meta.token.token.toLowerCase();
-          const quoteIs0 = meta.token0 === ADDRESSES.WMON.toLowerCase();
-          const quoteIs1 = meta.token1 === ADDRESSES.WMON.toLowerCase();
+          const quoteToken = (/^0x[0-9a-f]{40}$/.test(meta.token.quoteToken ?? "") ? meta.token.quoteToken! : ADDRESSES.WMON).toLowerCase();
+          const quoteIs0 = meta.token0 === quoteToken;
+          const quoteIs1 = meta.token1 === quoteToken;
 
           if ((!tokenIs0 && !tokenIs1) || (!quoteIs0 && !quoteIs1)) continue;
 
@@ -1235,7 +1238,7 @@ export class TradingEngine {
       let buy1Tx = 0;
       let sell1Tx = 0;
       let uniqueBuyers1m = new Set<string>();
-      let topBuyer1m = 0;
+      const buyerVolume1m = new Map<string, number>();
       let buy5Usd = 0;
       let sell5Usd = 0;
       let buyPrev5Usd = 0;
@@ -1371,7 +1374,8 @@ export class TradingEngine {
       token.apiBuyTx1m = buy1Tx;
       token.apiSellTx1m = sell1Tx;
       token.apiUniqueBuyers1m = uniqueBuyers1m.size;
-      token.apiTopBuyerShare1m = buy1Usd > 0 ? topBuyer1m / buy1Usd : 1;
+      const largestBuyer1m = Math.max(0, ...buyerVolume1m.values());
+      token.apiTopBuyerShare1m = buy1Usd > 0 ? largestBuyer1m / buy1Usd : 1;
       token.apiCreatorBuyShare5m = buy5Usd > 0 ? creatorBuy5Usd / buy5Usd : 0;
 
       token.lastFlowApiAt = now;
@@ -1512,7 +1516,10 @@ export class TradingEngine {
             address: ADDRESSES.FACTORY,
             abi: factoryAbi,
             functionName: "getPair",
-            args: [token.token as Address, ADDRESSES.WMON]
+            args: [
+              token.token as Address,
+              (/^0x[0-9a-f]{40}$/i.test(token.quoteToken ?? "") ? token.quoteToken : ADDRESSES.WMON) as Address
+            ]
           }))
         });
 
@@ -1569,6 +1576,18 @@ export class TradingEngine {
 
   private async maybeEvaluateCandidate(token: TokenSnapshot) {
     if (!this.store.get().running || this.pendingCandidates.has(token.token)) return;
+
+    if (this.entryCircuitBreakerActive()) {
+      token.watchReason = "ENTRY BLOCKED: daily loss circuit breaker; monitoring only";
+      this.store.upsertToken(token);
+      return;
+    }
+
+    if (this.aiCallsThisCycle >= config.aiMaxCallsPerCycle) {
+      token.watchReason = "AI BUDGET: monitored without additional model call";
+      this.store.upsertToken(token);
+      return;
+    }
 
     const hasOpenPosition = Object.values(this.store.get().positions).some(
       (position) => position.token === token.token && (position.status === "OPEN" || position.status === "CLOSING")
@@ -1639,6 +1658,7 @@ export class TradingEngine {
       let usedAiFallback = false;
 
       try {
+        this.aiCallsThisCycle += 1;
         decision = await this.brain.decide({
           mode: "candidate",
           token,
@@ -2366,12 +2386,14 @@ export class TradingEngine {
   private async reviewOpenPositions() {
     for (const position of Object.values(this.store.get().positions).filter((p) => p.status === "OPEN")) {
       if (!this.store.get().running) return;
+      if (this.aiCallsThisCycle >= config.aiMaxCallsPerCycle) break;
       if ((position.sellBlockedUntil ?? 0) > Date.now()) continue;
 
       const token = this.store.get().tokens[position.token];
       if (!token) continue;
 
       try {
+        this.aiCallsThisCycle += 1;
         const decision = await this.brain.decide({
           mode: "position",
           token,
@@ -2420,7 +2442,7 @@ export class TradingEngine {
     if (position.status !== "OPEN") return;
 
     const now = Date.now();
-    if (!force && (position.sellBlockedUntil ?? 0) > now) return;
+    if (!force && ((position.sellBlockedUntil ?? 0) > now || (position.sellQuarantineUntil ?? 0) > now)) return;
 
     const hasPendingSell = Object.values(this.store.get().pendingExecutions).some(
       (pending) =>
@@ -2563,6 +2585,8 @@ export class TradingEngine {
       position.amountRaw = remainingAmountRaw.toString();
       position.entryMon = remainingCostBasis;
       position.sellBlockedUntil = undefined;
+      position.sellQuarantineUntil = undefined;
+      position.sellFailureCount = 0;
       position.lastSellError = undefined;
 
       if (remainingAmountRaw === 0n || safeSoldFraction >= 0.999999) {

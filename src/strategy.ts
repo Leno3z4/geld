@@ -285,6 +285,42 @@ export function earlyLaunchBlockers(token: TokenSnapshot) {
   return blockers;
 }
 
+function lowCapManipulationBlockers(token: TokenSnapshot) {
+  const blockers: string[] = [];
+  const marketCap = token.marketCapUsd ?? 0;
+  const isLowCap = marketCap > 0 && marketCap <= config.lowCapMaxMarketCapUsd;
+  const isEarly = Math.max(0, (Date.now() - token.createdAt) / 60000) <= config.earlyLaunchMaxAgeMinutes;
+  if (!isLowCap && !isEarly) return blockers;
+
+  const buy5 = token.apiBuy5mUsd ?? 0;
+  const sell5 = token.apiSell5mUsd ?? 0;
+  const volume5 = buy5 + sell5;
+  const buyers1 = token.apiUniqueBuyers1m ?? 0;
+  const topBuyerShare = token.apiTopBuyerShare1m ?? 1;
+  const creatorShare = token.apiCreatorBuyShare5m ?? 0;
+  const ratio = token.buySellRatio5m ?? 0;
+  const trend5 = token.apiTrend5mPct ?? 0;
+  const trend15 = token.apiTrend15mPct ?? trend5;
+
+  if (volume5 >= Math.max(300, config.lowCapMinVolume5mUsd * 0.35) && topBuyerShare > 0.55) {
+    blockers.push("buyer concentration " + (topBuyerShare * 100).toFixed(0) + "%");
+  }
+  if (buy5 >= Math.max(500, config.lowCapMinVolume5mUsd * 0.50) && creatorShare > 0.45) {
+    blockers.push("creator buying share " + (creatorShare * 100).toFixed(0) + "%");
+  }
+  if (buy5 >= Math.max(500, config.lowCapMinVolume5mUsd * 0.50) && buyers1 > 0 && buyers1 < 4) {
+    blockers.push("only " + buyers1 + " unique 1m buyers");
+  }
+  if (ratio >= 8 && sell5 < Math.max(25, buy5 * 0.05)) {
+    blockers.push("one-way buy flow");
+  }
+  if (trend5 >= 50 && trend15 <= trend5 * 0.35) {
+    blockers.push("5m vertical spike lacks 15m confirmation");
+  }
+
+  return blockers;
+}
+
 export function isLowCapMomentumCandidate(
   token: TokenSnapshot,
   rules: {
@@ -319,8 +355,9 @@ export function isLowCapMomentumCandidate(
     ratio >= 2 &&
     volume5mUsd >= rules.minVolume5mUsd * 0.65 &&
     (token.apiBuyTx5m ?? 0) >= 3;
+  const manipulationRisk = lowCapManipulationBlockers(token);
 
-  return marketCap >= rules.minMarketCapUsd && marketCap <= rules.maxMarketCapUsd &&
+  return manipulationRisk.length === 0 && marketCap >= rules.minMarketCapUsd && marketCap <= rules.maxMarketCapUsd &&
     liquidity >= rules.minLiquidityUsd && holders >= rules.minHolders &&
     volumeUsd >= rules.minVolumeUsd && ageMinutes >= rules.minAgeMinutes &&
     ratio >= rules.minBuySellRatio5m && volume5mUsd >= rules.minVolume5mUsd * 0.65 &&
@@ -348,7 +385,9 @@ export function lowCapMomentumBlockers(
     ratio >= 2 &&
     volume5mUsd >= rules.minVolume5mUsd * 0.65 &&
     (token.apiBuyTx5m ?? 0) >= 3;
+  const manipulationRisk = lowCapManipulationBlockers(token);
 
+  if (manipulationRisk.length > 0) blockers.push("MANIPULATION RISK: " + manipulationRisk.slice(0, 2).join(", "));
   if (marketCap < rules.minMarketCapUsd) blockers.push("MC $" + Math.round(marketCap) + " < $" + Math.round(rules.minMarketCapUsd));
   if (marketCap > rules.maxMarketCapUsd) blockers.push("MC $" + Math.round(marketCap) + " > $" + Math.round(rules.maxMarketCapUsd));
   if (liquidity < rules.minLiquidityUsd) blockers.push("liq $" + Math.round(liquidity) + " < $" + Math.round(rules.minLiquidityUsd));
@@ -404,8 +443,22 @@ export function selectEntryStrategy(token: TokenSnapshot, minDailySamples = 24, 
     volume5mUsd >= minVolume5mUsd &&
     trend4h >= -25;
 
-  if (dailyMeanReversion) return "DAILY_MEAN_REVERSION" as const;
+  const lowCapFlow =
+    (token.marketCapUsd ?? 0) >= config.lowCapMinMarketCapUsd &&
+    (token.marketCapUsd ?? 0) <= config.lowCapMaxMarketCapUsd &&
+    flow &&
+    lowCapManipulationBlockers(token).length === 0;
+
+  const lowCapMomentum =
+    (token.marketCapUsd ?? 0) >= config.lowCapMinMarketCapUsd &&
+    (token.marketCapUsd ?? 0) <= config.lowCapMaxMarketCapUsd &&
+    momentum &&
+    lowCapManipulationBlockers(token).length === 0;
+
+  if (lowCapFlow) return "FLOW" as const;
+  if (lowCapMomentum) return "MOMENTUM" as const;
   if (flow) return "FLOW" as const;
+  if (dailyMeanReversion) return "DAILY_MEAN_REVERSION" as const;
   if (momentum) return "MOMENTUM" as const;
   if (dipReversion) return "DIP_REVERSION" as const;
   return "HYBRID" as const;
@@ -538,6 +591,10 @@ export function scoreToken(token: TokenSnapshot, seasonality: SeasonalityModel) 
     ? 0
     : clamp((flow.buySellRatio5m - 1) * 4 + (flow.volumeAcceleration5m - 1) * 3, -5, 5);
   const seasonalityAdjustment = seasonality.adjustment();
+  const manipulationPenalty =
+    ((token.marketCapUsd ?? 0) > 0 && (token.marketCapUsd ?? 0) <= config.lowCapMaxMarketCapUsd)
+      ? lowCapManipulationBlockers(token).length * 4
+      : 0;
 
   return Math.round(clamp(
     liquidityScore +
@@ -549,7 +606,8 @@ export function scoreToken(token: TokenSnapshot, seasonality: SeasonalityModel) 
     dailyMeanScore +
     dayLowProximityScore +
     flowScore +
-    seasonalityAdjustment,
+    seasonalityAdjustment -
+    manipulationPenalty,
     0,
     100
   ));

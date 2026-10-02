@@ -55,8 +55,11 @@ export class GeminiBrain {
 
     const models=[config.geminiFastModel,config.geminiEscalationModel];
     const errors:string[]=[];
+    let attemptsUsed=0;
     for(const model of models){
       for(let attempt=0;attempt<config.geminiKeys.length;attempt++){
+        if (attemptsUsed >= config.aiMaxAttemptsPerDecision) break;
+        attemptsUsed += 1;
         const index=(this.keyCursor+attempt)%config.geminiKeys.length;
         try{
           const client=new GoogleGenAI({apiKey:config.geminiKeys[index]});
@@ -85,6 +88,7 @@ export class GeminiBrain {
           errors.push(model+":"+(error instanceof Error?error.message:String(error)).slice(0,160));
         }
       }
+      if (attemptsUsed >= config.aiMaxAttemptsPerDecision) break;
     }
     throw new Error("Gemini decision failed: "+errors.slice(-4).join(" | "));
   }

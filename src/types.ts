@@ -159,6 +159,8 @@ export interface Position {
   lastSellFailureAt?: number;
   sellBlockedUntil?: number;
   lastSellError?: string;
+  sellFailureCount?: number;
+  sellQuarantineUntil?: number;
 }
 
 export interface TradeRecord {

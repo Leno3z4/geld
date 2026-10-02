@@ -47,8 +47,6 @@ interface Env {
   AI_MIN_CONFIDENCE?: string;
   SLIPPAGE_PCT?: string;
   SELL_GAS_LIMIT?: string;
-  SELL_GAS_PADDING_PCT?: string;
-  SELL_FAILURE_COOLDOWN_MS?: string;
   HARD_STOP_LOSS_PCT?: string;
   TAKE_PROFIT_PCT?: string;
   TRAILING_STOP_PCT?: string;
@@ -240,8 +238,6 @@ function hydrateProcessEnv(env: Env) {
     AI_MIN_CONFIDENCE: valueFor("AI_MIN_CONFIDENCE", env.AI_MIN_CONFIDENCE),
     SLIPPAGE_PCT: valueFor("SLIPPAGE_PCT", env.SLIPPAGE_PCT),
     SELL_GAS_LIMIT: valueFor("SELL_GAS_LIMIT", env.SELL_GAS_LIMIT),
-    SELL_GAS_PADDING_PCT: valueFor("SELL_GAS_PADDING_PCT", env.SELL_GAS_PADDING_PCT),
-    SELL_FAILURE_COOLDOWN_MS: valueFor("SELL_FAILURE_COOLDOWN_MS", env.SELL_FAILURE_COOLDOWN_MS),
     HARD_STOP_LOSS_PCT: valueFor("HARD_STOP_LOSS_PCT", env.HARD_STOP_LOSS_PCT),
     TAKE_PROFIT_PCT: valueFor("TAKE_PROFIT_PCT", env.TAKE_PROFIT_PCT),
     TRAILING_STOP_PCT: valueFor("TRAILING_STOP_PCT", env.TRAILING_STOP_PCT),
@@ -469,9 +465,6 @@ export class GeldBot extends DurableObject<Env> {
           trendMax1hPct: runtimeConfig.trendMax1hPct,
           minTrend4hPct: runtimeConfig.minTrend4hPct,
           fastCycleMs: runtimeConfig.fastCycleMs,
-          sellGasLimit: runtimeConfig.sellGasLimit,
-          sellGasPaddingPct: runtimeConfig.sellGasPaddingPct,
-          sellFailureCooldownMs: runtimeConfig.sellFailureCooldownMs,
           lowCapMomentumEnabled: runtimeConfig.lowCapMomentumEnabled,
           lowCapMinMarketCapUsd: runtimeConfig.lowCapMinMarketCapUsd,
           lowCapMaxMarketCapUsd: runtimeConfig.lowCapMaxMarketCapUsd,

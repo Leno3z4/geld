@@ -299,6 +299,12 @@ export async function sellToNative(
   const quote = await resolveQuote(publicClient, token, amountRaw, false);
   let router = quote.router;
 
+  const receiptGasCost = (receipt: any) => {
+    const gasUsed = BigInt(String(receipt.gasUsed ?? 0));
+    const effectiveGasPrice = BigInt(String(receipt.effectiveGasPrice ?? 0));
+    return gasUsed * effectiveGasPrice;
+  };
+
   const ensureAllowance = async (spender: Address): Promise<bigint> => {
     const allowance = await publicClient.readContract({
       address: token,
@@ -365,12 +371,6 @@ export async function sellToNative(
       );
     }
     return { simulation, gas: paddedGas };
-  };
-
-  const receiptGasCost = (receipt: any) => {
-    const gasUsed = BigInt(String(receipt.gasUsed ?? 0));
-    const effectiveGasPrice = BigInt(String(receipt.effectiveGasPrice ?? 0));
-    return gasUsed * effectiveGasPrice;
   };
 
   const initialApprovalGasCost = await ensureAllowance(router);

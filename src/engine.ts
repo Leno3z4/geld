@@ -240,23 +240,57 @@ export class TradingEngine {
         });
         const position = this.store.get().positions[pending.positionId!];
 
+        const stage = pending.stage;
+        const finalStage = !stage || stage === "V1_SELL" || stage === "V2_WMON_UNWRAP";
+
         if (receipt.status === "reverted" && position) {
           const failureAt = Date.now();
-          position.status = "OPEN";
-          position.lastSellFailureAt = failureAt;
-          position.sellBlockedUntil = failureAt + config.sellFailureCooldownMs;
           position.lastSellTx = pending.txHash;
-          position.lastSellError = "SELL transaction reverted: " + pending.txHash;
-          position.closeReason = position.lastSellError;
+
+          if (stage === "V2_LVMON_REDEEM" || stage === "V2_WMON_UNWRAP") {
+            // The base-token sale already succeeded. Never reopen the base-token
+            // position after a later conversion stage reverts.
+            position.status = "CLOSING";
+            position.lastSellError = "Native exit stage reverted (" + stage + "): " + pending.txHash;
+            position.closeReason = position.lastSellError;
+            this.store.update((s) => {
+              s.stats.lastError = position.lastSellError;
+            });
+          } else {
+            position.status = "OPEN";
+            position.lastSellFailureAt = failureAt;
+            position.sellBlockedUntil = failureAt + config.sellFailureCooldownMs;
+            position.lastSellError = "SELL transaction reverted: " + pending.txHash;
+            position.closeReason = position.lastSellError;
+          }
         } else if (receipt.status === "success" && position) {
           position.lastSellTx = pending.txHash;
-          position.closeReason = "SELL transaction confirmed; reconciling on-chain balance";
+          if (finalStage) {
+            position.closeReason = "SELL transaction confirmed; reconciling on-chain balance";
+          } else {
+            position.closeReason = "Native exit stage confirmed: " + stage;
+          }
         }
 
-        this.store.update((s) => {
-          delete s.pendingExecutions[pending.id];
-        });
-        resolved += 1;
+        if (
+          receipt.status === "success" && position &&
+          finalStage
+        ) {
+          this.store.update((s) => {
+            delete s.pendingExecutions[pending.id];
+          });
+          resolved += 1;
+        } else if (
+          receipt.status === "reverted" &&
+          position &&
+          stage !== "V2_LVMON_REDEEM" &&
+          stage !== "V2_WMON_UNWRAP"
+        ) {
+          this.store.update((s) => {
+            delete s.pendingExecutions[pending.id];
+          });
+          resolved += 1;
+        }
       } catch {
         // Receipt is still pending or the RPC is temporarily unavailable.
       }
@@ -2521,35 +2555,30 @@ export class TradingEngine {
           await this.publicClient.getBalance({ address: this.account.address })
         ));
 
-        tx = await sellToNative(
+        const execution = await sellToNative(
           this.walletClient,
           this.publicClient,
           position.token as Address,
           soldAmountRaw,
-          config.slippagePct
+          config.slippagePct,
+          async (hash, stage) => {
+            position.lastSellTx = hash;
+            this.store.update((s) => {
+              const pending = s.pendingExecutions[pendingId];
+              if (pending) {
+                pending.txHash = hash;
+                pending.submittedAt = Date.now();
+                pending.stage = stage;
+              }
+            });
+            await this.persist();
+          }
         );
 
-        position.lastSellTx = tx;
-        this.store.update((s) => {
-          const pending = s.pendingExecutions[pendingId];
-          if (pending) {
-            pending.txHash = tx;
-            pending.submittedAt = Date.now();
-          }
-        });
-        await this.persist();
-
-        const receipt = await this.publicClient.waitForTransactionReceipt({ hash: tx });
-        if (receipt.status === "reverted") {
-          confirmedRevert = true;
-          throw new Error("Sell transaction reverted: " + tx);
-        }
+        tx = execution.txHash;
         const nativeAfter = await this.readNativeBalanceWithRetry();
-        const gasUsed = BigInt(String(receipt.gasUsed ?? 0));
-        const effectiveGasPrice = BigInt(String(receipt.effectiveGasPrice ?? 0));
-        const gasCost = gasUsed * effectiveGasPrice;
-        const netProceedsRaw = nativeAfter + gasCost - nativeBefore;
-        proceeds = Number(formatUnits(netProceedsRaw > 0n ? netProceedsRaw : 0n, 18));
+        const netProceedsRaw = nativeAfter + execution.gasCostRaw - nativeBefore;
+        proceeds = Number(formatUnits(netProceedsRaw > 0n ? netProceedsRaw : 0n));
       } else {
         const quote = await quoteSell(this.publicClient, position.token as Address, soldAmountRaw);
         proceeds = Number(formatUnits(quote, 18));
@@ -2634,9 +2663,26 @@ export class TradingEngine {
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      const pendingTx = this.store.get().pendingExecutions[pendingId]?.txHash;
+      const pending = this.store.get().pendingExecutions[pendingId];
+      const pendingTx = pending?.txHash;
+      const pendingStage = pending?.stage;
 
-      if (pendingTx && !confirmedRevert) {
+      if (pendingStage === "V1_SELL" || pendingStage === "V2_SELL") {
+        confirmedRevert = /transaction reverted/i.test(errorMessage);
+      }
+
+      if (pendingStage === "V2_LVMON_REDEEM" || pendingStage === "V2_WMON_UNWRAP") {
+        // Base tokens are already sold. Keep the execution pending rather than
+        // creating a phantom OPEN position or paying for another base-token sell.
+        keepPending = true;
+        position.status = "CLOSING";
+        position.lastSellTx = pendingTx ?? position.lastSellTx;
+        position.lastSellError = "NATIVE_EXIT_INCOMPLETE: " + errorMessage;
+        position.closeReason = position.lastSellError;
+        this.store.update((s) => {
+          s.stats.lastError = position.lastSellError;
+        });
+      } else if (pendingTx && !confirmedRevert) {
         keepPending = true;
         position.status = "CLOSING";
         position.lastSellTx = pendingTx;
@@ -2647,14 +2693,23 @@ export class TradingEngine {
         });
       } else {
         const failureAt = Date.now();
+        const failureCount = (position.sellFailureCount ?? 0) + 1;
         position.status = "OPEN";
         position.lastSellFailureAt = failureAt;
         position.sellBlockedUntil = failureAt + config.sellFailureCooldownMs;
+        position.sellFailureCount = failureCount;
+        position.sellQuarantineUntil =
+          failureCount >= config.sellFailureQuarantineCount
+            ? failureAt + config.sellFailureQuarantineMs
+            : position.sellQuarantineUntil;
         position.lastSellTx = pendingTx ?? position.lastSellTx;
         position.lastSellError = errorMessage;
-        position.closeReason = errorMessage;
+        position.closeReason =
+          failureCount >= config.sellFailureQuarantineCount
+            ? "SELL QUARANTINED: " + errorMessage
+            : errorMessage;
         this.store.update((s) => {
-          s.stats.lastError = errorMessage;
+          s.stats.lastError = position.closeReason;
         });
       }
     } finally {

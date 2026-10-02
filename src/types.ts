@@ -96,6 +96,8 @@ export interface TokenSnapshot {
   aiConfidence?: number;
   aiReason?: string;
   entryDiagnostics?: EntryGateDiagnostics;
+  entryBlockedUntil?: number;
+  lastClosedAt?: number;
 }
 
 export interface EntryGateDiagnostics {

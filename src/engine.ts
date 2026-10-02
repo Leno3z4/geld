@@ -1576,6 +1576,13 @@ export class TradingEngine {
   private async maybeEvaluateCandidate(token: TokenSnapshot) {
     if (!this.store.get().running || this.pendingCandidates.has(token.token)) return;
 
+    const now = Date.now();
+    if ((token.entryBlockedUntil ?? 0) > now) {
+      token.watchReason = "RE-ENTRY COOLDOWN until " + new Date(token.entryBlockedUntil!).toISOString();
+      this.store.upsertToken(token);
+      return;
+    }
+
     if (this.entryCircuitBreakerActive()) {
       token.watchReason = "ENTRY BLOCKED: daily loss circuit breaker; monitoring only";
       this.store.upsertToken(token);
@@ -2597,6 +2604,13 @@ export class TradingEngine {
         position.closeTx = tx;
         position.closeReason = reason;
         position.amountRaw = "0";
+        const closedAt = Date.now();
+        const tokenSnapshot = this.store.get().tokens[position.token.toLowerCase()];
+        if (tokenSnapshot) {
+          tokenSnapshot.entryBlockedUntil = closedAt + config.reentryCooldownMs;
+          tokenSnapshot.lastClosedAt = closedAt;
+          this.store.upsertToken(tokenSnapshot);
+        }
         if (totalRealizedPnl >= 0) this.store.update((s) => { s.stats.wins += 1; });
         else this.store.update((s) => { s.stats.losses += 1; });
       } else {

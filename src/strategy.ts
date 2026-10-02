@@ -288,9 +288,8 @@ export function earlyLaunchBlockers(token: TokenSnapshot) {
 function lowCapManipulationBlockers(token: TokenSnapshot) {
   const blockers: string[] = [];
   const marketCap = token.marketCapUsd ?? 0;
-  const ageMinutes = Math.max(0, (Date.now() - token.createdAt) / 60000);
   const isLowCap = marketCap > 0 && marketCap <= config.lowCapMaxMarketCapUsd;
-  const isEarly = ageMinutes <= config.earlyLaunchMaxAgeMinutes;
+  const isEarly = Math.max(0, (Date.now() - token.createdAt) / 60000) <= config.earlyLaunchMaxAgeMinutes;
   if (!isLowCap && !isEarly) return blockers;
 
   const buy5 = token.apiBuy5mUsd ?? 0;
@@ -318,6 +317,7 @@ function lowCapManipulationBlockers(token: TokenSnapshot) {
   if (trend5 >= 50 && trend15 <= trend5 * 0.35) {
     blockers.push("5m vertical spike lacks 15m confirmation");
   }
+
   return blockers;
 }
 
@@ -443,14 +443,6 @@ export function selectEntryStrategy(token: TokenSnapshot, minDailySamples = 24, 
     volume5mUsd >= minVolume5mUsd &&
     trend4h >= -25;
 
-  const highCapTrend =
-    (token.marketCapUsd ?? 0) >= config.highCapMinMarketCapUsd &&
-    trend1h > 0 &&
-    trend4h >= config.highCapMinTrend4hPct &&
-    buySell >= config.highCapMinBuySellRatio5m &&
-    volume5mUsd >= config.highCapMinVolume5mUsd &&
-    (token.apiBuyMakers5m ?? 0) >= config.highCapMinBuyMakers5m;
-
   const lowCapFlow =
     (token.marketCapUsd ?? 0) >= config.lowCapMinMarketCapUsd &&
     (token.marketCapUsd ?? 0) <= config.lowCapMaxMarketCapUsd &&
@@ -465,7 +457,6 @@ export function selectEntryStrategy(token: TokenSnapshot, minDailySamples = 24, 
 
   if (lowCapFlow) return "FLOW" as const;
   if (lowCapMomentum) return "MOMENTUM" as const;
-  if (highCapTrend) return "MOMENTUM" as const;
   if (flow) return "FLOW" as const;
   if (dailyMeanReversion) return "DAILY_MEAN_REVERSION" as const;
   if (momentum) return "MOMENTUM" as const;

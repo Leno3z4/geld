@@ -455,7 +455,14 @@ export function selectEntryStrategy(token: TokenSnapshot, minDailySamples = 24, 
     momentum &&
     lowCapManipulationBlockers(token).length === 0;
 
-  if (lowCapFlow) return "FLOW" as const;
+  const highCapQualityFlow =
+    (token.marketCapUsd ?? 0) >= config.highCapMinMarketCapUsd &&
+    volume5mUsd >= config.highCapMinVolume5mUsd &&
+    buySell >= config.highCapMinBuySellRatio5m &&
+    (token.apiBuyMakers5m ?? 0) >= config.highCapMinBuyMakers5m &&
+    trend4h >= config.highCapMinTrend4hPct;
+
+  if (highCapQualityFlow) return "FLOW" as const;
   if (lowCapMomentum) return "MOMENTUM" as const;
   if (flow) return "FLOW" as const;
   if (dailyMeanReversion) return "DAILY_MEAN_REVERSION" as const;
@@ -696,6 +703,14 @@ export function entryGateDiagnostics(
     token.buySellRatio5m >= 1.15 &&
     (token.volume5mMon ?? 0) * (token.monUsdPrice ?? 0) >= rules.minVolumeUsd;
 
+  const highCapMode = marketCapUsd >= config.highCapMinMarketCapUsd;
+  const highCapQualityFlow =
+    highCapMode &&
+    (token.apiVolume5mUsd ?? ((token.volume5mMon ?? 0) * (token.monUsdPrice ?? 0))) >= config.highCapMinVolume5mUsd &&
+    (token.buySellRatio5m ?? 0) >= config.highCapMinBuySellRatio5m &&
+    (token.apiBuyMakers5m ?? 0) >= config.highCapMinBuyMakers5m &&
+    metrics.trend4hPct >= config.highCapMinTrend4hPct;
+
   if (!dipInEntryBand && !momentumEntry && !dailyMeanEntry && !flowEntry) {
     if (metrics.dipPct < rules.dipMinPct) {
       blockers.push(`dip ${metrics.dipPct.toFixed(1)}% < ${rules.dipMinPct}% and momentum is not strong enough`);
@@ -718,6 +733,28 @@ export function entryGateDiagnostics(
 
   if (token.localScore < rules.minLocalScore) {
     blockers.push(`score ${token.localScore} < ${rules.minLocalScore}`);
+  }
+
+  if (
+    highCapMode &&
+    (token.entryStrategy === "MOMENTUM" || token.entryStrategy === "FLOW") &&
+    !highCapQualityFlow
+  ) {
+    const capVolume5mUsd =
+      token.apiVolume5mUsd ??
+      ((token.volume5mMon ?? 0) * (token.monUsdPrice ?? 0));
+    if (capVolume5mUsd < config.highCapMinVolume5mUsd) {
+      blockers.push(`high-cap 5m volume ${Math.round(capVolume5mUsd)} < ${Math.round(config.highCapMinVolume5mUsd)}`);
+    }
+    if ((token.buySellRatio5m ?? 0) < config.highCapMinBuySellRatio5m) {
+      blockers.push(`high-cap buy/sell ${(token.buySellRatio5m ?? 0).toFixed(2)} < ${config.highCapMinBuySellRatio5m}`);
+    }
+    if ((token.apiBuyMakers5m ?? 0) < config.highCapMinBuyMakers5m) {
+      blockers.push(`high-cap buy makers ${token.apiBuyMakers5m ?? 0} < ${config.highCapMinBuyMakers5m}`);
+    }
+    if (metrics.trend4hPct < config.highCapMinTrend4hPct) {
+      blockers.push(`high-cap 4h trend ${metrics.trend4hPct.toFixed(1)}% < ${config.highCapMinTrend4hPct}%`);
+    }
   }
 
   if (aiConfidence !== undefined && rules.minAiConfidence !== undefined && aiConfidence < rules.minAiConfidence) {

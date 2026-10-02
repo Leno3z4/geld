@@ -443,6 +443,14 @@ export function selectEntryStrategy(token: TokenSnapshot, minDailySamples = 24, 
     volume5mUsd >= minVolume5mUsd &&
     trend4h >= -25;
 
+  const highCapTrend =
+    (token.marketCapUsd ?? 0) >= config.highCapMinMarketCapUsd &&
+    trend1h > 0 &&
+    trend4h >= config.highCapMinTrend4hPct &&
+    buySell >= config.highCapMinBuySellRatio5m &&
+    volume5mUsd >= config.highCapMinVolume5mUsd &&
+    (token.apiBuyMakers5m ?? 0) >= config.highCapMinBuyMakers5m;
+
   const lowCapFlow =
     (token.marketCapUsd ?? 0) >= config.lowCapMinMarketCapUsd &&
     (token.marketCapUsd ?? 0) <= config.lowCapMaxMarketCapUsd &&
@@ -457,6 +465,7 @@ export function selectEntryStrategy(token: TokenSnapshot, minDailySamples = 24, 
 
   if (lowCapFlow) return "FLOW" as const;
   if (lowCapMomentum) return "MOMENTUM" as const;
+  if (highCapTrend) return "MOMENTUM" as const;
   if (flow) return "FLOW" as const;
   if (dailyMeanReversion) return "DAILY_MEAN_REVERSION" as const;
   if (momentum) return "MOMENTUM" as const;

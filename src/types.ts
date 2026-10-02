@@ -90,6 +90,8 @@ export interface TokenSnapshot {
   apiSell5mUsd?: number;
   apiBuyTx5m?: number;
   apiSellTx5m?: number;
+  apiBuyMakers5m?: number;
+  apiSellMakers5m?: number;
   aiAction?: DecisionAction;
   aiConfidence?: number;
   aiReason?: string;

@@ -1295,6 +1295,8 @@ export class TradingEngine {
       let metrics5mSellUsd: number | undefined;
       let metrics5mBuyTx: number | undefined;
       let metrics5mSellTx: number | undefined;
+      let metrics5mBuyMakers: number | undefined;
+      let metrics5mSellMakers: number | undefined;
       if (metricsResponse.ok) {
         const payload = decodeNadfunPayload(await metricsResponse.text());
         const metrics = Array.isArray(payload?.metrics) ? payload.metrics : [];
@@ -1319,6 +1321,8 @@ export class TradingEngine {
           metrics5mSellUsd = apiSell5;
           metrics5mBuyTx = buy5Tx > 0 ? buy5Tx : numeric(metric5?.transactions?.buy);
           metrics5mSellTx = sell5Tx > 0 ? sell5Tx : numeric(metric5?.transactions?.sell);
+          metrics5mBuyMakers = Math.max(0, numeric(metric5?.makers?.buy));
+          metrics5mSellMakers = Math.max(0, numeric(metric5?.makers?.sell));
 
           // The metrics endpoint is authoritative for the current 5m window.
           buy5Usd = apiBuy5;
@@ -1361,6 +1365,8 @@ export class TradingEngine {
       if (metrics5mSellUsd !== undefined) token.apiSell5mUsd = metrics5mSellUsd;
       if (metrics5mBuyTx !== undefined) token.apiBuyTx5m = metrics5mBuyTx;
       if (metrics5mSellTx !== undefined) token.apiSellTx5m = metrics5mSellTx;
+      if (metrics5mBuyMakers !== undefined) token.apiBuyMakers5m = metrics5mBuyMakers;
+      if (metrics5mSellMakers !== undefined) token.apiSellMakers5m = metrics5mSellMakers;
       token.apiVolume5mUsd = volume5mUsd;
       token.apiBuy1mUsd = buy1Usd;
       token.apiSell1mUsd = sell1Usd;

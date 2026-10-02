@@ -157,38 +157,32 @@ export class TradingEngine {
   }
 
   private entryCircuitBreakerActive() {
+    // Daily drawdown remains a telemetry metric, but it no longer halts
+    // new entries. Trading should continue according to the configured
+    // strategy/entry gates; execution safety controls remain active.
     const now = Date.now();
     const today = new Date(now).toISOString().slice(0, 10);
     const state = this.store.get();
     const equity = Math.max(0, state.balanceMon + state.openExposureMon);
 
-    if (state.stats.dailyRiskDay !== today || !(state.stats.dailyRiskStartEquityMon! > 0)) {
-      this.store.update((s) => {
+    this.store.update((s) => {
+      if (s.stats.dailyRiskDay !== today || !(s.stats.dailyRiskStartEquityMon! > 0)) {
         s.stats.dailyRiskDay = today;
         s.stats.dailyRiskStartEquityMon = equity;
         s.stats.dailyRiskDrawdownPct = 0;
-        s.stats.entryCircuitBreakerUntil = undefined;
-        s.stats.entryCircuitBreakerReason = undefined;
-      });
-      return false;
-    }
-
-    const startEquity = state.stats.dailyRiskStartEquityMon!;
-    const drawdownPct = startEquity > 0 ? ((equity / startEquity) - 1) * 100 : 0;
-    const nextDay = Date.parse(today + "T23:59:59.999Z") + 1;
-    const triggered = drawdownPct <= -config.dailyLossLimitPct;
-    const stillBlocked = (state.stats.entryCircuitBreakerUntil ?? 0) > now;
-
-    this.store.update((s) => {
-      s.stats.dailyRiskDrawdownPct = drawdownPct;
-      if (triggered) {
-        s.stats.entryCircuitBreakerUntil = nextDay;
-        s.stats.entryCircuitBreakerReason =
-          "DAILY_LOSS_LIMIT: " + drawdownPct.toFixed(2) + "%";
+      } else {
+        const startEquity = s.stats.dailyRiskStartEquityMon!;
+        s.stats.dailyRiskDrawdownPct =
+          startEquity > 0 ? ((equity / startEquity) - 1) * 100 : 0;
       }
+
+      // Clear legacy halt state so persisted breaker flags cannot reappear
+      // as a stale UI/worker state after deployment.
+      s.stats.entryCircuitBreakerUntil = undefined;
+      s.stats.entryCircuitBreakerReason = undefined;
     });
 
-    return triggered || stillBlocked;
+    return false;
   }
 
   private cleanupStalePendingExecutions() {

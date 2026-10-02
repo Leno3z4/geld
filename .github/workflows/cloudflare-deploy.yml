@@ -17,12 +17,40 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Deploy Worker + Container
-        uses: cloudflare/wrangler-action@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy
+          node-version: 22
+
+      - name: Install Wrangler
+        run: npm install --no-save --no-package-lock wrangler@4
+
+      - name: Deploy Worker + Container
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            echo "Cloudflare deploy attempt ${attempt}/5"
+            set +e
+            output="$(npx --no-install wrangler deploy 2>&1)"
+            status=$?
+            set -e
+            printf '%s\n' "$output"
+
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+
+            if printf '%s\n' "$output" | grep -q "10429" && [ "$attempt" -lt 5 ]; then
+              delay=$((attempt * 20))
+              echo "Cloudflare API rate limited (10429); retrying in ${delay}s..."
+              sleep "$delay"
+              continue
+            fi
+
+            exit "$status"
+          done
 
       - name: Verify deployment configuration
         if: ${{ success() }}

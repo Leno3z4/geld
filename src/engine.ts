@@ -439,12 +439,6 @@ export class TradingEngine {
 
   private async discoverEstablishedTokens() {
     try {
-      if (this.entryCircuitBreakerActive()) {
-        this.store.update((s) => {
-          s.stats.lastIdleReason = "ENTRY CIRCUIT BREAKER: daily loss limit reached; exits remain active";
-        });
-        return;
-      }
       const url =
         config.nadfunApiUrl +
         "/order/market_cap?page=1&limit=" +

@@ -2578,7 +2578,7 @@ export class TradingEngine {
         tx = execution.txHash;
         const nativeAfter = await this.readNativeBalanceWithRetry();
         const netProceedsRaw = nativeAfter + execution.gasCostRaw - nativeBefore;
-        proceeds = Number(formatUnits(netProceedsRaw > 0n ? netProceedsRaw : 0n));
+        proceeds = Number(formatUnits(netProceedsRaw > 0n ? netProceedsRaw : 0n, 18));
       } else {
         const quote = await quoteSell(this.publicClient, position.token as Address, soldAmountRaw);
         proceeds = Number(formatUnits(quote, 18));

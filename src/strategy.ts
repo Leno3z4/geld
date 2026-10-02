@@ -288,8 +288,9 @@ export function earlyLaunchBlockers(token: TokenSnapshot) {
 function lowCapManipulationBlockers(token: TokenSnapshot) {
   const blockers: string[] = [];
   const marketCap = token.marketCapUsd ?? 0;
+  const ageMinutes = Math.max(0, (Date.now() - token.createdAt) / 60000);
   const isLowCap = marketCap > 0 && marketCap <= config.lowCapMaxMarketCapUsd;
-  const isEarly = Math.max(0, (Date.now() - token.createdAt) / 60000) <= config.earlyLaunchMaxAgeMinutes;
+  const isEarly = ageMinutes <= config.earlyLaunchMaxAgeMinutes;
   if (!isLowCap && !isEarly) return blockers;
 
   const buy5 = token.apiBuy5mUsd ?? 0;
@@ -317,7 +318,6 @@ function lowCapManipulationBlockers(token: TokenSnapshot) {
   if (trend5 >= 50 && trend15 <= trend5 * 0.35) {
     blockers.push("5m vertical spike lacks 15m confirmation");
   }
-
   return blockers;
 }
 

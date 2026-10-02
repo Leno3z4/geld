@@ -1268,7 +1268,6 @@ export class TradingEngine {
               if (buyer && /^0x[0-9a-f]{40}$/.test(buyer)) {
                 if (ts > now - 60 * 1000) {
                   uniqueBuyers1m.add(buyer);
-                  topBuyer1m = Math.max(topBuyer1m, valueUsd);
                 }
               }
               if (buyer && token.creator && buyer === token.creator.toLowerCase()) {

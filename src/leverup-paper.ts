@@ -56,7 +56,7 @@ function rolling(samples:Array<{ts:number;price:number}>, now:number, ms:number)
 export class GeldLeverUpPaper extends DurableObject {
   private async load():Promise<State> {
     const saved = await this.ctx.storage.get<State>("state");
-    if (saved) return saved;
+    if (saved?.version === 2) return saved;
     const now = Date.now();
     const s:State = {
       startedAt: now, mode:"PAPER", balanceMon:PAPER_START_MON,
@@ -95,11 +95,17 @@ export class GeldLeverUpPaper extends DurableObject {
     const loc=range.location;
 
     // Do not blindly short every high or long every low. Require rejection/reversal.
-    if (loc >= 1-EXTREME_ZONE_PCT && reversal <= -REVERSAL_5M_PCT)
+    if (loc >= 1-EXTREME_ZONE_PCT && reversal <= -REVERSAL_5M_PCT) {
+      if (perfShort && perfShort.trades >= 3 && (perfShort.pnlMon <= 0 || perfShort.wins / perfShort.trades < 0.35))
+        return ["HOLD","paper learning blocked SHORT: negative expectancy"] as const;
       return ["SHORT","daily-high rejection + 5m reversal"] as const;
+    }
 
-    if (loc <= EXTREME_ZONE_PCT && reversal >= REVERSAL_5M_PCT)
+    if (loc <= EXTREME_ZONE_PCT && reversal >= REVERSAL_5M_PCT) {
+      if (perfLong && perfLong.trades >= 3 && (perfLong.pnlMon <= 0 || perfLong.wins / perfLong.trades < 0.35))
+        return ["HOLD","paper learning blocked LONG: negative expectancy"] as const;
       return ["LONG","daily-low rejection + 5m reversal"] as const;
+    }
 
     return ["HOLD","inside range / no confirmed reversal"] as const;
   }

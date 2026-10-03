@@ -424,7 +424,10 @@ export function selectEntryStrategy(token: TokenSnapshot, minDailySamples = 24, 
     dayAvgDistance <= -8 &&
     dayLowDistance <= 6 &&
     dayLowDistance >= 0 &&
-    trend4h >= -25;
+    rebound1h >= config.dipMinReboundPct &&
+    buySell >= 1.05 &&
+    volume5mUsd >= config.dipMinVolume5mUsd &&
+    trend4h >= config.minTrend4hPct;
 
   // A dip is only tradable after an actual bounce starts. Previously the
   // dip lane could buy while price was still making fresh lows.
@@ -711,6 +714,9 @@ export function entryGateDiagnostics(
     metrics.distanceFromDayAvgPct <= -8 &&
     metrics.distanceFromDayLowPct <= 6 &&
     metrics.distanceFromDayLowPct >= 0 &&
+    metrics.rebound1hPct >= config.dipMinReboundPct &&
+    (token.buySellRatio5m ?? 0) >= 1.05 &&
+    (token.volume5mMon ?? 0) * (token.monUsdPrice ?? 0) >= config.dipMinVolume5mUsd &&
     metrics.trend4hPct >= rules.minTrend4hPct;
 
   const flowEntry =

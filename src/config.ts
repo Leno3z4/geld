@@ -97,7 +97,7 @@ export const config = {
   aiPositionReviewMs: num("AI_POSITION_REVIEW_MS", 30000),
   aiFastCooldownMs: num("AI_FAST_COOLDOWN_MS", 4000),
   aiMaxCallsPerCycle: Math.max(1, Math.min(3, Math.floor(num("AI_MAX_CALLS_PER_CYCLE", 2)))),
-  aiMaxAttemptsPerDecision: Math.max(1, Math.min(2, Math.floor(num("AI_MAX_ATTEMPTS_PER_DECISION", 2)))),
+  aiMaxAttemptsPerDecision: Math.max(1, Math.min(2, Math.floor(num("AI_MAX_ATTEMPTS_PER_DECISION", 1)))),
   reentryCooldownMs: Math.max(15 * 60 * 1000, num("REENTRY_COOLDOWN_MS", 60 * 60 * 1000)),
   aiFallbackEnabled: bool("AI_FALLBACK_ENABLED", true),
   aiFallbackMinScore: num("AI_FALLBACK_MIN_SCORE", 55),

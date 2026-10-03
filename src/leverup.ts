@@ -313,23 +313,48 @@ function awaitableEncode(types: string[], values: unknown[]) {
 }
 
 async function submitIntent(action: number, trader: Address, values: unknown[], feeToken: Address, antiDdosFee: bigint) {
-  const { account } = clients();
-  if (account.address.toLowerCase() !== trader.toLowerCase()) throw new Error("1CT self-signing requires signer == trader");
+  const { publicClient } = clients();
+  const signer = getSigningAccount();
+  const hostedAgent = Boolean(config.leverUpAgentPrivateKey);
+
+  if (hostedAgent) {
+    if (signer.address.toLowerCase() === trader.toLowerCase()) {
+      throw new Error("Hosted LeverUp agent signer must be distinct from trader");
+    }
+    const auth = await getAgentAuthorization(trader, signer.address);
+    const requiredBit = 1n << BigInt(action);
+    const permissions = BigInt(auth.permissions);
+    const hasBit = permissions === MAX_UINT256 || (permissions & requiredBit) === requiredBit;
+    if (!auth.authorized || !hasBit) {
+      throw new Error("LeverUp agent is not authorized for action " + action + "; required permission bit 0x" + requiredBit.toString(16));
+    }
+  } else if (signer.address.toLowerCase() !== trader.toLowerCase()) {
+    throw new Error("1CT self-signing requires signer == trader");
+  }
+
   const actionData = buildActionData(action, trader, values);
   const actionDataHash = keccak256(actionData);
-  const now = BigInt(Date.now());
-  nonce = now > nonce ? now : nonce + 1n;
+  const lastNonce = await publicClient.readContract({
+    address: ONECLICK_DIAMOND,
+    abi: AGENT_NONCE_ABI,
+    functionName: "getLastNonce",
+    args: [trader, signer.address]
+  });
+  const candidate = BigInt(Date.now());
+  nonce = candidate > nonce ? candidate : nonce + 1n;
+  nonce = nonce > BigInt(lastNonce) ? nonce : BigInt(lastNonce) + 1n;
   const deadline = Math.floor(Date.now() / 1000) + 300;
   const typeName = ACTION_NAMES[action];
+  if (!typeName) throw new Error("Unsupported LeverUp 1CT action: " + action);
 
-  const signature = await account.signTypedData({
+  const signature = await signer.signTypedData({
     domain: { name: "LeverupOneClickV2", version: "1", chainId: 143, verifyingContract: ONECLICK_DIAMOND },
     types: { [typeName]: COMMON_FIELDS },
     primaryType: typeName,
     message: { trader, action, nonce, deadline, feeToken, antiDdosFee, actionDataHash }
   } as any);
 
-  const result = await fetch(`${ONECLICK_BASE}/v2/trading/submit-intent?blockchain=MONAD`, {
+  const result = await fetch(ONECLICK_BASE + "/v2/trading/submit-intent?blockchain=MONAD", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -344,7 +369,7 @@ async function submitIntent(action: number, trader: Address, values: unknown[], 
     })
   });
   const text = await result.text();
-  if (!result.ok) throw new Error(`LeverUp intent HTTP ${result.status}: ${text.slice(0, 500)}`);
+  if (!result.ok) throw new Error("LeverUp intent HTTP " + result.status + ": " + text.slice(0, 500));
   return text.replace(/^"|"$/g, "");
 }
 

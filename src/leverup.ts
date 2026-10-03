@@ -4,7 +4,7 @@ import { config } from "./config.js";
 
 const MONAD = defineChain({ id: 143, name: "Monad Mainnet", nativeCurrency: { name: "Monad", symbol: "MON", decimals: 18 }, rpcUrls: { default: { http: [config.rpcUrl] } } });
 const PYTH = "0x2880aB155794e7179c9eE2e38200202908C17B43" as Address;
-const WMON = "0x3bd359C1119dA7Da1D913D1C4D2b7c461115433A" as Address;
+const WMON = "0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A" as Address;
 const LVMON = "0x91b81bfbe3A747230F0529Aa28d8b2Bc898E6D56" as Address;
 
 const PYTH_ABI = parseAbi(["function getUpdateFee(bytes[] updateData) view returns (uint256)"]);

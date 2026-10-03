@@ -321,10 +321,39 @@ export async function openLeverUpMonTrade(symbol: string, marginMon: number, lev
     sl, tp, 0, 0n
   ];
 
-  const intentHash = await submitIntent(ACTION_MARKET_OPEN, account.address, actionValues, fee.feeToken, fee.antiDdosFee);
-  const status = await pollIntent(intentHash);
-  if (!status.success) throw new Error(`LeverUp intent ${intentHash} failed: ${status.skipReason ?? status.reason ?? "unknown"}`);
-  return { intentHash, txHash: status.txnHash ?? "", symbol: pair.pairName, leverage, marginMon, notionalUsd: q.notionalUsd };
+  const triggerBufferPct = Math.min(Math.max(config.slippagePct, 0.01), 1);
+  const limitPriceUsd = entry * (isLong ? 1 - triggerBufferPct / 100 : 1 + triggerBufferPct / 100);
+  if (isLong && limitPriceUsd >= entry) throw new Error("Long limit price must be below market");
+  if (!isLong && limitPriceUsd <= entry) throw new Error("Short limit price must be above market");
+
+  const fee = await chooseFeeToken(amountIn, ACTION_LIMIT_OPEN);
+  if (!fee) throw new Error("No enabled LeverUp limit-open execution-fee token has enough balance/allowance.");
+
+  const { publicClient } = clients();
+  const wmonBalance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address] });
+  if (wmonBalance < amountIn) throw new Error(`Insufficient WMON collateral: have ${formatUnits(wmonBalance, 18)} MON-equivalent, need ${marginMon}`);
+  const wmonAllowance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND] });
+  if (wmonAllowance < amountIn) throw new Error("WMON is not approved to LeverUp Diamond yet; approve once before live trading.");
+
+  const actionValues = [
+    pair.base, isLong, WMON, LVMON, amountIn, q.qty,
+    parseUnits(limitPriceUsd.toFixed(18), 18),
+    sl, tp, 0, 0n
+  ];
+
+  const intentHash = await submitIntent(ACTION_LIMIT_OPEN, account.address, actionValues, fee.feeToken, fee.antiDdosFee);
+  // LIMIT_OPEN is accepted before execution; it may remain pending until the trigger is reached.
+  return {
+    intentHash,
+    txHash: "",
+    symbol: pair.pairName,
+    leverage,
+    marginMon,
+    notionalUsd: q.notionalUsd,
+    orderType: "LIMIT",
+    limitPriceUsd,
+    pending: true
+  };
 }
 
 export async function closeLeverUpTrade(positionHash: Hex) {

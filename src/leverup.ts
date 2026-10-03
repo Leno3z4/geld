@@ -1,4 +1,4 @@
-import { createPublicClient, createWalletClient, defineChain, formatUnits, http, parseAbi, parseUnits, keccak256, type Address, type Hex } from "viem";
+import { createPublicClient, createWalletClient, defineChain, formatUnits, http, parseAbi, parseUnits, keccak256, encodeAbiParameters, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { config } from "./config.js";
 
@@ -177,12 +177,7 @@ function buildActionData(action: number, trader: Address, values: unknown[]): He
 }
 
 function awaitableEncode(types: string[], values: unknown[]) {
-  const { encodeAbiParameters } = requireUnavailable();
   return encodeAbiParameters(types.map((type) => ({ type })), values as any);
-}
-
-function requireUnavailable(): never {
-  throw new Error("unreachable");
 }
 
 async function submitIntent(action: number, trader: Address, values: unknown[], feeToken: Address, antiDdosFee: bigint) {

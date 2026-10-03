@@ -492,7 +492,7 @@ export class GeldBot extends DurableObject<Env> {
 
       if (!this.leverUpReadiness || Date.now() - this.leverUpReadinessAt >= 10 * 60_000) {
         try {
-          const probe = await probeLeverUpMinimums("BTC/USD", 5);
+          const probe = await probeLeverUpMinimums("MON/USD", 5);
           this.leverUpReadiness = {
             checkedAt: Date.now(),
             ok: Boolean(probe.firstAccepted),
@@ -531,7 +531,7 @@ export class GeldBot extends DurableObject<Env> {
       );
       await paper.fetch(new Request("https://leverup/live-opened", {
         method:"POST", headers:{"content-type":"application/json"},
-        body:JSON.stringify({symbol:signal.symbol,txHash:opened.txHash})
+        body:JSON.stringify({symbol:signal.symbol,txHash:opened.txHash,intentHash:opened.intentHash})
       }));
     } catch (error) {
       console.error("LeverUp paper/live tick failed:", error);

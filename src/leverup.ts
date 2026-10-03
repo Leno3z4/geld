@@ -234,6 +234,7 @@ export interface LeverUpQuote {
   notionalUsd: number;
   entryPriceUsd: number;
   qty: bigint;
+  openFeeMon: number;
   warnings: string[];
 }
 
@@ -244,6 +245,9 @@ export async function getLeverUpQuote(symbol: string, marginMon: number, leverag
   const [entry, monPrice] = await Promise.all([getMarketPrice(pair), getMonPrice()]);
   const marginUsd = marginMon * monPrice;
   const notionalUsd = marginUsd * leverage;
+  const openFeePct = leverage >= 500 ? 0 : 0.0003;
+  const openFeeMon = notionalUsd * openFeePct / Math.max(monPrice, 1e-18);
+  const amountInMon = marginMon + openFeeMon;
   if (notionalUsd < config.leverUpMinNotionalUsd) {
     throw new Error(`Minimum configured LeverUp notional is $${config.leverUpMinNotionalUsd}; calculated $${notionalUsd.toFixed(4)}`);
   }
@@ -251,7 +255,7 @@ export async function getLeverUpQuote(symbol: string, marginMon: number, leverag
   const qty = BigInt(Math.floor((notionalUsd * 1e10) / entry));
   const warnings: string[] = [];
   if (marginUsd < 10) warnings.push("Margin is below the published $10 recommended level.");
-  return { symbol: pair.pairName, leverage, marginMon, marginUsd, notionalUsd, entryPriceUsd: entry, qty, warnings };
+  return { symbol: pair.pairName, leverage, marginMon, marginUsd, notionalUsd, entryPriceUsd: entry, qty, openFeeMon, warnings };
 }
 
 async function ensureWmon(amountMon: number) {
@@ -288,7 +292,7 @@ export async function openLeverUpMonTrade(symbol: string, marginMon: number, lev
   if (isLong && tp && takeProfitUsd <= entry) throw new Error("Long TP must be above entry");
   if (!isLong && tp && takeProfitUsd >= entry) throw new Error("Short TP must be below entry");
 
-  const amountIn = parseUnits(marginMon.toFixed(18), 18);
+  const amountIn = parseUnits(q.marginMon.toFixed(18), 18) + parseUnits(q.openFeeMon.toFixed(18), 18);
   const fee = await chooseFeeToken(amountIn);
   if (!fee) throw new Error("No enabled LeverUp execution-fee token has enough balance/allowance. WMON collateral + approval may be required.");
 
@@ -343,12 +347,12 @@ export async function probeLeverUpMinimums(symbol = "MON/USD", leverage = 5) {
   for (const marginMon of candidates) {
     try {
       const q = await getLeverUpQuote(pair.pairName, marginMon, leverage);
-      const amountIn = parseUnits(marginMon.toFixed(18), 18);
+      const amountIn = parseUnits(q.marginMon.toFixed(18), 18) + parseUnits(q.openFeeMon.toFixed(18), 18);
       const fee = await chooseFeeToken(amountIn);
       const wmonBalance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address] });
       const wmonAllowance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND] });
       results.push({
-        marginMon, marginUsd: q.marginUsd, notionalUsd: q.notionalUsd,
+        marginMon, marginUsd: q.marginUsd, notionalUsd: q.notionalUsd, openFeeMon: q.openFeeMon,
         accepted: Boolean(fee && wmonBalance >= amountIn && wmonAllowance >= amountIn),
         hasFeeToken: Boolean(fee),
         wmonBalanceMon: Number(formatUnits(wmonBalance, 18)),

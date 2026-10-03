@@ -7,10 +7,8 @@ GELD uses LeverUp 1CT Hosted Agent mode so the main trader key is not used for e
 - Trader wallet: `MONAD_PRIVATE_KEY`
 - Hosted agent signer: `LEVERUP_AGENT_PRIVATE_KEY`
 - The agent key must be a different address from the trader wallet.
-- GELD rejects wildcard `uint256.max` agent permissions.
-- The default explicit permission mask is `6`:
-  - bit 1 = `MARKET_CLOSE`
-  - bit 2 = `LIMIT_OPEN`
+- GELD accepts LeverUp's `ALL` permission wildcard (`uint256.max`) for a dedicated hosted agent.
+- The default permission setting is `ALL`; GELD can also accept an explicit numeric/hex bitmask.
 - GELD does not automatically call ERC-20 `approve` and does not grant unlimited allowances.
 
 ## 1. Generate the agent key locally
@@ -33,11 +31,13 @@ npx wrangler secret put LEVERUP_AGENT_PRIVATE_KEY
 
 Paste the locally generated key into the prompt. Never commit it, put it in `GELD_CONFIG`, or paste it into chat.
 
-The non-secret permission mask is:
+The non-secret permission setting is:
 
 ```text
-LEVERUP_AGENT_PERMISSION_MASK=6
+LEVERUP_AGENT_PERMISSION_MASK=ALL
 ```
+
+Use `ALL` for a dedicated GELD agent. An explicit numeric/hex mask is also supported.
 
 ## 3. Authorize the agent
 
@@ -47,8 +47,7 @@ https://app.leverup.xyz/agent-wallets
 
 Connect the trader wallet, add the generated agent address, choose a unique name such as `GELD-1CT`, and select only:
 
-- LIMIT_OPEN
-- MARKET_CLOSE
+- ALL
 
 Then confirm the single onchain authorization transaction.
 

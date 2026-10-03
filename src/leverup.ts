@@ -112,12 +112,12 @@ async function latestPrices(pairBases: Address[]) {
     body: JSON.stringify({ blockChain: "MONAD", pairBases })
   });
   const rows = Array.isArray(body) ? body : body.content ?? body.data ?? body.prices ?? [];
-  const list = Array.isArray(rows) ? rows : Object.entries(rows).map(([pairBase, value]) => ({ pairBase, ...(value as any) }));
+  const list = Array.isArray(rows) ? rows : Object.entries(rows).map(([pairBase, value]) => ({ pairBase, value }));
   const out = new Map<string, number>();
   for (const row of list as any[]) {
     const base = String(row.pairBase ?? row.base ?? row.pair ?? "").toLowerCase();
     const raw = row.price ?? row.priceUsd ?? row.markPrice ?? row.value;
-    const price = Number(raw);
+    const price = Number(raw) / 1e18;
     if (base && Number.isFinite(price) && price > 0) out.set(base, price);
   }
   if (!out.size) throw new Error("LeverUp REST returned no usable latest prices");

@@ -173,9 +173,8 @@ export class TradingEngine {
   }
 
   private entryCircuitBreakerActive() {
-    // Daily drawdown remains a telemetry metric, but it no longer halts
-    // new entries. Trading should continue according to the configured
-    // strategy/entry gates; execution safety controls remain active.
+    // Daily drawdown is an entry circuit breaker. It never blocks exits:
+    // protecting existing capital takes priority over opening another trade.
     const now = Date.now();
     const today = new Date(now).toISOString().slice(0, 10);
     const state = this.store.get();
@@ -192,13 +191,21 @@ export class TradingEngine {
           startEquity > 0 ? ((equity / startEquity) - 1) * 100 : 0;
       }
 
-      // Clear legacy halt state so persisted breaker flags cannot reappear
-      // as a stale UI/worker state after deployment.
-      s.stats.entryCircuitBreakerUntil = undefined;
-      s.stats.entryCircuitBreakerReason = undefined;
+      const limit = Math.abs(config.dailyLossLimitPct);
+      if (limit > 0 && s.stats.dailyRiskDrawdownPct <= -limit) {
+        s.stats.entryCircuitBreakerUntil = Date.now() + 24 * 60 * 60 * 1000;
+        s.stats.entryCircuitBreakerReason =
+          "Daily loss limit reached: " + s.stats.dailyRiskDrawdownPct.toFixed(2) + "% <= -" + limit.toFixed(2) + "%";
+        return;
+      }
+
+      if ((s.stats.entryCircuitBreakerUntil ?? 0) <= Date.now()) {
+        s.stats.entryCircuitBreakerUntil = undefined;
+        s.stats.entryCircuitBreakerReason = undefined;
+      }
     });
 
-    return false;
+    return (this.store.get().stats.entryCircuitBreakerUntil ?? 0) > Date.now();
   }
 
   private cleanupStalePendingExecutions() {
@@ -1751,8 +1758,16 @@ export class TradingEngine {
           throw error;
         }
 
-        // Aggressive fallback: when Gemini is unavailable/rate-limited, keep
-        // trading only candidates that already passed every hard market gate.
+        // Fail closed by default: an unavailable AI service is not evidence of
+        // positive expected value. Deterministic setup remains visible in the
+        // dashboard, but does not manufacture a BUY.
+        const fallbackEnabled = config.aiFallbackEnabled && config.aiFallbackMinScore >= 100;
+        if (!fallbackEnabled) {
+          throw error;
+        }
+
+        // Emergency fallback is retained only for an explicit score threshold
+        // of 100, so accidental AI outages cannot turn into uncontrolled entries.
         // This never bypasses shouldOpen(); it simply removes AI availability
         // as the single point of failure for an otherwise qualified setup.
         const dip = token.dipPct ?? 0;
@@ -2345,6 +2360,8 @@ export class TradingEngine {
   }
 
   private async managePositions() {
+    // AI budget is per position-management cycle, not process lifetime.
+    this.aiCallsThisCycle = 0;
     const resolvedPendingSells = await this.reconcilePendingSellExecutions();
     if (resolvedPendingSells > 0) {
       await this.reconcileWalletPositions();

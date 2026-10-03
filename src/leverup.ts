@@ -518,68 +518,135 @@ export async function getLeverUpMarketSnapshots() {
   });
 }
 
-export async function probeLeverUpMinimums(symbol = "MON/USD", leverage = 5, action = ACTION_MARKET_OPEN) {
+export async function getLeverUpReadiness(
+  symbol = "MON/USD",
+  marginMon = 0.005,
+  leverage = 5,
+  action = ACTION_LIMIT_OPEN
+) {
   const { account, publicClient } = clients();
   const pair = await getPair(symbol);
   const [balanceMon, monPrice] = await Promise.all([
     publicClient.getBalance({ address: account.address }).then((x) => Number(formatUnits(x, 18))),
     getMonPrice()
   ]);
-  const maxAllowedMarginMon = balanceMon * config.leverUpMaxMarginPct / 100;
-  const candidates = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5].filter((x) => x <= maxAllowedMarginMon);
+
+  const q = await getLeverUpQuote(pair.pairName, marginMon, leverage);
+  const amountIn = parseUnits(q.marginMon.toFixed(18), 18) + parseUnits(q.openFeeMon.toFixed(18), 18);
+  const feeOptions = await inspectFeeOptions(amountIn, action);
+  const selected = feeOptions.find((x) => x.ready) ?? null;
+
+  const wmonBalance = await publicClient.readContract({
+    address: WMON, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address]
+  });
+  const collateralRequired = amountIn + (selected?.sameAsCollateral ? BigInt(selected.antiDdosFeeRaw) : 0n);
+  const wmonAllowance = await publicClient.readContract({
+    address: WMON, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND]
+  });
+
+  const agent = await getLeverUpAgentStatus();
+  const feeReady = Boolean(selected);
+  const collateralReady = wmonBalance >= collateralRequired && wmonAllowance >= collateralRequired;
+  const agentReady = agent.mode === "SELF_SIGNING"
+    ? true
+    : Boolean(agent.authorization?.permissionsReady);
+  const enabled = feeOptions.length > 0;
+  const ready = enabled && feeReady && collateralReady && agentReady;
+
+  let reason = "ready for 1CT submission";
+  if (!enabled) reason = "LeverUp " + (ACTION_NAMES[action] ?? ("action " + action)) + " is not enabled by the live relayer";
+  else if (!feeReady) reason = "no enabled execution-fee token has sufficient balance and allowance";
+  else if (!collateralReady) reason = wmonBalance < collateralRequired ? "insufficient WMON collateral" : "WMON allowance insufficient";
+  else if (!agentReady) reason = "hosted agent is not authorized for the required permission mask";
+
+  return {
+    mode: agent.mode,
+    oracle: "LEVERUP_RELAYER",
+    action,
+    actionName: ACTION_NAMES[action] ?? ("action " + action),
+    trader: account.address,
+    pair: pair.pairName,
+    leverage,
+    marginMon,
+    balanceMon,
+    monPriceUsd: monPrice,
+    maxAllowedMarginMon: balanceMon * config.leverUpMaxMarginPct / 100,
+    marginUsd: q.marginUsd,
+    notionalUsd: q.notionalUsd,
+    openFeeMon: q.openFeeMon,
+    amountInRaw: amountIn.toString(),
+    amountInFormatted: formatUnits(amountIn, 18),
+    collateral: {
+      token: WMON,
+      lvToken: LVMON,
+      balanceRaw: wmonBalance.toString(),
+      balanceFormatted: formatUnits(wmonBalance, 18),
+      allowanceRaw: wmonAllowance.toString(),
+      allowanceFormatted: formatUnits(wmonAllowance, 18),
+      requiredRaw: collateralRequired.toString(),
+      requiredFormatted: formatUnits(collateralRequired, 18),
+      ready: collateralReady
+    },
+    feeOptions,
+    selectedFeeToken: selected?.feeToken ?? null,
+    selectedFeeAntiDdosFeeRaw: selected?.antiDdosFeeRaw ?? "0",
+    selectedFeeAntiDdosFeeFormatted: selected?.antiDdosFeeFormatted ?? null,
+    agent,
+    enabled,
+    feeReady,
+    agentReady,
+    ready,
+    reason
+  };
+}
+
+export async function probeLeverUpMinimums(symbol = "MON/USD", leverage = 5, action = ACTION_LIMIT_OPEN) {
+  const baseline = await getLeverUpReadiness(symbol, 0.005, leverage, action);
+  const candidates = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
+    .filter((x) => x <= baseline.maxAllowedMarginMon);
   const results: Array<Record<string, unknown>> = [];
 
   for (const marginMon of candidates) {
     try {
-      const q = await getLeverUpQuote(pair.pairName, marginMon, leverage);
-      const amountIn = parseUnits(q.marginMon.toFixed(18), 18) + parseUnits(q.openFeeMon.toFixed(18), 18);
-      const fee = await chooseFeeToken(amountIn, action);
-      if (!fee) {
-        results.push({
-          marginMon,
-          marginUsd: q.marginUsd,
-          notionalUsd: q.notionalUsd,
-          openFeeMon: q.openFeeMon,
-          accepted: false,
-          hasFeeToken: false,
-          wmonBalanceMon: 0,
-          wmonApproved: false,
-          reason: "missing execution-fee token/allowance"
-        });
-        // Fee-token readiness is monotonic across larger margins: non-WMON fees are fixed,
-        // while WMON requires at least as much collateral as the margin grows. Stop probing.
-        break;
-      }
-      const wmonBalance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address] });
-      const wmonAllowance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND] });
+      const readiness = await getLeverUpReadiness(symbol, marginMon, leverage, action);
       results.push({
-        marginMon, marginUsd: q.marginUsd, notionalUsd: q.notionalUsd, openFeeMon: q.openFeeMon,
-        accepted: wmonBalance >= amountIn && wmonAllowance >= amountIn,
-        hasFeeToken: true,
-        wmonBalanceMon: Number(formatUnits(wmonBalance, 18)),
-        wmonApproved: wmonAllowance >= amountIn,
-        reason: wmonBalance < amountIn ? "insufficient WMON" : wmonAllowance < amountIn ? "WMON approval required" : "ready for 1CT submission"
+        marginMon,
+        marginUsd: readiness.marginUsd,
+        notionalUsd: readiness.notionalUsd,
+        openFeeMon: readiness.openFeeMon,
+        accepted: readiness.ready,
+        hasFeeToken: readiness.feeReady,
+        collateral: readiness.collateral,
+        feeOptions: readiness.feeOptions,
+        agent: readiness.agent,
+        reason: readiness.reason
       });
-      if (wmonBalance < amountIn || wmonAllowance < amountIn) break;
+      if (readiness.ready) break;
+      if (!readiness.feeReady || !readiness.agentReady || !readiness.collateral.ready) break;
     } catch (error) {
-      const message = String(error).slice(0, 500);
-      results.push({ marginMon, accepted: false, error: message });
-      if (message.includes("currently disabled by the live 1CT relayer")) break;
+      results.push({
+        marginMon,
+        accepted: false,
+        error: String(error).slice(0, 500)
+      });
+      break;
     }
   }
 
   return {
-    mode: "1CT_SELF_SIGNING",
+    mode: baseline.mode,
     oracle: "LEVERUP_RELAYER",
     action,
-    actionName: ACTION_NAMES[action] ?? `action ${action}`,
-    balanceMon,
-    monPriceUsd: monPrice,
-    maxAllowedMarginMon,
-    pair: pair.pairName,
+    actionName: ACTION_NAMES[action] ?? ("action " + action),
+    trader: baseline.trader,
+    balanceMon: baseline.balanceMon,
+    monPriceUsd: baseline.monPriceUsd,
+    maxAllowedMarginMon: baseline.maxAllowedMarginMon,
+    pair: baseline.pair,
     leverage,
     results,
-    firstReady: results.find((x) => x.accepted) ?? null
+    firstReady: results.find((x) => x.accepted) ?? null,
+    agent: baseline.agent
   };
 }
 

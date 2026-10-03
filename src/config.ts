@@ -157,6 +157,15 @@ export const config = {
   minVolume5mUsd: Math.max(0, num("MIN_VOLUME_5M_USD", 1000)),
   fastCycleMs: Math.max(10000, num("FAST_CYCLE_MS", 10000)),
 
+  leverUpEnabled: bool("LEVERUP_ENABLED", false),
+  leverUpDiamond: (process.env.LEVERUP_DIAMOND ?? "0xea1b8E4aB7f14F7dCA68c5B214303B13078FC5ec") as `0x${string}`,
+  leverUpPythHermesUrl: process.env.LEVERUP_PYTH_HERMES_URL ?? "https://hermes.pyth.network",
+  leverUpDefaultLeverage: Math.max(1, Math.floor(num("LEVERUP_DEFAULT_LEVERAGE", 500))),
+  leverUpMaxLeverage: Math.max(1, Math.floor(num("LEVERUP_MAX_LEVERAGE", 500))),
+  leverUpMinNotionalUsd: Math.max(200, num("LEVERUP_MIN_NOTIONAL_USD", 200)),
+  leverUpMinMarginUsd: Math.max(0.01, num("LEVERUP_MIN_MARGIN_USD", 1)),
+  leverUpMaxMarginPct: Math.min(100, Math.max(1, num("LEVERUP_MAX_MARGIN_PCT", 20))),
+
   nadfunApiUrl: process.env.NADFUN_API_URL ?? "https://api.nad.fun",
   nadfunSiteUrl: process.env.NADFUN_SITE_URL ?? "https://nad.fun",
   nadfunApiKey: process.env.NADFUN_API_KEY ?? "",

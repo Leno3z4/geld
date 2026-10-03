@@ -764,7 +764,9 @@ export class GeldBot extends DurableObject<Env> {
     if (path === "/api/leverup/preflight") {
       try {
         const { probeLeverUpMinimums } = await import("./src/leverup.js");
-        return Response.json(await probeLeverUpMinimums(url.searchParams.get("symbol") ?? "BTC/USD", Number(url.searchParams.get("leverage") ?? 5)));
+        const orderType = (url.searchParams.get("orderType") ?? "market").toLowerCase();
+        const action = orderType === "limit" ? 2 : 0;
+        return Response.json(await probeLeverUpMinimums(url.searchParams.get("symbol") ?? "BTC/USD", Number(url.searchParams.get("leverage") ?? 5), action));
       } catch (error) { return Response.json({ ok: false, error: String(error) }, { status: 503 }); }
     }
 

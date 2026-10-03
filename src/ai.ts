@@ -28,7 +28,7 @@ export class GeminiBrain {
   private keyCursor=0;
   private lastCall=0;
 
-  async decide(input:{mode:"candidate"|"position";token:TokenSnapshot;position?:Position;seasonality:{buyMon:number;sellMon:number;events:number}}):Promise<AiDecision>{
+  async decide(input:{mode:"candidate"|"position";token:TokenSnapshot;position?:Position;seasonality:{buyMon:number;sellMon:number;events:number};highCapLearning?:any}):Promise<AiDecision>{
     if(!config.geminiKeys.length) return {action:"HOLD",confidence:0,sizePct:0,reason:"Gemini not configured",invalidation:"Configure GEMINI_API_KEYS"};
     const wait=this.lastCall+config.aiFastCooldownMs-Date.now();
     if(wait>0) await new Promise(r=>setTimeout(r,wait));
@@ -54,9 +54,11 @@ export class GeminiBrain {
       "Prefer decisive BUY or SELL actions when the factual setup supports them. In candidate mode, do not default to HOLD merely because the setup is imperfect: use the supplied risk and momentum evidence to make an opportunistic decision.",
       "Avoid only the most extreme vertical chases. Moderate positive momentum is tradable when liquidity, volume and trend gates pass. Do not invent liquidity, social sentiment, holders, whale behavior or catalysts.",
       "Use the supplied dip, daily high/low/average, distance from daily low/average, trend, market cap, liquidity, holders, volume, 5m flow, volume acceleration and seasonality fields as factual inputs. For low-cap tokens, demand stronger 5m flow/acceleration and be much less tolerant of a trend reversal. Treat seasonality and any single signal as evidence, not certainty.",
+      "For HIGH-CAP candidates only, use highCapLearning as historical evidence. It contains compact aggregate outcomes plus daily and weekly high/low ranges and strategy expectancy. Do not treat it as a guarantee or as a reason to override current hard gates. Prefer patterns with sufficient samples and reject conclusions based on tiny samples.",
+      "The learning database is deliberately summarized before reaching you. Do not ask for raw historical rows and do not attempt to reconstruct missing history.",
       "Choose BUY, HOLD or SELL. sizePct is a fraction of the configured trade budget for BUY or current position for SELL.",
       "Return only JSON matching the schema. Keep reason under 240 characters and invalidation under 200 characters. Give one concise reason and one concrete invalidation condition.",
-      JSON.stringify({mode:input.mode,token:input.token,position:input.position??null,seasonality:input.seasonality})
+      JSON.stringify({mode:input.mode,token:input.token,position:input.position??null,seasonality:input.seasonality,highCapLearning:input.highCapLearning??null})
     ].join("\n");
 
     const models=[config.geminiFastModel,config.geminiEscalationModel];

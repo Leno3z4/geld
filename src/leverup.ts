@@ -365,16 +365,37 @@ export async function probeLeverUpMinimums(symbol = "MON/USD", leverage = 5, act
       const fee = await chooseFeeToken(amountIn, action);
       const wmonBalance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address] });
       const wmonAllowance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND] });
+      if (!fee) {
+        results.push({
+          marginMon,
+          marginUsd: q.marginUsd,
+          notionalUsd: q.notionalUsd,
+          openFeeMon: q.openFeeMon,
+          accepted: false,
+          hasFeeToken: false,
+          wmonBalanceMon: 0,
+          wmonApproved: false,
+          reason: "missing execution-fee token/allowance"
+        });
+        // Fee-token readiness is monotonic across larger margins: non-WMON fees are fixed,
+        // while WMON requires at least as much collateral as the margin grows. Stop probing.
+        break;
+      }
+      const wmonBalance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address] });
+      const wmonAllowance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND] });
       results.push({
         marginMon, marginUsd: q.marginUsd, notionalUsd: q.notionalUsd, openFeeMon: q.openFeeMon,
-        accepted: Boolean(fee && wmonBalance >= amountIn && wmonAllowance >= amountIn),
-        hasFeeToken: Boolean(fee),
+        accepted: wmonBalance >= amountIn && wmonAllowance >= amountIn,
+        hasFeeToken: true,
         wmonBalanceMon: Number(formatUnits(wmonBalance, 18)),
         wmonApproved: wmonAllowance >= amountIn,
-        reason: !fee ? "missing execution-fee token/allowance" : wmonBalance < amountIn ? "insufficient WMON" : wmonAllowance < amountIn ? "WMON approval required" : "ready for 1CT submission"
+        reason: wmonBalance < amountIn ? "insufficient WMON" : wmonAllowance < amountIn ? "WMON approval required" : "ready for 1CT submission"
       });
+      if (wmonBalance < amountIn || wmonAllowance < amountIn) break;
     } catch (error) {
-      results.push({ marginMon, accepted: false, error: String(error).slice(0, 500) });
+      const message = String(error).slice(0, 500);
+      results.push({ marginMon, accepted: false, error: message });
+      if (message.includes("currently disabled by the live 1CT relayer")) break;
     }
   }
 

@@ -418,7 +418,9 @@ export class GeldBot extends DurableObject<Env> {
   private cycleInFlight = false;
   private learningLastSampleAt = 0;
   private learningSummaryCache: any = null;
-  private learningSummaryAt = 0;\n  private leverUpReadinessAt = 0;\n  private leverUpReadiness: any = null;
+  private learningSummaryAt = 0;
+  private leverUpReadinessAt = 0;
+  private leverUpReadiness: any = null;
 
   private async getEngine() {
     if (this.engine) return this.engine;

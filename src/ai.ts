@@ -85,7 +85,16 @@ export class GeminiBrain {
           this.lastCall=Date.now();
           return decision;
         }catch(error){
-          errors.push(model+":"+(error instanceof Error?error.message:String(error)).slice(0,160));
+          const message = error instanceof Error ? error.message : String(error);
+          errors.push(model+":"+message.slice(0,160));
+
+          // This is an invocation-wide Cloudflare resource limit, not a
+          // model/key failure. Retrying another Gemini endpoint in the same
+          // Worker invocation can only consume more subrequests and fail again.
+          if (/too many subrequests/i.test(message)) {
+            attemptsUsed = config.aiMaxAttemptsPerDecision;
+            break;
+          }
         }
       }
       if (attemptsUsed >= config.aiMaxAttemptsPerDecision) break;

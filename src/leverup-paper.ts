@@ -27,7 +27,7 @@ type State = {
   consecutiveLosses: number;
   lastDecisionAt: number;
   liveUntil: Record<string, number>;
-  readiness?: { checkedAt:number; ok:boolean; firstAcceptedMarginMon?:number; detail?:any };
+  readiness?: { checkedAt:number; ok:boolean; firstAcceptedMarginMon?:number; detail?:any };\n  performance: Record<string,{trades:number;wins:number;pnlMon:number}>;
 };
 
 const PAPER_START_MON = 50;
@@ -61,7 +61,7 @@ export class GeldLeverUpPaper extends DurableObject {
       startedAt: now, mode:"PAPER", balanceMon:PAPER_START_MON,
       initialMon:PAPER_START_MON, realizedPnlMon:0, positions:[],
       samples:{}, daily:{}, previousDaily:{}, trades:[], wins:0, losses:0,
-      consecutiveLosses:0, lastDecisionAt:0, liveUntil:{}
+      consecutiveLosses:0, lastDecisionAt:0, liveUntil:{}, performance:{}
     };
     await this.ctx.storage.put("state", s);
     return s;
@@ -87,7 +87,7 @@ export class GeldLeverUpPaper extends DurableObject {
     const range=this.dailyRange(s,m.symbol,m.ts);
     if (!range || samples.length < 20) return ["HOLD","building 24h/daily range"] as const;
 
-    const last5=rolling(samples,m.ts,5*60_000);
+    const last5=rolling(samples,m.ts,5*60_000);\n    const perfLong=s.performance[m.symbol+":LONG"], perfShort=s.performance[m.symbol+":SHORT"];
     const base=last5[0]?.price ?? m.price;
     const reversal=pct(m.price,base);
     const loc=range.location;

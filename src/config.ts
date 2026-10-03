@@ -169,6 +169,7 @@ export const config = {
   leverUpDailyLossLimitPct: Math.min(10, Math.max(1, num("LEVERUP_DAILY_LOSS_LIMIT_PCT", 4))),
   leverUpMaxConsecutiveLosses: Math.max(2, Math.min(8, Math.floor(num("LEVERUP_MAX_CONSECUTIVE_LOSSES", 3)))),
   leverUpCooldownMs: Math.max(60_000, num("LEVERUP_COOLDOWN_MS", 15 * 60_000)),
+  leverUpAutoLiveAfterPaper: bool("LEVERUP_AUTO_LIVE_AFTER_PAPER", false),
 
   nadfunApiUrl: process.env.NADFUN_API_URL ?? "https://api.nad.fun",
   nadfunSiteUrl: process.env.NADFUN_SITE_URL ?? "https://nad.fun",

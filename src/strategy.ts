@@ -414,6 +414,7 @@ export function selectEntryStrategy(token: TokenSnapshot, minDailySamples = 24, 
   const volume5mMon = token.volume5mMon ?? 0;
   const volume5mUsd = volume5mMon * (token.monUsdPrice ?? 0);
   const acceleration = token.volumeAcceleration5m ?? 0;
+  const rebound1h = token.reboundPct1h ?? 0;
 
   const dailyMeanReversion =
     token.daySamples !== undefined &&
@@ -423,13 +424,21 @@ export function selectEntryStrategy(token: TokenSnapshot, minDailySamples = 24, 
     dayAvgDistance <= -8 &&
     dayLowDistance <= 6 &&
     dayLowDistance >= 0 &&
-    trend4h >= -25;
+    rebound1h >= config.dipMinReboundPct &&
+    buySell >= 1.05 &&
+    volume5mUsd >= config.dipMinVolume5mUsd &&
+    trend4h >= config.minTrend4hPct;
 
+  // A dip is only tradable after an actual bounce starts. Previously the
+  // dip lane could buy while price was still making fresh lows.
   const dipReversion =
-    dip >= 3 &&
-    dip <= 50 &&
-    trend1h <= 20 &&
-    trend4h >= -25;
+    dip >= config.dipMinPct &&
+    dip <= config.dipMaxPct &&
+    rebound1h >= config.dipMinReboundPct &&
+    buySell >= config.dipMinBuySellRatio5m &&
+    volume5mUsd >= config.dipMinVolume5mUsd &&
+    trend1h <= config.dipMaxTrend1hPct &&
+    trend4h >= config.minTrend4hPct;
 
   const momentum =
     trend1h > 0 &&
@@ -683,10 +692,20 @@ export function entryGateDiagnostics(
   const dipInEntryBand =
     metrics.dipPct >= rules.dipMinPct &&
     metrics.dipPct <= rules.dipMaxPct;
+  const dipReversalConfirmed =
+    dipInEntryBand &&
+    metrics.rebound1hPct >= config.dipMinReboundPct &&
+    (token.buySellRatio5m ?? 0) >= config.dipMinBuySellRatio5m &&
+    (token.volume5mMon ?? 0) * (token.monUsdPrice ?? 0) >= config.dipMinVolume5mUsd &&
+    metrics.trend1hPct <= config.dipMaxTrend1hPct &&
+    metrics.trend4hPct >= rules.minTrend4hPct;
   const momentumEntry =
     metrics.dipPct <= rules.dipMaxPct &&
     metrics.trend1hPct > 0 &&
     metrics.trend1hPct <= rules.trendMax1hPct &&
+    metrics.rebound1hPct >= config.dipMinReboundPct &&
+    (token.buySellRatio5m ?? 0) >= 1.05 &&
+    (token.volume5mMon ?? 0) * (token.monUsdPrice ?? 0) >= config.dipMinVolume5mUsd &&
     metrics.trend4hPct >= rules.minTrend4hPct;
 
   const dailyMeanEntry =
@@ -695,6 +714,9 @@ export function entryGateDiagnostics(
     metrics.distanceFromDayAvgPct <= -8 &&
     metrics.distanceFromDayLowPct <= 6 &&
     metrics.distanceFromDayLowPct >= 0 &&
+    metrics.rebound1hPct >= config.dipMinReboundPct &&
+    (token.buySellRatio5m ?? 0) >= 1.05 &&
+    (token.volume5mMon ?? 0) * (token.monUsdPrice ?? 0) >= config.dipMinVolume5mUsd &&
     metrics.trend4hPct >= rules.minTrend4hPct;
 
   const flowEntry =
@@ -711,11 +733,16 @@ export function entryGateDiagnostics(
     (token.apiBuyMakers5m ?? 0) >= config.highCapMinBuyMakers5m &&
     metrics.trend4hPct >= config.highCapMinTrend4hPct;
 
-  if (!dipInEntryBand && !momentumEntry && !dailyMeanEntry && !flowEntry) {
+  if (!dipReversalConfirmed && !momentumEntry && !dailyMeanEntry && !flowEntry) {
     if (metrics.dipPct < rules.dipMinPct) {
       blockers.push(`dip ${metrics.dipPct.toFixed(1)}% < ${rules.dipMinPct}% and momentum is not strong enough`);
     } else if (metrics.dipPct > rules.dipMaxPct) {
       blockers.push(`dip ${metrics.dipPct.toFixed(1)}% > ${rules.dipMaxPct}%`);
+    } else if (!dipReversalConfirmed) {
+      if (metrics.rebound1hPct < config.dipMinReboundPct) blockers.push(`rebound ${metrics.rebound1hPct.toFixed(1)}% < ${config.dipMinReboundPct}%`);
+      if ((token.buySellRatio5m ?? 0) < config.dipMinBuySellRatio5m) blockers.push(`5m buy/sell ${(token.buySellRatio5m ?? 0).toFixed(2)} < ${config.dipMinBuySellRatio5m}`);
+      if ((token.volume5mMon ?? 0) * (token.monUsdPrice ?? 0) < config.dipMinVolume5mUsd) blockers.push(`5m volume ${money((token.volume5mMon ?? 0) * (token.monUsdPrice ?? 0))} < ${money(config.dipMinVolume5mUsd)}`);
+      if (metrics.trend1hPct > config.dipMaxTrend1hPct) blockers.push(`dip trend ${metrics.trend1hPct.toFixed(1)}% > ${config.dipMaxTrend1hPct}%`);
     }
   }
 

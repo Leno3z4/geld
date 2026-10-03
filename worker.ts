@@ -98,6 +98,10 @@ interface Env {
   DIP_MIN_PCT?: string;
   DIP_MAX_PCT?: string;
   RECOVERY_MIN_PCT?: string;
+  DIP_MIN_REBOUND_PCT?: string;
+  DIP_MIN_BUY_SELL_RATIO_5M?: string;
+  DIP_MIN_VOLUME_5M_USD?: string;
+  DIP_MAX_TREND_1H_PCT?: string;
   TREND_MAX_1H_PCT?: string;
   DISCOVERY_LIMIT?: string;
   AI_CANDIDATE_LIMIT?: string;
@@ -707,6 +711,11 @@ export class GeldBot extends DurableObject<Env> {
         minVolumeUsd: runtimeConfig.minVolumeUsd,
         dipMinPct: runtimeConfig.dipMinPct,
         dipMaxPct: runtimeConfig.dipMaxPct,
+        recoveryMinPct: runtimeConfig.recoveryMinPct,
+        dipMinReboundPct: runtimeConfig.dipMinReboundPct,
+        dipMinBuySellRatio5m: runtimeConfig.dipMinBuySellRatio5m,
+        dipMinVolume5mUsd: runtimeConfig.dipMinVolume5mUsd,
+        dipMaxTrend1hPct: runtimeConfig.dipMaxTrend1hPct,
         trendMax1hPct: runtimeConfig.trendMax1hPct,
         minTrend4hPct: runtimeConfig.minTrend4hPct,
         fastCycleMs: runtimeConfig.fastCycleMs,

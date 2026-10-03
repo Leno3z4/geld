@@ -332,6 +332,7 @@ export async function sellToNative(
     const gasLimit = gasEstimate + (gasEstimate * 20n + 99n) / 100n;
     const approvalTx = await walletClient.writeContract({
       ...simulation.request,
+      account,
       gas: gasLimit
     });
     const approvalReceipt = await publicClient.waitForTransactionReceipt({ hash: approvalTx });
@@ -395,6 +396,7 @@ export async function sellToNative(
     );
     const txHash = await walletClient.writeContract({
       ...preflight.simulation.request,
+      account,
       gas: preflight.gas
     });
     await onTxSubmitted?.(txHash, "V1_SELL");
@@ -417,6 +419,7 @@ export async function sellToNative(
   );
   const sellTx = await walletClient.writeContract({
     ...sellPreflight.simulation.request,
+    account,
     gas: sellPreflight.gas
   });
   await onTxSubmitted?.(sellTx, "V2_SELL");
@@ -456,6 +459,7 @@ export async function sellToNative(
       });
       const approvalTx = await walletClient.writeContract({
         ...approvalSimulation.request,
+        account,
         gas: approvalGas + (approvalGas * 20n + 99n) / 100n
       });
       const approvalReceipt = await publicClient.waitForTransactionReceipt({ hash: approvalTx });
@@ -474,6 +478,7 @@ export async function sellToNative(
     );
     const redeemTx = await walletClient.writeContract({
       ...redeemPreflight.simulation.request,
+      account,
       gas: redeemPreflight.gas
     });
     await onTxSubmitted?.(redeemTx, "V2_LVMON_REDEEM");
@@ -503,6 +508,7 @@ export async function sellToNative(
   );
   const unwrapTx = await walletClient.writeContract({
     ...unwrapPreflight.simulation.request,
+    account,
     gas: unwrapPreflight.gas
   });
   await onTxSubmitted?.(unwrapTx, "V2_WMON_UNWRAP");

@@ -414,24 +414,6 @@ export async function getLeverUpQuote(symbol: string, marginMon: number, leverag
   return { symbol: pair.pairName, leverage, marginMon, marginUsd, notionalUsd, entryPriceUsd: entry, qty, openFeeMon, warnings };
 }
 
-async function ensureWmon(amountMon: number) {
-  const { account, publicClient, walletClient } = clients();
-  const amount = parseUnits(amountMon.toFixed(18), 18);
-  const balance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address] });
-  if (balance >= amount) return { wrapped: false, txHash: null };
-  const txHash = await walletClient.writeContract({
-    account, chain: MONAD, address: WMON, abi: ERC20_ABI, functionName: "deposit", value: amount - balance
-  });
-  await publicClient.waitForTransactionReceipt({ hash: txHash });
-  return { wrapped: true, txHash };
-}
-
-async function ensureApproval(token: Address, amount: bigint) {
-  const { account, publicClient, walletClient } = clients();
-  const allowance = await publicClient.readContract({ address: token, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND] });
-  if (allowance >= amount) return null;
-  return walletClient.writeContract({ account, chain: MONAD, address: token, abi: ERC20_ABI, functionName: "approve", args: [ONECLICK_DIAMOND, 2n ** 256n - 1n] });
-}
 
 export async function openLeverUpMonTrade(symbol: string, marginMon: number, leverage: number, isLong: boolean, stopLossUsd = 0, takeProfitUsd = 0) {
   if (!config.leverUpEnabled) throw new Error("LeverUp adapter disabled");
@@ -443,35 +425,40 @@ export async function openLeverUpMonTrade(symbol: string, marginMon: number, lev
   const entry = q.entryPriceUsd;
   const sl = stopLossUsd > 0 ? parseUnits(stopLossUsd.toFixed(18), 18) : 0n;
   const tp = takeProfitUsd > 0 ? parseUnits(takeProfitUsd.toFixed(18), 18) : 0n;
+
   if (isLong && sl && stopLossUsd >= entry) throw new Error("Long SL must be below entry");
   if (!isLong && sl && stopLossUsd <= entry) throw new Error("Short SL must be above entry");
   if (isLong && tp && takeProfitUsd <= entry) throw new Error("Long TP must be above entry");
   if (!isLong && tp && takeProfitUsd >= entry) throw new Error("Short TP must be below entry");
 
   const amountIn = parseUnits(q.marginMon.toFixed(18), 18) + parseUnits(q.openFeeMon.toFixed(18), 18);
-
-  // Live LeverUp currently enables LIMIT_OPEN (action 2) while MARKET_OPEN (action 0) is disabled.
-  // Production validation requires LONG triggers below market and SHORT triggers above market.
   const triggerBufferPct = Math.min(Math.max(config.slippagePct, 0.01), 1);
   const limitPriceUsd = entry * (isLong ? 1 - triggerBufferPct / 100 : 1 + triggerBufferPct / 100);
+
   if (isLong && limitPriceUsd >= entry) throw new Error("Long limit price must be below market");
   if (!isLong && limitPriceUsd <= entry) throw new Error("Short limit price must be above market");
 
-  const fee = await chooseFeeToken(amountIn, ACTION_LIMIT_OPEN);
-  if (!fee) throw new Error("No enabled LeverUp limit-open execution-fee token has enough balance/allowance.");
+  const readiness = await getLeverUpReadiness(pair.pairName, marginMon, leverage, ACTION_LIMIT_OPEN);
+  if (!readiness.ready) throw new Error("LeverUp live preflight blocked: " + readiness.reason);
 
+  const selectedFeeToken = readiness.selectedFeeToken;
+  if (!selectedFeeToken) throw new Error("LeverUp preflight found no usable execution-fee token");
+
+  const antiDdosFee = BigInt(readiness.selectedFeeAntiDdosFeeRaw);
+  const collateralRequired = amountIn + (selectedFeeToken.toLowerCase() === WMON.toLowerCase() ? antiDdosFee : 0n);
   const { publicClient } = clients();
   const wmonBalance = await publicClient.readContract({
     address: WMON, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address]
   });
-  if (wmonBalance < amountIn) {
-    throw new Error(`Insufficient WMON collateral: have ${formatUnits(wmonBalance, 18)} MON-equivalent, need ${marginMon}`);
-  }
   const wmonAllowance = await publicClient.readContract({
     address: WMON, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND]
   });
-  if (wmonAllowance < amountIn) {
-    throw new Error("WMON is not approved to LeverUp Diamond yet; approve once before live trading.");
+
+  if (wmonBalance < collateralRequired) {
+    throw new Error("Insufficient WMON collateral: have " + formatUnits(wmonBalance, 18) + ", need " + formatUnits(collateralRequired, 18));
+  }
+  if (wmonAllowance < collateralRequired) {
+    throw new Error("WMON allowance insufficient: have " + formatUnits(wmonAllowance, 18) + ", need " + formatUnits(collateralRequired, 18));
   }
 
   const actionValues = [
@@ -488,13 +475,12 @@ export async function openLeverUpMonTrade(symbol: string, marginMon: number, lev
     0n
   ];
 
-  // LIMIT_OPEN returns after the intent is accepted; execution can remain pending until the trigger is reached.
   const intentHash = await submitIntent(
     ACTION_LIMIT_OPEN,
     account.address,
     actionValues,
-    fee.feeToken,
-    fee.antiDdosFee
+    selectedFeeToken,
+    antiDdosFee
   );
 
   return {
@@ -506,9 +492,12 @@ export async function openLeverUpMonTrade(symbol: string, marginMon: number, lev
     notionalUsd: q.notionalUsd,
     orderType: "LIMIT",
     limitPriceUsd,
-    pending: true
+    pending: true,
+    signerAddress: readiness.agent.signer,
+    mode: readiness.agent.mode
   };
 }
+
 export async function closeLeverUpTrade(positionHash: Hex) {
   if (!config.leverUpEnabled || !config.liveTrading) throw new Error("LeverUp live adapter disabled");
   const { account } = clients();

@@ -358,7 +358,7 @@ export async function probeLeverUpMinimums(symbol = "MON/USD", leverage = 5, act
     try {
       const q = await getLeverUpQuote(pair.pairName, marginMon, leverage);
       const amountIn = parseUnits(q.marginMon.toFixed(18), 18) + parseUnits(q.openFeeMon.toFixed(18), 18);
-      const fee = await chooseFeeToken(amountIn, ACTION_MARKET_OPEN);
+      const fee = await chooseFeeToken(amountIn, action);
       const wmonBalance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address] });
       const wmonAllowance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND] });
       results.push({

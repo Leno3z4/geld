@@ -33,7 +33,9 @@ function getPair(symbol: string) {
 async function pyth(p: Pair) {
   const u = new URL(config.leverUpPythHermesUrl + "/v2/updates/price/latest");
   u.searchParams.set("ids[]", p.pythId);
-  const r = await fetch(u.toString());
+  const headers: Record<string, string> = {};
+  if (config.leverUpPythApiKey) headers.Authorization = `Bearer ${config.leverUpPythApiKey}`;
+  const r = await fetch(u.toString(), { headers });
   if (!r.ok) throw new Error("Pyth HTTP " + r.status);
   const b = await r.json() as any;
   const x = b.parsed?.[0]?.price;

@@ -139,7 +139,7 @@ export async function getLeverUpMarketSnapshots() {
 export async function probeLeverUpMinimums(symbol = "BTC/USD", leverage = 5) {
   const { account, publicClient } = clients();
   const balanceMon = Number(formatUnits(await publicClient.getBalance({ address: account.address }), 18));
-  const candidates = [0.05, 0.1, 0.25, 0.5, 1, 2, 5].filter(x => x <= balanceMon * config.leverUpMaxMarginPct / 100);
+  const candidates = [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5].filter(x => x <= balanceMon * config.leverUpMaxMarginPct / 100);
   const results: Array<Record<string, unknown>> = [];
   const p = getPair(symbol);
   const asset = await pyth(p);

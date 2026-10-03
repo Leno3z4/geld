@@ -329,7 +329,12 @@ test("blocks established dip entries until price rebounds with positive flow", (
     dipPct: 18, trendPct1h: -5, trendPct4h: -4,
     reboundPct1h: 0.2, buySellRatio5m: 0.95, volume5mMon: 10,
     monUsdPrice: 0.033, dayLowPriceMon: 0.089, dayAvgPriceMon: 0.10,
-    distanceFromDayLowPct: 1, distanceFromDayAvgPct: -10, daySamples: 60
+    distanceFromDayLowPct: 1, distanceFromDayAvgPct: -10, daySamples: 60,
+    priceHistory: [
+      { ts: now - 4 * 60 * 60 * 1000, priceMon: 0.11 },
+      { ts: now - 30 * 60 * 1000, priceMon: 0.0895 },
+      { ts: now, priceMon: 0.09 }
+    ]
   };
   const d = entryGateDiagnostics(token, {
     minEstablishedAgeMinutes: 30, minLiquidityUsd: 5000,

@@ -306,21 +306,9 @@ export async function openLeverUpMonTrade(symbol: string, marginMon: number, lev
   if (!isLong && tp && takeProfitUsd >= entry) throw new Error("Short TP must be below entry");
 
   const amountIn = parseUnits(q.marginMon.toFixed(18), 18) + parseUnits(q.openFeeMon.toFixed(18), 18);
-  const fee = await chooseFeeToken(amountIn, ACTION_MARKET_OPEN);
-  if (!fee) throw new Error("No enabled LeverUp market-open execution-fee token has enough balance/allowance.");
 
-  const { publicClient } = clients();
-  const wmonBalance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address] });
-  if (wmonBalance < amountIn) throw new Error(`Insufficient WMON collateral: have ${formatUnits(wmonBalance, 18)} MON-equivalent, need ${marginMon}`);
-  const wmonAllowance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND] });
-  if (wmonAllowance < amountIn) throw new Error("WMON is not approved to LeverUp Diamond yet; approve once before live trading.");
-
-  const actionValues = [
-    pair.base, isLong, WMON, LVMON, amountIn, q.qty,
-    parseUnits((entry * (isLong ? 1 + Math.min(config.slippagePct, 1) / 100 : 1 - Math.min(config.slippagePct, 1) / 100)).toFixed(18), 18),
-    sl, tp, 0, 0n
-  ];
-
+  // Live LeverUp currently enables LIMIT_OPEN (action 2) while MARKET_OPEN (action 0) is disabled.
+  // Production validation requires LONG triggers below market and SHORT triggers above market.
   const triggerBufferPct = Math.min(Math.max(config.slippagePct, 0.01), 1);
   const limitPriceUsd = entry * (isLong ? 1 - triggerBufferPct / 100 : 1 + triggerBufferPct / 100);
   if (isLong && limitPriceUsd >= entry) throw new Error("Long limit price must be below market");
@@ -330,19 +318,42 @@ export async function openLeverUpMonTrade(symbol: string, marginMon: number, lev
   if (!fee) throw new Error("No enabled LeverUp limit-open execution-fee token has enough balance/allowance.");
 
   const { publicClient } = clients();
-  const wmonBalance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address] });
-  if (wmonBalance < amountIn) throw new Error(`Insufficient WMON collateral: have ${formatUnits(wmonBalance, 18)} MON-equivalent, need ${marginMon}`);
-  const wmonAllowance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND] });
-  if (wmonAllowance < amountIn) throw new Error("WMON is not approved to LeverUp Diamond yet; approve once before live trading.");
+  const wmonBalance = await publicClient.readContract({
+    address: WMON, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address]
+  });
+  if (wmonBalance < amountIn) {
+    throw new Error(`Insufficient WMON collateral: have ${formatUnits(wmonBalance, 18)} MON-equivalent, need ${marginMon}`);
+  }
+  const wmonAllowance = await publicClient.readContract({
+    address: WMON, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND]
+  });
+  if (wmonAllowance < amountIn) {
+    throw new Error("WMON is not approved to LeverUp Diamond yet; approve once before live trading.");
+  }
 
   const actionValues = [
-    pair.base, isLong, WMON, LVMON, amountIn, q.qty,
+    pair.base,
+    isLong,
+    WMON,
+    LVMON,
+    amountIn,
+    q.qty,
     parseUnits(limitPriceUsd.toFixed(18), 18),
-    sl, tp, 0, 0n
+    sl,
+    tp,
+    0,
+    0n
   ];
 
-  const intentHash = await submitIntent(ACTION_LIMIT_OPEN, account.address, actionValues, fee.feeToken, fee.antiDdosFee);
-  // LIMIT_OPEN is accepted before execution; it may remain pending until the trigger is reached.
+  // LIMIT_OPEN returns after the intent is accepted; execution can remain pending until the trigger is reached.
+  const intentHash = await submitIntent(
+    ACTION_LIMIT_OPEN,
+    account.address,
+    actionValues,
+    fee.feeToken,
+    fee.antiDdosFee
+  );
+
   return {
     intentHash,
     txHash: "",
@@ -355,7 +366,6 @@ export async function openLeverUpMonTrade(symbol: string, marginMon: number, lev
     pending: true
   };
 }
-
 export async function closeLeverUpTrade(positionHash: Hex) {
   if (!config.leverUpEnabled || !config.liveTrading) throw new Error("LeverUp live adapter disabled");
   const { account } = clients();

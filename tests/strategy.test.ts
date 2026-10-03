@@ -235,8 +235,8 @@ test("daily mean reversion is one distinct entry strategy", () => {
     liquidityUsd: 50000, marketCapUsd: 500000, volumeMon: 1000,
     daySamples: 60, dayLowPriceMon: 0.98, dayAvgPriceMon: 1.12,
     distanceFromDayLowPct: 2.04, distanceFromDayAvgPct: -10.71,
-    dipPct: 15, trendPct1h: -1, trendPct4h: 2,
-    buySellRatio5m: 1.1, volume5mMon: 20, volumeAcceleration5m: 1.2
+    dipPct: 15, trendPct1h: -1, trendPct4h: 2, reboundPct1h: 2,
+    buySellRatio5m: 1.1, volume5mMon: 800, volumeAcceleration5m: 1.2, monUsdPrice: 0.033
   };
   assert.equal(selectEntryStrategy(token), "DAILY_MEAN_REVERSION");
 });

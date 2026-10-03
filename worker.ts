@@ -396,7 +396,8 @@ export class GeldBot extends DurableObject<Env> {
 
     const learning = this.env.GELD_HIGHCAP_LEARNING.get(this.env.GELD_HIGHCAP_LEARNING.idFromName("highcap-main"));
     this.engine = new TradingEngine({
-      getSummary: async () => {
+      highCapLearning: {
+        getSummary: async () => {
         if (this.learningSummaryCache && Date.now() - this.learningSummaryAt < 15 * 60_000) return this.learningSummaryCache;
         try {
           const response = await learning.fetch(new Request("https://learning/summary"));
@@ -406,6 +407,7 @@ export class GeldBot extends DurableObject<Env> {
           }
         } catch {}
         return this.learningSummaryCache;
+        }
       }
     });
     await this.engine.init();

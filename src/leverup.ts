@@ -125,3 +125,38 @@ export async function closeLeverUpTrade(tradeHash: Hex) {
 }
 
 export function listLeverUpPairs() { return PAIRS.map((p) => ({ symbol: p.symbol, pairBase: p.pairBase, highLeverage: p.highLeverage })); }
+
+export async function getLeverUpMarketSnapshots() {
+  const now = Date.now();
+  const out: Array<{symbol:string;price:number;ts:number}> = [];
+  for (const p of PAIRS.filter(x => !x.highLeverage)) {
+    const a = await pyth(p);
+    out.push({ symbol: p.symbol, price: Number(formatUnits(a.price, 18)), ts: now });
+  }
+  return out;
+}
+
+export async function probeLeverUpMinimums(symbol = "BTC/USD", leverage = 5) {
+  const { account, publicClient } = clients();
+  const balanceMon = Number(formatUnits(await publicClient.getBalance({ address: account.address }), 18));
+  const candidates = [0.05, 0.1, 0.25, 0.5, 1, 2, 5].filter(x => x <= balanceMon * config.leverUpMaxMarginPct / 100);
+  const results: Array<Record<string, unknown>> = [];
+  const p = getPair(symbol);
+  const asset = await pyth(p);
+  const q0 = await getLeverUpQuote(symbol, Math.max(0.05, candidates[0] ?? 0.05), leverage);
+  const sl = parseUnits((q0.entryPriceUsd * 0.99).toFixed(18), 18);
+  const tp = parseUnits((q0.entryPriceUsd * 1.01).toFixed(18), 18);
+  for (const marginMon of candidates) {
+    try {
+      const q = await getLeverUpQuote(symbol, marginMon, leverage);
+      const oracleFee = await publicClient.readContract({ address: PYTH, abi: PYTH_ABI, functionName: "getUpdateFee", args: [asset.data] }) as bigint;
+      const amountIn = parseUnits((marginMon + q.openFeeMon).toFixed(18), 18);
+      const data = { pairBase: p.pairBase, isLong: true, tokenIn: WMON, lvToken: LVMON, amountIn, qty: q.qty, price: asset.price, stopLoss: sl, takeProfit: tp, broker: 0 };
+      await publicClient.simulateContract({ account, address: config.leverUpDiamond as Address, abi: TRADING_ABI, functionName: "openMarketTradeWithPyth", args: [data, asset.data], value: amountIn + oracleFee });
+      results.push({ marginMon, marginUsd: q.marginUsd, notionalUsd: q.notionalUsd, accepted: true });
+    } catch (e) {
+      results.push({ marginMon, accepted: false, error: String(e).slice(0, 500) });
+    }
+  }
+  return { balanceMon, maxAllowedMarginMon: balanceMon * config.leverUpMaxMarginPct / 100, symbol, leverage, results, firstAccepted: results.find(x => x.accepted) ?? null };
+}

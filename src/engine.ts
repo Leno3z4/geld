@@ -66,6 +66,15 @@ function boolish(value: unknown, fallback = false) {
   return fallback;
 }
 
+function isTransientSellInfrastructureError(message: string) {
+  return /wallet_sendtransaction|request method is not supported|rpc request failed|fetch failed|network|timeout|timed out|econnreset|429|502|503|504/i.test(message);
+}
+
+function sellInfrastructureRetryDelayMs(failureCount: number) {
+  const exponent = Math.max(0, Math.min(4, failureCount - 1));
+  return Math.min(60_000, 10_000 * (2 ** exponent));
+}
+
 function createdAtMs(value: unknown) {
   if (typeof value === "string" && Number.isNaN(Number(value))) {
     const parsed = Date.parse(value);
@@ -1902,7 +1911,7 @@ export class TradingEngine {
         });
         const earlyLaunchSetup = isEarlyLaunchCandidate(token);
 
-        if (token.localScore >= config.aiOverrideScore && (pullbackSetup || momentumSetup || lowCapSetup || earlyLaunchSetup)) {
+        if (token.localScore >= config.aiOverrideScore && (momentumSetup || lowCapSetup || earlyLaunchSetup)) {
           decision = {
             ...decision,
             action: "BUY",
@@ -2484,7 +2493,16 @@ export class TradingEngine {
         position.peakMon = Math.max(position.peakMon, position.currentMon);
         position.peakPnlPct = Math.max(position.peakPnlPct ?? position.pnlPct, position.pnlPct);
 
-        const sellBlocked = (position.sellBlockedUntil ?? 0) > Date.now();
+        const now = Date.now();
+        const infrastructureSellFailure = isTransientSellInfrastructureError(position.lastSellError ?? "");
+        // Legacy versions could quarantine a position for an hour after an RPC
+        // transport failure. Clear that stale quarantine so the fixed sell path
+        // can retry instead of leaving capital stranded.
+        if (infrastructureSellFailure && position.status === "OPEN") {
+          position.sellQuarantineUntil = undefined;
+          position.sellBlockedUntil = Math.min(position.sellBlockedUntil ?? 0, now + 5_000);
+        }
+        const sellBlocked = (position.sellBlockedUntil ?? 0) > now || (position.sellQuarantineUntil ?? 0) > now;
         const signal = positionExitSignal(position, token, exitRules);
         if (signal && !sellBlocked) {
           if (signal.kind === "PARTIAL") {
@@ -2795,20 +2813,32 @@ export class TradingEngine {
       } else {
         const failureAt = Date.now();
         const failureCount = (position.sellFailureCount ?? 0) + 1;
+        const infrastructureFailure = isTransientSellInfrastructureError(errorMessage);
         position.status = "OPEN";
         position.lastSellFailureAt = failureAt;
-        position.sellBlockedUntil = failureAt + config.sellFailureCooldownMs;
         position.sellFailureCount = failureCount;
-        position.sellQuarantineUntil =
-          failureCount >= config.sellFailureQuarantineCount
-            ? failureAt + config.sellFailureQuarantineMs
-            : position.sellQuarantineUntil;
         position.lastSellTx = pendingTx ?? position.lastSellTx;
         position.lastSellError = errorMessage;
-        position.closeReason =
-          failureCount >= config.sellFailureQuarantineCount
-            ? "SELL QUARANTINED: " + errorMessage
-            : errorMessage;
+
+        if (infrastructureFailure) {
+          // Transport/provider failures must not disable the risk engine. Retry
+          // quickly with bounded backoff and leave the position eligible for
+          // the next risk cycle.
+          position.sellBlockedUntil = failureAt + sellInfrastructureRetryDelayMs(failureCount);
+          position.sellQuarantineUntil = undefined;
+          position.closeReason = "SELL RETRY: " + errorMessage;
+        } else {
+          position.sellBlockedUntil = failureAt + config.sellFailureCooldownMs;
+          position.sellQuarantineUntil =
+            failureCount >= config.sellFailureQuarantineCount
+              ? failureAt + config.sellFailureQuarantineMs
+              : position.sellQuarantineUntil;
+          position.closeReason =
+            failureCount >= config.sellFailureQuarantineCount
+              ? "SELL QUARANTINED: " + errorMessage
+              : errorMessage;
+        }
+
         this.store.update((s) => {
           s.stats.lastError = position.closeReason;
         });

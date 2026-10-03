@@ -135,6 +135,22 @@ export class TradingEngine {
   private pendingCandidates = new Set<string>();
   private reservedSpendMon = 0;
   private aiCallsThisCycle = 0;
+  private nadfunBackoffUntil = 0;
+  private nadfunBackoffMs = 30_000;
+
+  private noteNadfunRateLimit() {
+    this.nadfunBackoffUntil = Date.now() + this.nadfunBackoffMs;
+    this.nadfunBackoffMs = Math.min(this.nadfunBackoffMs * 2, 5 * 60_000);
+  }
+
+  private clearNadfunBackoff() {
+    this.nadfunBackoffUntil = 0;
+    this.nadfunBackoffMs = 30_000;
+  }
+
+  private nadfunRequestsBlocked() {
+    return Date.now() < this.nadfunBackoffUntil;
+  }
 
   constructor() {
     const c = clients();
@@ -466,6 +482,8 @@ export class TradingEngine {
   }
 
   private async discoverEstablishedTokens() {
+    if (this.nadfunRequestsBlocked()) return;
+
     try {
       const url =
         config.nadfunApiUrl +
@@ -479,7 +497,12 @@ export class TradingEngine {
       };
 
       const response = await fetch(url, { headers });
+      if (response.status === 429) {
+        this.noteNadfunRateLimit();
+        throw new Error("NadFun market-cap discovery rate limited: HTTP 429");
+      }
       if (!response.ok) throw new Error("NadFun market-cap discovery failed: HTTP " + response.status);
+      this.clearNadfunBackoff();
 
       const payload = decodeNadfunPayload(await response.text());
       const marketRows = Array.isArray(payload?.tokens) ? payload.tokens : [];
@@ -494,7 +517,9 @@ export class TradingEngine {
           "/order/creation_time?page=1&limit=50&is_nsfw=false&direction=DESC";
         try {
           const newestResponse = await fetch(newestUrl, { headers });
-          if (newestResponse.ok) {
+          if (newestResponse.status === 429) {
+            this.noteNadfunRateLimit();
+          } else if (newestResponse.ok) {
             const newestPayload = decodeNadfunPayload(await newestResponse.text());
             newestRows = Array.isArray(newestPayload?.tokens) ? newestPayload.tokens : [];
           }
@@ -1230,6 +1255,7 @@ export class TradingEngine {
   private async enrichFlowMetrics(token: TokenSnapshot) {
     const now = Date.now();
     if (now - (token.lastFlowApiAt ?? 0) < config.flowApiRefreshMs) return;
+    if (this.nadfunRequestsBlocked()) return;
 
     try {
       const headers = {
@@ -1247,6 +1273,12 @@ export class TradingEngine {
           { headers }
         )
       ]);
+
+      if (historyResponse.status === 429 || metricsResponse.status === 429) {
+        this.noteNadfunRateLimit();
+      } else if (historyResponse.ok || metricsResponse.ok) {
+        this.clearNadfunBackoff();
+      }
 
       if (!historyResponse.ok && !metricsResponse.ok) {
         throw new Error(
@@ -1420,6 +1452,7 @@ export class TradingEngine {
   private async enrichToken(token: TokenSnapshot) {
     const lastEnrichedAt = token.lastEnrichedAt ?? 0;
     if (Date.now() - lastEnrichedAt < 30000) return;
+    if (this.nadfunRequestsBlocked()) return;
 
     token.lastEnrichedAt = Date.now();
 
@@ -1438,7 +1471,12 @@ export class TradingEngine {
               ...(config.nadfunApiKey ? { "X-API-Key": config.nadfunApiKey } : {})
             }
           });
+          if (response.status === 429) {
+            this.noteNadfunRateLimit();
+            continue;
+          }
           if (!response.ok) continue;
+          this.clearNadfunBackoff();
           payload = decodeNadfunPayload(await response.text()) as MarketResponse | null;
           if (payload) break;
         } catch {}
@@ -1646,7 +1684,13 @@ export class TradingEngine {
     if (!this.store.get().running) return;
 
     try {
-      await this.enrichToken(token);
+      // Discovery/new-event market responses already populate the fields
+      // needed for the hard gates. Only refresh optional API enrichment when
+      // that market snapshot is stale, avoiding another external request in
+      // the same Worker invocation.
+      if (Date.now() - (token.lastMarketAt ?? 0) >= 30_000) {
+        await this.enrichToken(token);
+      }
       updateMarketMetrics(token);
       token.progressPct = curveProgressPct(token);
       token.localScore = scoreToken(token, this.seasonality);

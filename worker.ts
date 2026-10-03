@@ -1,10 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 import { GeldHighCapLearning } from "./src/highcap-learning.js";
+import { GeldLeverUpPaper } from "./src/leverup-paper.js";
 
 interface Env {
   GELD_BOT: DurableObjectNamespace<GeldBot>;
   GELD_STATE: DurableObjectNamespace<GeldState>;
   GELD_HIGHCAP_LEARNING: DurableObjectNamespace<GeldHighCapLearning>;
+  GELD_LEVERUP_PAPER: DurableObjectNamespace<GeldLeverUpPaper>;
 
   GELD_API_SECRET?: string;
   GELD_CONFIG?: string;
@@ -381,7 +383,7 @@ async function getRuntimeConfig(env: Env) {
   return (await import("./src/config.js")).config;
 }
 
-export { GeldHighCapLearning };
+export { GeldHighCapLearning, GeldLeverUpPaper };
 
 export class GeldState extends DurableObject<Env> {
   async fetch(request: Request) {
@@ -465,6 +467,21 @@ export class GeldBot extends DurableObject<Env> {
     } catch {}
   }
 
+  private async runLeverUpPaper() {
+    const runtime = await getRuntimeConfig(this.env);
+    if (!runtime.leverUpEnabled) return;
+    const paper = this.env.GELD_LEVERUP_PAPER.get(this.env.GELD_LEVERUP_PAPER.idFromName("leverup-main"));
+    try {
+      const { getLeverUpMarketSnapshots } = await import("./src/leverup.js");
+      const snapshots = await getLeverUpMarketSnapshots();
+      await paper.fetch(new Request("https://leverup/tick", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ snapshots })
+      }));
+    } catch (error) {
+      console.error("LeverUp paper tick failed:", error);
+    }
+  }
+
   private async runRiskCycle() {
     if (this.cycleInFlight) return;
     this.cycleInFlight = true;
@@ -473,6 +490,7 @@ export class GeldBot extends DurableObject<Env> {
       if (engine.snapshot().running) {
         await engine.runRiskCycle();
         await this.sampleHighCaps(engine);
+        await this.runLeverUpPaper();
       }
     } finally {
       this.cycleInFlight = false;
@@ -680,6 +698,18 @@ export class GeldBot extends DurableObject<Env> {
         newEventPollMs: runtimeConfig.newEventPollMs,
         newEventCandidateLimit: runtimeConfig.newEventCandidateLimit
       });
+    }
+
+    if (path === "/api/leverup/paper") {
+      const paper = this.env.GELD_LEVERUP_PAPER.get(this.env.GELD_LEVERUP_PAPER.idFromName("leverup-main"));
+      return paper.fetch(new Request("https://leverup/status"));
+    }
+
+    if (path === "/api/leverup/preflight") {
+      try {
+        const { probeLeverUpMinimums } = await import("./src/leverup.js");
+        return Response.json(await probeLeverUpMinimums(url.searchParams.get("symbol") ?? "BTC/USD", Number(url.searchParams.get("leverage") ?? 5)));
+      } catch (error) { return Response.json({ ok: false, error: String(error) }, { status: 503 }); }
     }
 
     if (path === "/api/positions") {

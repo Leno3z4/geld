@@ -495,8 +495,8 @@ export class GeldBot extends DurableObject<Env> {
           const probe = await probeLeverUpMinimums("MON/USD", 5);
           this.leverUpReadiness = {
             checkedAt: Date.now(),
-            ok: Boolean(probe.firstAccepted),
-            firstAcceptedMarginMon: probe.firstAccepted?.marginMon ?? null,
+            ok: Boolean(probe.firstReady),
+            firstAcceptedMarginMon: probe.firstReady?.marginMon ?? null,
             balanceMon: probe.balanceMon,
             maxAllowedMarginMon: probe.maxAllowedMarginMon,
             results: probe.results

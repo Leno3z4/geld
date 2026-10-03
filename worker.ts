@@ -171,7 +171,9 @@ const PUBLIC_API_GET_PATHS = new Set([
   "/api/positions",
   "/api/tokens",
   "/api/trades",
-  "/api/events"
+  "/api/events",
+  "/api/leverup/paper",
+  "/api/leverup/preflight"
 ]);
 
 function isAuthorized(request: Request, env: Env) {

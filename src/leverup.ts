@@ -179,11 +179,11 @@ async function chooseFeeToken(additionalSpend: bigint, action = ACTION_MARKET_OP
 }
 
 function buildActionData(action: number, trader: Address, values: unknown[]): Hex {
-  const types = action === ACTION_MARKET_OPEN
+  const types = action === ACTION_MARKET_OPEN || action === ACTION_LIMIT_OPEN
     ? ["address", "bool", "address", "address", "uint96", "uint128", "uint128", "uint128", "uint128", "uint24", "uint96"]
     : action === ACTION_MARKET_CLOSE
       ? ["bytes32", "uint24"]
-      : (() => { throw new Error("LeverUp OneClickLimitOpen actionData schema is not verified; refusing to submit a limit intent."); })();
+      : (() => { throw new Error(`LeverUp actionData schema is not verified for action ${action}; refusing to submit.`); })();
   const full = (awaitableEncode as any)(types, [trader, ...values]);
   return `0x${full.slice(2 + 64)}` as Hex;
 }

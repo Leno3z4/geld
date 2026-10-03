@@ -178,6 +178,25 @@ export class TradingEngine {
     for (const listener of this.listeners) listener(this.store.get());
   }
 
+  private aiDailyBudgetAvailable() {
+    const today = new Date().toISOString().slice(0, 10);
+    const state = this.store.get();
+    const used = state.stats.aiDailyDay === today ? (state.stats.aiDailyCalls ?? 0) : 0;
+    if (used >= config.aiMaxCallsPerDay) {
+      this.store.update((st) => {
+        st.stats.aiDailyDay = today;
+        st.stats.aiDailyCalls = used;
+        st.stats.lastIdleReason = "AI DAILY BUDGET: " + used + "/" + config.aiMaxCallsPerDay + " calls used; deterministic monitoring continues.";
+      });
+      return false;
+    }
+    this.store.update((st) => {
+      st.stats.aiDailyDay = today;
+      st.stats.aiDailyCalls = used + 1;
+    });
+    return true;
+  }
+
   private entryCircuitBreakerActive() {
     // Daily drawdown is an entry circuit breaker. It never blocks exits:
     // protecting existing capital takes priority over opening another trade.
@@ -1673,7 +1692,12 @@ export class TradingEngine {
     }
 
     if (this.aiCallsThisCycle >= config.aiMaxCallsPerCycle) {
-      token.watchReason = "AI BUDGET: monitored without additional model call";
+      token.watchReason = "AI CYCLE BUDGET: monitored without additional model call";
+      this.store.upsertToken(token);
+      return;
+    }
+    if (!this.aiDailyBudgetAvailable()) {
+      token.watchReason = "AI DAILY BUDGET: monitored without additional model call";
       this.store.upsertToken(token);
       return;
     }
@@ -2503,6 +2527,7 @@ export class TradingEngine {
     for (const position of Object.values(this.store.get().positions).filter((p) => p.status === "OPEN")) {
       if (!this.store.get().running) return;
       if (this.aiCallsThisCycle >= config.aiMaxCallsPerCycle) break;
+      if (!this.aiDailyBudgetAvailable()) break;
       if ((position.sellBlockedUntil ?? 0) > Date.now()) continue;
 
       const token = this.store.get().tokens[position.token];

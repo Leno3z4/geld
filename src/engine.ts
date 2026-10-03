@@ -26,6 +26,8 @@ import { formatUnits } from "viem";
 
 type Listener = (state: BotState) => void;
 
+type HighCapLearningProvider = { getSummary: () => Promise<any> };
+
 
 function decodeNadfunPayload(text: string) {
   const trimmed = text.trim();
@@ -137,6 +139,9 @@ export class TradingEngine {
   private aiCallsThisCycle = 0;
   private nadfunBackoffUntil = 0;
   private nadfunBackoffMs = 30_000;
+  private highCapLearning?: HighCapLearningProvider;
+  private highCapLearningCache: any = null;
+  private highCapLearningAt = 0;
 
   private noteNadfunRateLimit() {
     this.nadfunBackoffUntil = Date.now() + this.nadfunBackoffMs;
@@ -152,7 +157,8 @@ export class TradingEngine {
     return Date.now() < this.nadfunBackoffUntil;
   }
 
-  constructor() {
+  constructor(options?: { highCapLearning?: HighCapLearningProvider }) {
+    this.highCapLearning = options?.highCapLearning;
     const c = clients();
     this.publicClient = c.publicClient;
     this.walletClient = c.walletClient;
@@ -1748,10 +1754,21 @@ export class TradingEngine {
 
       try {
         this.aiCallsThisCycle += 1;
+        let highCapLearning: any = undefined;
+        if ((token.marketCapUsd ?? 0) >= config.highCapMinMarketCapUsd && this.highCapLearning) {
+          if (Date.now() - this.highCapLearningAt >= 15 * 60_000) {
+            try {
+              this.highCapLearningCache = await this.highCapLearning.getSummary();
+              this.highCapLearningAt = Date.now();
+            } catch {}
+          }
+          highCapLearning = this.highCapLearningCache ?? undefined;
+        }
         decision = await this.brain.decide({
           mode: "candidate",
           token,
-          seasonality: this.seasonality.summary()
+          seasonality: this.seasonality.summary(),
+          highCapLearning
         });
       } catch (error) {
         if (!config.aiFallbackEnabled || token.localScore < config.aiFallbackMinScore) {

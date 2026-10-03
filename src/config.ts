@@ -164,6 +164,8 @@ export const config = {
   leverUpDefaultLeverage: Math.max(1, Math.floor(num("LEVERUP_DEFAULT_LEVERAGE", 10))),
   leverUpMaxLeverage: Math.max(1, Math.floor(num("LEVERUP_MAX_LEVERAGE", 25))),
   leverUpMinNotionalUsd: Math.max(0, num("LEVERUP_MIN_NOTIONAL_USD", 0)),
+  // Optional local safety floor; 0 means no invented minimum beyond LeverUp validation.
+  leverUpMinMarginUsd: Math.max(0, num("LEVERUP_MIN_MARGIN_USD", 0)),
   // Do not impose a made-up protocol minimum. LeverUp may reject undersized orders itself;\n  // this value is only an optional local safety floor.\n  leverUpMinMarginUsd: Math.max(0, num("LEVERUP_MIN_MARGIN_USD", 0)),
   leverUpMaxMarginPct: Math.min(25, Math.max(1, num("LEVERUP_MAX_MARGIN_PCT", 10))),
   leverUpRiskPerTradePct: Math.min(5, Math.max(0.25, num("LEVERUP_RISK_PER_TRADE_PCT", 1))),

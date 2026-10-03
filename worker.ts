@@ -147,6 +147,8 @@ interface Env {
   FLOW_API_REFRESH_MS?: string;
   LEVERUP_ENABLED?: string;
   LEVERUP_DIAMOND?: string;
+  LEVERUP_AGENT_PRIVATE_KEY?: string;
+  LEVERUP_AGENT_PERMISSION_MASK?: string;
   LEVERUP_PYTH_HERMES_URL?: string;
   PYTH_API_KEY?: string;
   LEVERUP_DEFAULT_LEVERAGE?: string;
@@ -365,6 +367,8 @@ function hydrateProcessEnv(env: Env) {
     FLOW_API_REFRESH_MS: valueFor("FLOW_API_REFRESH_MS", env.FLOW_API_REFRESH_MS),
     LEVERUP_ENABLED: valueFor("LEVERUP_ENABLED", env.LEVERUP_ENABLED),
     LEVERUP_DIAMOND: valueFor("LEVERUP_DIAMOND", env.LEVERUP_DIAMOND),
+    LEVERUP_AGENT_PRIVATE_KEY: env.LEVERUP_AGENT_PRIVATE_KEY,
+    LEVERUP_AGENT_PERMISSION_MASK: valueFor("LEVERUP_AGENT_PERMISSION_MASK", env.LEVERUP_AGENT_PERMISSION_MASK),
     LEVERUP_PYTH_HERMES_URL: valueFor("LEVERUP_PYTH_HERMES_URL", env.LEVERUP_PYTH_HERMES_URL),
     PYTH_API_KEY: env.PYTH_API_KEY,
     LEVERUP_DEFAULT_LEVERAGE: valueFor("LEVERUP_DEFAULT_LEVERAGE", env.LEVERUP_DEFAULT_LEVERAGE),
@@ -764,7 +768,7 @@ export class GeldBot extends DurableObject<Env> {
     if (path === "/api/leverup/preflight") {
       try {
         const { probeLeverUpMinimums } = await import("./src/leverup.js");
-        const orderType = (url.searchParams.get("orderType") ?? "market").toLowerCase();
+        const orderType = (url.searchParams.get("orderType") ?? "limit").toLowerCase();
         const action = orderType === "limit" ? 2 : 0;
         return Response.json(await probeLeverUpMinimums(url.searchParams.get("symbol") ?? "BTC/USD", Number(url.searchParams.get("leverage") ?? 5), action));
       } catch (error) { return Response.json({ ok: false, error: String(error) }, { status: 503 }); }

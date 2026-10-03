@@ -19,18 +19,51 @@ const ONECLICK_DIAMOND = "0xea1b8E4aB7f14F7dCA68c5B214303B13078FC5ec" as Address
 const ERC20_ABI = parseAbi([
   "function balanceOf(address) view returns (uint256)",
   "function allowance(address,address) view returns (uint256)",
-  "function approve(address,uint256) returns (bool)",
   "function decimals() view returns (uint8)",
   "function deposit() payable"
 ]);
 
+const AGENT_AUTH_ABI = [{
+  type: "function",
+  name: "getAgentAuth",
+  stateMutability: "view",
+  inputs: [
+    { name: "trader", type: "address" },
+    { name: "agent", type: "address" }
+  ],
+  outputs: [{
+    name: "",
+    type: "tuple",
+    components: [
+      { name: "agent", type: "address" },
+      { name: "name", type: "bytes32" },
+      { name: "permissions", type: "uint256" },
+      { name: "authorizedAt", type: "uint32" }
+    ]
+  }]
+}] as const;
+
+const AGENT_NONCE_ABI = [{
+  type: "function",
+  name: "getLastNonce",
+  stateMutability: "view",
+  inputs: [
+    { name: "trader", type: "address" },
+    { name: "signer", type: "address" }
+  ],
+  outputs: [{ name: "", type: "uint64" }]
+}] as const;
+
 const ACTION_MARKET_OPEN = 0;
 const ACTION_MARKET_CLOSE = 1;
 const ACTION_LIMIT_OPEN = 2;
+const ACTION_LIMIT_CANCEL = 3;
+const MAX_UINT256 = (2n ** 256n) - 1n;
 const ACTION_NAMES: Record<number, string> = {
   0: "OneClickMarketOpen",
   1: "OneClickMarketClose",
-  2: "OneClickLimitOpen"
+  2: "OneClickLimitOpen",
+  3: "OneClickLimitCancel"
 };
 
 const COMMON_FIELDS = [
@@ -72,6 +105,69 @@ function clients() {
   const publicClient = createPublicClient({ chain: MONAD, transport: http(config.rpcUrl) });
   const walletClient = createWalletClient({ account, chain: MONAD, transport: http(config.rpcUrl) });
   return { account, publicClient, walletClient };
+}
+
+function getSigningAccount() {
+  if (!config.leverUpAgentPrivateKey) return clients().account;
+  try {
+    return privateKeyToAccount(config.leverUpAgentPrivateKey as Hex);
+  } catch {
+    throw new Error("LEVERUP_AGENT_PRIVATE_KEY must be a valid 32-byte hex private key");
+  }
+}
+
+async function getAgentAuthorization(trader: Address, agent: Address) {
+  const { publicClient } = clients();
+  const auth = await publicClient.readContract({
+    address: ONECLICK_DIAMOND,
+    abi: AGENT_AUTH_ABI,
+    functionName: "getAgentAuth",
+    args: [trader, agent]
+  });
+  const requiredPermissions = config.leverUpAgentPermissionMask;
+  const authorized = auth.agent !== ZERO;
+  const hasConfiguredPermissions = auth.permissions === MAX_UINT256
+    || (auth.permissions & requiredPermissions) === requiredPermissions;
+  return {
+    authorized,
+    agent: auth.agent as Address,
+    name: auth.name as Hex,
+    permissions: auth.permissions.toString(),
+    authorizedAt: Number(auth.authorizedAt),
+    requiredPermissions: requiredPermissions.toString(),
+    requiredPermissionsHex: "0x" + requiredPermissions.toString(16),
+    hasConfiguredPermissions,
+    permissionsReady: authorized && hasConfiguredPermissions
+  };
+}
+
+export async function getLeverUpAgentStatus() {
+  const trader = clients().account.address;
+  if (!config.leverUpAgentPrivateKey) {
+    return {
+      mode: "SELF_SIGNING",
+      trader,
+      signer: trader,
+      agentConfigured: false,
+      authorizationRequired: false,
+      authorization: null
+    };
+  }
+
+  const signer = getSigningAccount();
+  if (signer.address.toLowerCase() === trader.toLowerCase()) {
+    throw new Error("LEVERUP_AGENT_PRIVATE_KEY must belong to a distinct agent wallet");
+  }
+
+  const authorization = await getAgentAuthorization(trader, signer.address);
+  return {
+    mode: "HOSTED_AGENT",
+    trader,
+    signer: signer.address,
+    agentConfigured: true,
+    authorizationRequired: true,
+    authorization
+  };
 }
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
@@ -155,27 +251,49 @@ async function refreshFeeConfig(force = false): Promise<FeeOption[]> {
   return options;
 }
 
-async function chooseFeeToken(additionalSpend: bigint, action = ACTION_MARKET_OPEN) {
+async function inspectFeeOptions(additionalSpend: bigint, action = ACTION_MARKET_OPEN) {
   const { account, publicClient } = clients();
   const options = (await refreshFeeConfig()).filter((x) => x.action === action);
-  if (!options.length) {
-    const all = await refreshFeeConfig(true);
-    const configured = all.filter((x) => x.action === action);
-    const name = ACTION_NAMES[action] ?? `action ${action}`;
-    if (!configured.length || configured.every((x) => !x.enabled)) {
-      throw new Error(`LeverUp ${name} is currently disabled by the live 1CT relayer`);
-    }
-  }
-  for (const option of options.sort((a, b) => a.priority - b.priority)) {
-    if (option.feeToken === ZERO) continue;
-    const [balance, allowance] = await Promise.all([
+  if (!options.length) return [];
+
+  return Promise.all(options.sort((a, b) => a.priority - b.priority).map(async (option) => {
+    const [balance, allowance, decimals] = await Promise.all([
       publicClient.readContract({ address: option.feeToken, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address] }),
-      publicClient.readContract({ address: option.feeToken, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND] })
+      publicClient.readContract({ address: option.feeToken, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND] }),
+      publicClient.readContract({ address: option.feeToken, abi: ERC20_ABI, functionName: "decimals" })
     ]);
-    const required = BigInt(option.antiDdosFee) + (option.feeToken.toLowerCase() === WMON.toLowerCase() ? additionalSpend : 0n);
-    if (balance >= required && allowance >= required) return { feeToken: option.feeToken, antiDdosFee: BigInt(option.antiDdosFee) };
-  }
-  return null;
+    const antiDdosFee = BigInt(option.antiDdosFee);
+    const sameAsCollateral = option.feeToken.toLowerCase() === WMON.toLowerCase();
+    const required = antiDdosFee + (sameAsCollateral ? additionalSpend : 0n);
+
+    return {
+      action,
+      actionName: ACTION_NAMES[action] ?? ("action " + action),
+      feeToken: option.feeToken,
+      antiDdosFeeRaw: antiDdosFee.toString(),
+      antiDdosFeeFormatted: formatUnits(antiDdosFee, decimals),
+      decimals,
+      balanceRaw: balance.toString(),
+      balanceFormatted: formatUnits(balance, decimals),
+      allowanceRaw: allowance.toString(),
+      allowanceFormatted: formatUnits(allowance, decimals),
+      requiredRaw: required.toString(),
+      requiredFormatted: formatUnits(required, decimals),
+      sameAsCollateral,
+      balanceReady: balance >= required,
+      allowanceReady: allowance >= required,
+      ready: balance >= required && allowance >= required,
+      priority: option.priority
+    };
+  }));
+}
+
+async function chooseFeeToken(additionalSpend: bigint, action = ACTION_MARKET_OPEN) {
+  const options = await inspectFeeOptions(additionalSpend, action);
+  const selected = options.find((x) => x.ready);
+  return selected
+    ? { feeToken: selected.feeToken, antiDdosFee: BigInt(selected.antiDdosFeeRaw) }
+    : null;
 }
 
 function buildActionData(action: number, trader: Address, values: unknown[]): Hex {
@@ -195,23 +313,48 @@ function awaitableEncode(types: string[], values: unknown[]) {
 }
 
 async function submitIntent(action: number, trader: Address, values: unknown[], feeToken: Address, antiDdosFee: bigint) {
-  const { account } = clients();
-  if (account.address.toLowerCase() !== trader.toLowerCase()) throw new Error("1CT self-signing requires signer == trader");
+  const { publicClient } = clients();
+  const signer = getSigningAccount();
+  const hostedAgent = Boolean(config.leverUpAgentPrivateKey);
+
+  if (hostedAgent) {
+    if (signer.address.toLowerCase() === trader.toLowerCase()) {
+      throw new Error("Hosted LeverUp agent signer must be distinct from trader");
+    }
+    const auth = await getAgentAuthorization(trader, signer.address);
+    const requiredBit = 1n << BigInt(action);
+    const permissions = BigInt(auth.permissions);
+    const hasBit = permissions === MAX_UINT256 || (permissions & requiredBit) === requiredBit;
+    if (!auth.authorized || !hasBit) {
+      throw new Error("LeverUp agent is not authorized for action " + action + "; required permission bit 0x" + requiredBit.toString(16));
+    }
+  } else if (signer.address.toLowerCase() !== trader.toLowerCase()) {
+    throw new Error("1CT self-signing requires signer == trader");
+  }
+
   const actionData = buildActionData(action, trader, values);
   const actionDataHash = keccak256(actionData);
-  const now = BigInt(Date.now());
-  nonce = now > nonce ? now : nonce + 1n;
+  const lastNonce = await publicClient.readContract({
+    address: ONECLICK_DIAMOND,
+    abi: AGENT_NONCE_ABI,
+    functionName: "getLastNonce",
+    args: [trader, signer.address]
+  });
+  const candidate = BigInt(Date.now());
+  nonce = candidate > nonce ? candidate : nonce + 1n;
+  nonce = nonce > BigInt(lastNonce) ? nonce : BigInt(lastNonce) + 1n;
   const deadline = Math.floor(Date.now() / 1000) + 300;
   const typeName = ACTION_NAMES[action];
+  if (!typeName) throw new Error("Unsupported LeverUp 1CT action: " + action);
 
-  const signature = await account.signTypedData({
+  const signature = await signer.signTypedData({
     domain: { name: "LeverupOneClickV2", version: "1", chainId: 143, verifyingContract: ONECLICK_DIAMOND },
     types: { [typeName]: COMMON_FIELDS },
     primaryType: typeName,
     message: { trader, action, nonce, deadline, feeToken, antiDdosFee, actionDataHash }
   } as any);
 
-  const result = await fetch(`${ONECLICK_BASE}/v2/trading/submit-intent?blockchain=MONAD`, {
+  const result = await fetch(ONECLICK_BASE + "/v2/trading/submit-intent?blockchain=MONAD", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -226,7 +369,7 @@ async function submitIntent(action: number, trader: Address, values: unknown[], 
     })
   });
   const text = await result.text();
-  if (!result.ok) throw new Error(`LeverUp intent HTTP ${result.status}: ${text.slice(0, 500)}`);
+  if (!result.ok) throw new Error("LeverUp intent HTTP " + result.status + ": " + text.slice(0, 500));
   return text.replace(/^"|"$/g, "");
 }
 
@@ -271,24 +414,6 @@ export async function getLeverUpQuote(symbol: string, marginMon: number, leverag
   return { symbol: pair.pairName, leverage, marginMon, marginUsd, notionalUsd, entryPriceUsd: entry, qty, openFeeMon, warnings };
 }
 
-async function ensureWmon(amountMon: number) {
-  const { account, publicClient, walletClient } = clients();
-  const amount = parseUnits(amountMon.toFixed(18), 18);
-  const balance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address] });
-  if (balance >= amount) return { wrapped: false, txHash: null };
-  const txHash = await walletClient.writeContract({
-    account, chain: MONAD, address: WMON, abi: ERC20_ABI, functionName: "deposit", value: amount - balance
-  });
-  await publicClient.waitForTransactionReceipt({ hash: txHash });
-  return { wrapped: true, txHash };
-}
-
-async function ensureApproval(token: Address, amount: bigint) {
-  const { account, publicClient, walletClient } = clients();
-  const allowance = await publicClient.readContract({ address: token, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND] });
-  if (allowance >= amount) return null;
-  return walletClient.writeContract({ account, chain: MONAD, address: token, abi: ERC20_ABI, functionName: "approve", args: [ONECLICK_DIAMOND, 2n ** 256n - 1n] });
-}
 
 export async function openLeverUpMonTrade(symbol: string, marginMon: number, leverage: number, isLong: boolean, stopLossUsd = 0, takeProfitUsd = 0) {
   if (!config.leverUpEnabled) throw new Error("LeverUp adapter disabled");
@@ -300,35 +425,40 @@ export async function openLeverUpMonTrade(symbol: string, marginMon: number, lev
   const entry = q.entryPriceUsd;
   const sl = stopLossUsd > 0 ? parseUnits(stopLossUsd.toFixed(18), 18) : 0n;
   const tp = takeProfitUsd > 0 ? parseUnits(takeProfitUsd.toFixed(18), 18) : 0n;
+
   if (isLong && sl && stopLossUsd >= entry) throw new Error("Long SL must be below entry");
   if (!isLong && sl && stopLossUsd <= entry) throw new Error("Short SL must be above entry");
   if (isLong && tp && takeProfitUsd <= entry) throw new Error("Long TP must be above entry");
   if (!isLong && tp && takeProfitUsd >= entry) throw new Error("Short TP must be below entry");
 
   const amountIn = parseUnits(q.marginMon.toFixed(18), 18) + parseUnits(q.openFeeMon.toFixed(18), 18);
-
-  // Live LeverUp currently enables LIMIT_OPEN (action 2) while MARKET_OPEN (action 0) is disabled.
-  // Production validation requires LONG triggers below market and SHORT triggers above market.
   const triggerBufferPct = Math.min(Math.max(config.slippagePct, 0.01), 1);
   const limitPriceUsd = entry * (isLong ? 1 - triggerBufferPct / 100 : 1 + triggerBufferPct / 100);
+
   if (isLong && limitPriceUsd >= entry) throw new Error("Long limit price must be below market");
   if (!isLong && limitPriceUsd <= entry) throw new Error("Short limit price must be above market");
 
-  const fee = await chooseFeeToken(amountIn, ACTION_LIMIT_OPEN);
-  if (!fee) throw new Error("No enabled LeverUp limit-open execution-fee token has enough balance/allowance.");
+  const readiness = await getLeverUpReadiness(pair.pairName, marginMon, leverage, ACTION_LIMIT_OPEN);
+  if (!readiness.ready) throw new Error("LeverUp live preflight blocked: " + readiness.reason);
 
+  const selectedFeeToken = readiness.selectedFeeToken;
+  if (!selectedFeeToken) throw new Error("LeverUp preflight found no usable execution-fee token");
+
+  const antiDdosFee = BigInt(readiness.selectedFeeAntiDdosFeeRaw);
+  const collateralRequired = amountIn + (selectedFeeToken.toLowerCase() === WMON.toLowerCase() ? antiDdosFee : 0n);
   const { publicClient } = clients();
   const wmonBalance = await publicClient.readContract({
     address: WMON, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address]
   });
-  if (wmonBalance < amountIn) {
-    throw new Error(`Insufficient WMON collateral: have ${formatUnits(wmonBalance, 18)} MON-equivalent, need ${marginMon}`);
-  }
   const wmonAllowance = await publicClient.readContract({
     address: WMON, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND]
   });
-  if (wmonAllowance < amountIn) {
-    throw new Error("WMON is not approved to LeverUp Diamond yet; approve once before live trading.");
+
+  if (wmonBalance < collateralRequired) {
+    throw new Error("Insufficient WMON collateral: have " + formatUnits(wmonBalance, 18) + ", need " + formatUnits(collateralRequired, 18));
+  }
+  if (wmonAllowance < collateralRequired) {
+    throw new Error("WMON allowance insufficient: have " + formatUnits(wmonAllowance, 18) + ", need " + formatUnits(collateralRequired, 18));
   }
 
   const actionValues = [
@@ -345,13 +475,12 @@ export async function openLeverUpMonTrade(symbol: string, marginMon: number, lev
     0n
   ];
 
-  // LIMIT_OPEN returns after the intent is accepted; execution can remain pending until the trigger is reached.
   const intentHash = await submitIntent(
     ACTION_LIMIT_OPEN,
     account.address,
     actionValues,
-    fee.feeToken,
-    fee.antiDdosFee
+    selectedFeeToken,
+    antiDdosFee
   );
 
   return {
@@ -363,9 +492,12 @@ export async function openLeverUpMonTrade(symbol: string, marginMon: number, lev
     notionalUsd: q.notionalUsd,
     orderType: "LIMIT",
     limitPriceUsd,
-    pending: true
+    pending: true,
+    signerAddress: readiness.agent.signer,
+    mode: readiness.agent.mode
   };
 }
+
 export async function closeLeverUpTrade(positionHash: Hex) {
   if (!config.leverUpEnabled || !config.liveTrading) throw new Error("LeverUp live adapter disabled");
   const { account } = clients();
@@ -386,68 +518,135 @@ export async function getLeverUpMarketSnapshots() {
   });
 }
 
-export async function probeLeverUpMinimums(symbol = "MON/USD", leverage = 5, action = ACTION_MARKET_OPEN) {
+export async function getLeverUpReadiness(
+  symbol = "MON/USD",
+  marginMon = 0.005,
+  leverage = 5,
+  action = ACTION_LIMIT_OPEN
+) {
   const { account, publicClient } = clients();
   const pair = await getPair(symbol);
   const [balanceMon, monPrice] = await Promise.all([
     publicClient.getBalance({ address: account.address }).then((x) => Number(formatUnits(x, 18))),
     getMonPrice()
   ]);
-  const maxAllowedMarginMon = balanceMon * config.leverUpMaxMarginPct / 100;
-  const candidates = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5].filter((x) => x <= maxAllowedMarginMon);
+
+  const q = await getLeverUpQuote(pair.pairName, marginMon, leverage);
+  const amountIn = parseUnits(q.marginMon.toFixed(18), 18) + parseUnits(q.openFeeMon.toFixed(18), 18);
+  const feeOptions = await inspectFeeOptions(amountIn, action);
+  const selected = feeOptions.find((x) => x.ready) ?? null;
+
+  const wmonBalance = await publicClient.readContract({
+    address: WMON, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address]
+  });
+  const collateralRequired = amountIn + (selected?.sameAsCollateral ? BigInt(selected.antiDdosFeeRaw) : 0n);
+  const wmonAllowance = await publicClient.readContract({
+    address: WMON, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND]
+  });
+
+  const agent = await getLeverUpAgentStatus();
+  const feeReady = Boolean(selected);
+  const collateralReady = wmonBalance >= collateralRequired && wmonAllowance >= collateralRequired;
+  const agentReady = agent.mode === "SELF_SIGNING"
+    ? true
+    : Boolean(agent.authorization?.permissionsReady);
+  const enabled = feeOptions.length > 0;
+  const ready = enabled && feeReady && collateralReady && agentReady;
+
+  let reason = "ready for 1CT submission";
+  if (!enabled) reason = "LeverUp " + (ACTION_NAMES[action] ?? ("action " + action)) + " is not enabled by the live relayer";
+  else if (!feeReady) reason = "no enabled execution-fee token has sufficient balance and allowance";
+  else if (!collateralReady) reason = wmonBalance < collateralRequired ? "insufficient WMON collateral" : "WMON allowance insufficient";
+  else if (!agentReady) reason = "hosted agent is not authorized for the required permission mask";
+
+  return {
+    mode: agent.mode,
+    oracle: "LEVERUP_RELAYER",
+    action,
+    actionName: ACTION_NAMES[action] ?? ("action " + action),
+    trader: account.address,
+    pair: pair.pairName,
+    leverage,
+    marginMon,
+    balanceMon,
+    monPriceUsd: monPrice,
+    maxAllowedMarginMon: balanceMon * config.leverUpMaxMarginPct / 100,
+    marginUsd: q.marginUsd,
+    notionalUsd: q.notionalUsd,
+    openFeeMon: q.openFeeMon,
+    amountInRaw: amountIn.toString(),
+    amountInFormatted: formatUnits(amountIn, 18),
+    collateral: {
+      token: WMON,
+      lvToken: LVMON,
+      balanceRaw: wmonBalance.toString(),
+      balanceFormatted: formatUnits(wmonBalance, 18),
+      allowanceRaw: wmonAllowance.toString(),
+      allowanceFormatted: formatUnits(wmonAllowance, 18),
+      requiredRaw: collateralRequired.toString(),
+      requiredFormatted: formatUnits(collateralRequired, 18),
+      ready: collateralReady
+    },
+    feeOptions,
+    selectedFeeToken: selected?.feeToken ?? null,
+    selectedFeeAntiDdosFeeRaw: selected?.antiDdosFeeRaw ?? "0",
+    selectedFeeAntiDdosFeeFormatted: selected?.antiDdosFeeFormatted ?? null,
+    agent,
+    enabled,
+    feeReady,
+    agentReady,
+    ready,
+    reason
+  };
+}
+
+export async function probeLeverUpMinimums(symbol = "MON/USD", leverage = 5, action = ACTION_LIMIT_OPEN) {
+  const baseline = await getLeverUpReadiness(symbol, 0.005, leverage, action);
+  const candidates = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
+    .filter((x) => x <= baseline.maxAllowedMarginMon);
   const results: Array<Record<string, unknown>> = [];
 
   for (const marginMon of candidates) {
     try {
-      const q = await getLeverUpQuote(pair.pairName, marginMon, leverage);
-      const amountIn = parseUnits(q.marginMon.toFixed(18), 18) + parseUnits(q.openFeeMon.toFixed(18), 18);
-      const fee = await chooseFeeToken(amountIn, action);
-      if (!fee) {
-        results.push({
-          marginMon,
-          marginUsd: q.marginUsd,
-          notionalUsd: q.notionalUsd,
-          openFeeMon: q.openFeeMon,
-          accepted: false,
-          hasFeeToken: false,
-          wmonBalanceMon: 0,
-          wmonApproved: false,
-          reason: "missing execution-fee token/allowance"
-        });
-        // Fee-token readiness is monotonic across larger margins: non-WMON fees are fixed,
-        // while WMON requires at least as much collateral as the margin grows. Stop probing.
-        break;
-      }
-      const wmonBalance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address] });
-      const wmonAllowance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND] });
+      const readiness = await getLeverUpReadiness(symbol, marginMon, leverage, action);
       results.push({
-        marginMon, marginUsd: q.marginUsd, notionalUsd: q.notionalUsd, openFeeMon: q.openFeeMon,
-        accepted: wmonBalance >= amountIn && wmonAllowance >= amountIn,
-        hasFeeToken: true,
-        wmonBalanceMon: Number(formatUnits(wmonBalance, 18)),
-        wmonApproved: wmonAllowance >= amountIn,
-        reason: wmonBalance < amountIn ? "insufficient WMON" : wmonAllowance < amountIn ? "WMON approval required" : "ready for 1CT submission"
+        marginMon,
+        marginUsd: readiness.marginUsd,
+        notionalUsd: readiness.notionalUsd,
+        openFeeMon: readiness.openFeeMon,
+        accepted: readiness.ready,
+        hasFeeToken: readiness.feeReady,
+        collateral: readiness.collateral,
+        feeOptions: readiness.feeOptions,
+        agent: readiness.agent,
+        reason: readiness.reason
       });
-      if (wmonBalance < amountIn || wmonAllowance < amountIn) break;
+      if (readiness.ready) break;
+      if (!readiness.feeReady || !readiness.agentReady || !readiness.collateral.ready) break;
     } catch (error) {
-      const message = String(error).slice(0, 500);
-      results.push({ marginMon, accepted: false, error: message });
-      if (message.includes("currently disabled by the live 1CT relayer")) break;
+      results.push({
+        marginMon,
+        accepted: false,
+        error: String(error).slice(0, 500)
+      });
+      break;
     }
   }
 
   return {
-    mode: "1CT_SELF_SIGNING",
+    mode: baseline.mode,
     oracle: "LEVERUP_RELAYER",
     action,
-    actionName: ACTION_NAMES[action] ?? `action ${action}`,
-    balanceMon,
-    monPriceUsd: monPrice,
-    maxAllowedMarginMon,
-    pair: pair.pairName,
+    actionName: ACTION_NAMES[action] ?? ("action " + action),
+    trader: baseline.trader,
+    balanceMon: baseline.balanceMon,
+    monPriceUsd: baseline.monPriceUsd,
+    maxAllowedMarginMon: baseline.maxAllowedMarginMon,
+    pair: baseline.pair,
     leverage,
     results,
-    firstReady: results.find((x) => x.accepted) ?? null
+    firstReady: results.find((x) => x.accepted) ?? null,
+    agent: baseline.agent
   };
 }
 

@@ -86,10 +86,23 @@ export async function getLeverUpQuote(symbol: string, marginMon: number, leverag
 export async function openLeverUpMonTrade(symbol: string, marginMon: number, leverage: number, isLong: boolean, stopLossUsd = 0, takeProfitUsd = 0) {
   if (!config.leverUpEnabled) throw new Error("LeverUp adapter disabled: set LEVERUP_ENABLED=true");
   if (!config.liveTrading) throw new Error("LeverUp adapter requires LIVE_TRADING=true");
+  const { account, publicClient, walletClient } = clients();
+  const balanceMon = Number(formatUnits(await publicClient.getBalance({ address: account.address }), 18));
+  const maxMarginMon = balanceMon * config.leverUpMaxMarginPct / 100;
+  if (marginMon > maxMarginMon) {
+    throw new Error("LeverUp risk gate: margin " + marginMon.toFixed(6) + " MON exceeds " + config.leverUpMaxMarginPct + "% wallet allocation (" + maxMarginMon.toFixed(6) + " MON)");
+  }
+  if (stopLossUsd <= 0) throw new Error("LeverUp risk gate: a stop-loss is mandatory for live trades");
   const q = await getLeverUpQuote(symbol, marginMon, leverage);
   const p = getPair(symbol);
   const asset = await pyth(p);
-  const { account, publicClient, walletClient } = clients();
+  const stopDistancePct = Math.abs((stopLossUsd / q.entryPriceUsd) - 1) * 100;
+  const estimatedStopLossUsd = q.notionalUsd * stopDistancePct / 100;
+  const equityUsd = balanceMon * q.marginUsd / Math.max(marginMon, 1e-18);
+  const maxRiskUsd = equityUsd * config.leverUpRiskPerTradePct / 100;
+  if (estimatedStopLossUsd > maxRiskUsd) {
+    throw new Error("LeverUp risk gate: stop-loss risk $" + estimatedStopLossUsd.toFixed(4) + " exceeds " + config.leverUpRiskPerTradePct + "% equity risk $" + maxRiskUsd.toFixed(4));
+  }
   const oracleFee = await publicClient.readContract({ address: PYTH, abi: PYTH_ABI, functionName: "getUpdateFee", args: [asset.data] }) as bigint;
   const value = parseUnits((marginMon + q.openFeeMon).toFixed(18), 18) + oracleFee;
   if (await publicClient.getBalance({ address: account.address }) < value) throw new Error("Insufficient MON for margin, LeverUp fee and oracle fee");

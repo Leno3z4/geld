@@ -26,9 +26,11 @@ const ERC20_ABI = parseAbi([
 
 const ACTION_MARKET_OPEN = 0;
 const ACTION_MARKET_CLOSE = 1;
+const ACTION_LIMIT_OPEN = 2;
 const ACTION_NAMES: Record<number, string> = {
   0: "OneClickMarketOpen",
-  1: "OneClickMarketClose"
+  1: "OneClickMarketClose",
+  2: "OneClickLimitOpen"
 };
 
 const COMMON_FIELDS = [
@@ -148,7 +150,7 @@ async function refreshFeeConfig(force = false): Promise<FeeOption[]> {
       enabled: Boolean(x.enabled),
       priority: Number(x.priority ?? 999)
     }))
-    .filter((x: FeeOption) => x.enabled && x.action === ACTION_MARKET_OPEN);
+    .filter((x: FeeOption) => x.enabled);
   feeCache = { at: Date.now(), options };
   return options;
 }
@@ -177,7 +179,7 @@ async function chooseFeeToken(additionalSpend: bigint, action = ACTION_MARKET_OP
 }
 
 function buildActionData(action: number, trader: Address, values: unknown[]): Hex {
-  const types = action === ACTION_MARKET_OPEN
+  const types = action === ACTION_MARKET_OPEN || action === ACTION_LIMIT_OPEN
     ? ["address", "bool", "address", "address", "uint96", "uint128", "uint128", "uint128", "uint128", "uint24", "uint96"]
     : ["bytes32", "uint24"];
   const full = (awaitableEncode as any)(types, [trader, ...values]);

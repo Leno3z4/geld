@@ -54,6 +54,7 @@ interface Env {
   SELL_FAILURE_QUARANTINE_MS?: string;
   SELL_FAILURE_QUARANTINE_COUNT?: string;
   AI_MAX_CALLS_PER_CYCLE?: string;
+  AI_MAX_CALLS_PER_DAY?: string;
   AI_MAX_ATTEMPTS_PER_DECISION?: string;
   REENTRY_COOLDOWN_MS?: string;
   HIGH_CAP_MIN_MARKET_CAP_USD?: string;
@@ -257,6 +258,7 @@ function hydrateProcessEnv(env: Env) {
     SELL_FAILURE_QUARANTINE_MS: valueFor("SELL_FAILURE_QUARANTINE_MS", env.SELL_FAILURE_QUARANTINE_MS),
     SELL_FAILURE_QUARANTINE_COUNT: valueFor("SELL_FAILURE_QUARANTINE_COUNT", env.SELL_FAILURE_QUARANTINE_COUNT),
     AI_MAX_CALLS_PER_CYCLE: valueFor("AI_MAX_CALLS_PER_CYCLE", env.AI_MAX_CALLS_PER_CYCLE),
+    AI_MAX_CALLS_PER_DAY: valueFor("AI_MAX_CALLS_PER_DAY", env.AI_MAX_CALLS_PER_DAY),
     AI_MAX_ATTEMPTS_PER_DECISION: valueFor("AI_MAX_ATTEMPTS_PER_DECISION", env.AI_MAX_ATTEMPTS_PER_DECISION),
     REENTRY_COOLDOWN_MS: valueFor("REENTRY_COOLDOWN_MS", env.REENTRY_COOLDOWN_MS),
     HIGH_CAP_MIN_MARKET_CAP_USD: valueFor("HIGH_CAP_MIN_MARKET_CAP_USD", env.HIGH_CAP_MIN_MARKET_CAP_USD),
@@ -545,6 +547,7 @@ export class GeldBot extends DurableObject<Env> {
           sellFailureQuarantineMs: runtimeConfig.sellFailureQuarantineMs,
           sellFailureQuarantineCount: runtimeConfig.sellFailureQuarantineCount,
           aiMaxCallsPerCycle: runtimeConfig.aiMaxCallsPerCycle,
+          aiMaxCallsPerDay: runtimeConfig.aiMaxCallsPerDay,
           aiMaxAttemptsPerDecision: runtimeConfig.aiMaxAttemptsPerDecision,
           reentryCooldownMs: runtimeConfig.reentryCooldownMs,
           highCapMinMarketCapUsd: runtimeConfig.highCapMinMarketCapUsd,

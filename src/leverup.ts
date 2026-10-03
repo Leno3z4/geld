@@ -153,9 +153,17 @@ async function refreshFeeConfig(force = false): Promise<FeeOption[]> {
   return options;
 }
 
-async function chooseFeeToken(additionalSpend: bigint) {
+async function chooseFeeToken(additionalSpend: bigint, action = ACTION_MARKET_OPEN) {
   const { account, publicClient } = clients();
-  const options = await refreshFeeConfig();
+  const options = (await refreshFeeConfig()).filter((x) => x.action === action);
+  if (!options.length) {
+    const all = await refreshFeeConfig(true);
+    const configured = all.filter((x) => x.action === action);
+    const name = ACTION_NAMES[action] ?? `action ${action}`;
+    if (!configured.length || configured.every((x) => !x.enabled)) {
+      throw new Error(`LeverUp ${name} is currently disabled by the live 1CT relayer`);
+    }
+  }
   for (const option of options.sort((a, b) => a.priority - b.priority)) {
     if (option.feeToken === ZERO) continue;
     const [balance, allowance] = await Promise.all([
@@ -292,8 +300,8 @@ export async function openLeverUpMonTrade(symbol: string, marginMon: number, lev
   if (!isLong && tp && takeProfitUsd >= entry) throw new Error("Short TP must be below entry");
 
   const amountIn = parseUnits(q.marginMon.toFixed(18), 18) + parseUnits(q.openFeeMon.toFixed(18), 18);
-  const fee = await chooseFeeToken(amountIn);
-  if (!fee) throw new Error("No enabled LeverUp execution-fee token has enough balance/allowance. WMON collateral + approval may be required.");
+  const fee = await chooseFeeToken(amountIn, ACTION_MARKET_OPEN);
+  if (!fee) throw new Error("No enabled LeverUp market-open execution-fee token has enough balance/allowance.");
 
   const { publicClient } = clients();
   const wmonBalance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address] });
@@ -316,7 +324,7 @@ export async function openLeverUpMonTrade(symbol: string, marginMon: number, lev
 export async function closeLeverUpTrade(positionHash: Hex) {
   if (!config.leverUpEnabled || !config.liveTrading) throw new Error("LeverUp live adapter disabled");
   const { account } = clients();
-  const fee = await chooseFeeToken(0n);
+  const fee = await chooseFeeToken(0n, ACTION_MARKET_CLOSE);
   if (!fee) throw new Error("No enabled close execution-fee token available");
   const intentHash = await submitIntent(ACTION_MARKET_CLOSE, account.address, [positionHash, 0], fee.feeToken, fee.antiDdosFee);
   return { intentHash, status: await pollIntent(intentHash) };
@@ -348,7 +356,7 @@ export async function probeLeverUpMinimums(symbol = "MON/USD", leverage = 5) {
     try {
       const q = await getLeverUpQuote(pair.pairName, marginMon, leverage);
       const amountIn = parseUnits(q.marginMon.toFixed(18), 18) + parseUnits(q.openFeeMon.toFixed(18), 18);
-      const fee = await chooseFeeToken(amountIn);
+      const fee = await chooseFeeToken(amountIn, ACTION_MARKET_OPEN);
       const wmonBalance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address] });
       const wmonAllowance = await publicClient.readContract({ address: WMON, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND] });
       results.push({

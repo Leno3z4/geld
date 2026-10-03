@@ -601,37 +601,22 @@ export async function getLeverUpReadiness(
 }
 
 export async function probeLeverUpMinimums(symbol = "MON/USD", leverage = 5, action = ACTION_LIMIT_OPEN) {
+  // The smallest candidate is already fully covered by getLeverUpReadiness.
+  // Re-running the complete readiness scan for the same 0.005 MON size can exceed
+  // Cloudflare's per-invocation subrequest limit, so never duplicate that read set.
   const baseline = await getLeverUpReadiness(symbol, 0.005, leverage, action);
-  const candidates = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
-    .filter((x) => x <= baseline.maxAllowedMarginMon);
-  const results: Array<Record<string, unknown>> = [];
-
-  for (const marginMon of candidates) {
-    try {
-      const readiness = await getLeverUpReadiness(symbol, marginMon, leverage, action);
-      results.push({
-        marginMon,
-        marginUsd: readiness.marginUsd,
-        notionalUsd: readiness.notionalUsd,
-        openFeeMon: readiness.openFeeMon,
-        accepted: readiness.ready,
-        hasFeeToken: readiness.feeReady,
-        collateral: readiness.collateral,
-        feeOptions: readiness.feeOptions,
-        agent: readiness.agent,
-        reason: readiness.reason
-      });
-      if (readiness.ready) break;
-      if (!readiness.feeReady || !readiness.agentReady || !readiness.collateral.ready) break;
-    } catch (error) {
-      results.push({
-        marginMon,
-        accepted: false,
-        error: String(error).slice(0, 500)
-      });
-      break;
-    }
-  }
+  const result = {
+    marginMon: 0.005,
+    marginUsd: baseline.marginUsd,
+    notionalUsd: baseline.notionalUsd,
+    openFeeMon: baseline.openFeeMon,
+    accepted: baseline.ready,
+    hasFeeToken: baseline.feeReady,
+    collateral: baseline.collateral,
+    feeOptions: baseline.feeOptions,
+    agent: baseline.agent,
+    reason: baseline.reason
+  };
 
   return {
     mode: baseline.mode,
@@ -644,8 +629,8 @@ export async function probeLeverUpMinimums(symbol = "MON/USD", leverage = 5, act
     maxAllowedMarginMon: baseline.maxAllowedMarginMon,
     pair: baseline.pair,
     leverage,
-    results,
-    firstReady: results.find((x) => x.accepted) ?? null,
+    results: [result],
+    firstReady: result.accepted ? result : null,
     agent: baseline.agent
   };
 }

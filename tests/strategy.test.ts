@@ -314,3 +314,55 @@ test("stale losing positions are fully exited", () => {
   });
   assert.equal(signal?.reason, "STALE_LOSS_EXIT");
 });
+
+
+test("blocks established dip entries until price rebounds with positive flow", () => {
+  const now = Date.now();
+  const token = {
+    token: "0x" + "f".repeat(40), symbol: "KNIFE", name: "Knife Catch",
+    creator: "", pair: "", createdAt: now - 3 * 60 * 60 * 1000, lastEventAt: now,
+    buys: 80, sells: 90, buyMon: 500, sellMon: 600, progressPct: 100,
+    graduated: true, locked: false, holders: 300, volumeUsd: 0,
+    priceUsd: 1, priceMon: 0.09, peakPriceMon: 0.11, localScore: 85,
+    liquidityUsd: 80000, liquidityMon: 2500000, marketCapUsd: 120000,
+    volumeMon: 1000, changePct: -8,
+    dipPct: 18, trendPct1h: -5, trendPct4h: -4,
+    reboundPct1h: 0.2, buySellRatio5m: 0.95, volume5mMon: 10,
+    monUsdPrice: 0.033, dayLowPriceMon: 0.089, dayAvgPriceMon: 0.10,
+    distanceFromDayLowPct: 1, distanceFromDayAvgPct: -10,
+    daySamples: 60
+  };
+  const d = entryGateDiagnostics(token, {
+    minEstablishedAgeMinutes: 30, minLiquidityUsd: 5000,
+    minMarketCapUsd: 60000, minHolders: 25, minVolumeUsd: 100,
+    dipMinPct: 8, dipMaxPct: 35, recoveryMinPct: 1,
+    trendMax1hPct: 20, minTrend4hPct: -12, minLocalScore: 50
+  });
+  assert.ok(d.blockers.some((x) => x.includes("rebound")));
+  assert.ok(d.blockers.some((x) => x.includes("5m buy/sell")));
+});
+
+test("allows an established dip only after rebound and buying flow confirm", () => {
+  const now = Date.now();
+  const token = {
+    token: "0x" + "a".repeat(40), symbol: "REV", name: "Confirmed Reversal",
+    creator: "", pair: "", createdAt: now - 3 * 60 * 60 * 1000, lastEventAt: now,
+    buys: 100, sells: 70, buyMon: 600, sellMon: 400, progressPct: 100,
+    graduated: true, locked: false, holders: 500, volumeUsd: 0,
+    priceUsd: 1, priceMon: 0.103, peakPriceMon: 0.12, localScore: 85,
+    liquidityUsd: 90000, liquidityMon: 3000000, marketCapUsd: 150000,
+    volumeMon: 1500, changePct: 2,
+    dipPct: 14, trendPct1h: 3, trendPct4h: 1,
+    reboundPct1h: 2.5, buySellRatio5m: 1.25, volume5mMon: 1000,
+    monUsdPrice: 0.033, dayLowPriceMon: 0.10, dayAvgPriceMon: 0.112,
+    distanceFromDayLowPct: 3, distanceFromDayAvgPct: -8,
+    daySamples: 60
+  };
+  const d = entryGateDiagnostics(token, {
+    minEstablishedAgeMinutes: 30, minLiquidityUsd: 5000,
+    minMarketCapUsd: 60000, minHolders: 25, minVolumeUsd: 100,
+    dipMinPct: 8, dipMaxPct: 35, recoveryMinPct: 1,
+    trendMax1hPct: 20, minTrend4hPct: -12, minLocalScore: 50
+  });
+  assert.equal(d.blockers.length, 0);
+});

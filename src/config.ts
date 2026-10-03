@@ -62,8 +62,9 @@ export const config = {
   slippagePct: num("SLIPPAGE_PCT", 6),
   sellGasLimit: Math.max(500000, Math.floor(num("SELL_GAS_LIMIT", 1_500_000))),
   sellGasPaddingPct: Math.max(5, Math.min(50, num("SELL_GAS_PADDING_PCT", 20))),
-  sellFailureCooldownMs: Math.max(60_000, num("SELL_FAILURE_COOLDOWN_MS", 15 * 60 * 1000)),
-  sellFailureQuarantineMs: Math.max(30 * 60 * 1000, num("SELL_FAILURE_QUARANTINE_MS", 60 * 60 * 1000)),
+  // A transient RPC error must not strand a position for an hour.
+  sellFailureCooldownMs: Math.max(15_000, Math.min(60_000, num("SELL_FAILURE_COOLDOWN_MS", 30_000))),
+  sellFailureQuarantineMs: Math.max(60_000, Math.min(5 * 60_000, num("SELL_FAILURE_QUARANTINE_MS", 5 * 60_000))),
   sellFailureQuarantineCount: Math.max(2, Math.floor(num("SELL_FAILURE_QUARANTINE_COUNT", 3))),
   hardStopPct: num("HARD_STOP_LOSS_PCT", 10),
   takeProfitPct: num("TAKE_PROFIT_PCT", 20),
@@ -95,7 +96,8 @@ export const config = {
   momentumExitReboundPct: num("MOMENTUM_EXIT_REBOUND_1H_PCT", 2),
   sellPressureExitRatio: num("SELL_PRESSURE_EXIT_RATIO", 0.65),
   sellPressureMinVolumeUsd: Math.max(0, num("SELL_PRESSURE_MIN_VOLUME_USD", 1000)),
-  minTrend4hPct: num("MIN_TREND_4H_PCT", -25),
+  // Prevent the established lane from treating a deep 4h downtrend as a dip buy.
+  minTrend4hPct: Math.max(-12, num("MIN_TREND_4H_PCT", -12)),
   liquidityExitRatio: num("LIQUIDITY_EXIT_RATIO", 0.65),
   maxQuoteFailures: Math.max(1, Math.floor(num("MAX_QUOTE_FAILURES", 3))),
 
@@ -153,8 +155,13 @@ export const config = {
   highCapMinTrend4hPct: num("HIGH_CAP_MIN_TREND_4H_PCT", 0),
   flowApiRefreshMs: Math.max(15000, num("FLOW_API_REFRESH_MS", 30000)),
   dipMinPct: Math.max(0, num("DIP_MIN_PCT", 3)),
-  dipMaxPct: Math.max(1, num("DIP_MAX_PCT", 50)),
-  recoveryMinPct: num("RECOVERY_MIN_PCT", -10),
+  // A dip requires a real rebound and buying flow; cap the catch-the-knife band.
+  dipMaxPct: Math.min(35, Math.max(1, num("DIP_MAX_PCT", 35))),
+  recoveryMinPct: Math.max(0.5, num("RECOVERY_MIN_PCT", 1)),
+  dipMinReboundPct: Math.max(0.5, num("DIP_MIN_REBOUND_PCT", 1)),
+  dipMinBuySellRatio5m: Math.max(1, num("DIP_MIN_BUY_SELL_RATIO_5M", 1.15)),
+  dipMinVolume5mUsd: Math.max(0, num("DIP_MIN_VOLUME_5M_USD", 250)),
+  dipMaxTrend1hPct: num("DIP_MAX_TREND_1H_PCT", 8),
   trendMax1hPct: num("TREND_MAX_1H_PCT", 20),
   discoveryLimit: Math.max(10, Math.min(50, Math.floor(num("DISCOVERY_LIMIT", 50)))),
   aiCandidateLimit: Math.max(1, Math.min(15, Math.floor(num("AI_CANDIDATE_LIMIT", 8)))),

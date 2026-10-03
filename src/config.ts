@@ -159,7 +159,8 @@ export const config = {
 
   leverUpEnabled: bool("LEVERUP_ENABLED", false),
   leverUpDiamond: (process.env.LEVERUP_DIAMOND ?? "0xea1b8E4aB7f14F7dCA68c5B214303B13078FC5ec") as `0x${string}`,
-  leverUpPythHermesUrl: process.env.LEVERUP_PYTH_HERMES_URL ?? "https://hermes.pyth.network",
+  leverUpPythHermesUrl: process.env.LEVERUP_PYTH_HERMES_URL ?? "https://pyth.dourolabs.app/hermes",
+  leverUpPythApiKey: process.env.PYTH_API_KEY ?? "",
   leverUpDefaultLeverage: Math.max(1, Math.floor(num("LEVERUP_DEFAULT_LEVERAGE", 10))),
   leverUpMaxLeverage: Math.max(1, Math.floor(num("LEVERUP_MAX_LEVERAGE", 25))),
   leverUpMinNotionalUsd: Math.max(0, num("LEVERUP_MIN_NOTIONAL_USD", 0)),

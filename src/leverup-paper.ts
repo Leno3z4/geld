@@ -11,6 +11,7 @@ type Pos = {
 type CandleDay = { day: string; open: number; high: number; low: number; close: number; samples: number };
 
 type State = {
+  version: 2;
   startedAt: number;
   mode: "PAPER" | "LIVE";
   switchedAt?: number;
@@ -59,7 +60,7 @@ export class GeldLeverUpPaper extends DurableObject {
     if (saved?.version === 2) return saved;
     const now = Date.now();
     const s:State = {
-      startedAt: now, mode:"PAPER", balanceMon:PAPER_START_MON,
+      version: 2, startedAt: now, mode:"PAPER", balanceMon:PAPER_START_MON,
       initialMon:PAPER_START_MON, realizedPnlMon:0, positions:[],
       samples:{}, daily:{}, previousDaily:{}, trades:[], wins:0, losses:0,
       consecutiveLosses:0, lastDecisionAt:0, liveUntil:{}, performance:{}

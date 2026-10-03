@@ -208,6 +208,8 @@ export interface PendingExecution {
 
 export interface BotStats {
   aiCalls: number;
+  aiDailyCalls?: number;
+  aiDailyDay?: string;
   aiFailures: number;
   eventCount: number;
   wins: number;

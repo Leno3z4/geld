@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { GeldHighCapLearning } from "./src/highcap-learning.js";
 
 interface Env {
   GELD_BOT: DurableObjectNamespace<GeldBot>;
@@ -354,7 +355,7 @@ async function getRuntimeConfig(env: Env) {
   return (await import("./src/config.js")).config;
 }
 
-export class GeldHighCapLearning extends (await import("./src/highcap-learning.js")).GeldHighCapLearning {}
+export { GeldHighCapLearning };
 
 export class GeldState extends DurableObject<Env> {
   async fetch(request: Request) {

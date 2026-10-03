@@ -19,18 +19,51 @@ const ONECLICK_DIAMOND = "0xea1b8E4aB7f14F7dCA68c5B214303B13078FC5ec" as Address
 const ERC20_ABI = parseAbi([
   "function balanceOf(address) view returns (uint256)",
   "function allowance(address,address) view returns (uint256)",
-  "function approve(address,uint256) returns (bool)",
   "function decimals() view returns (uint8)",
   "function deposit() payable"
 ]);
 
+const AGENT_AUTH_ABI = [{
+  type: "function",
+  name: "getAgentAuth",
+  stateMutability: "view",
+  inputs: [
+    { name: "trader", type: "address" },
+    { name: "agent", type: "address" }
+  ],
+  outputs: [{
+    name: "",
+    type: "tuple",
+    components: [
+      { name: "agent", type: "address" },
+      { name: "name", type: "bytes32" },
+      { name: "permissions", type: "uint256" },
+      { name: "authorizedAt", type: "uint32" }
+    ]
+  }]
+}] as const;
+
+const AGENT_NONCE_ABI = [{
+  type: "function",
+  name: "getLastNonce",
+  stateMutability: "view",
+  inputs: [
+    { name: "trader", type: "address" },
+    { name: "signer", type: "address" }
+  ],
+  outputs: [{ name: "", type: "uint64" }]
+}] as const;
+
 const ACTION_MARKET_OPEN = 0;
 const ACTION_MARKET_CLOSE = 1;
 const ACTION_LIMIT_OPEN = 2;
+const ACTION_LIMIT_CANCEL = 3;
+const MAX_UINT256 = (2n ** 256n) - 1n;
 const ACTION_NAMES: Record<number, string> = {
   0: "OneClickMarketOpen",
   1: "OneClickMarketClose",
-  2: "OneClickLimitOpen"
+  2: "OneClickLimitOpen",
+  3: "OneClickLimitCancel"
 };
 
 const COMMON_FIELDS = [
@@ -72,6 +105,69 @@ function clients() {
   const publicClient = createPublicClient({ chain: MONAD, transport: http(config.rpcUrl) });
   const walletClient = createWalletClient({ account, chain: MONAD, transport: http(config.rpcUrl) });
   return { account, publicClient, walletClient };
+}
+
+function getSigningAccount() {
+  if (!config.leverUpAgentPrivateKey) return clients().account;
+  try {
+    return privateKeyToAccount(config.leverUpAgentPrivateKey as Hex);
+  } catch {
+    throw new Error("LEVERUP_AGENT_PRIVATE_KEY must be a valid 32-byte hex private key");
+  }
+}
+
+async function getAgentAuthorization(trader: Address, agent: Address) {
+  const { publicClient } = clients();
+  const auth = await publicClient.readContract({
+    address: ONECLICK_DIAMOND,
+    abi: AGENT_AUTH_ABI,
+    functionName: "getAgentAuth",
+    args: [trader, agent]
+  });
+  const requiredPermissions = config.leverUpAgentPermissionMask;
+  const authorized = auth.agent !== ZERO;
+  const hasConfiguredPermissions = auth.permissions === MAX_UINT256
+    || (auth.permissions & requiredPermissions) === requiredPermissions;
+  return {
+    authorized,
+    agent: auth.agent as Address,
+    name: auth.name as Hex,
+    permissions: auth.permissions.toString(),
+    authorizedAt: Number(auth.authorizedAt),
+    requiredPermissions: requiredPermissions.toString(),
+    requiredPermissionsHex: "0x" + requiredPermissions.toString(16),
+    hasConfiguredPermissions,
+    permissionsReady: authorized && hasConfiguredPermissions
+  };
+}
+
+export async function getLeverUpAgentStatus() {
+  const trader = clients().account.address;
+  if (!config.leverUpAgentPrivateKey) {
+    return {
+      mode: "SELF_SIGNING",
+      trader,
+      signer: trader,
+      agentConfigured: false,
+      authorizationRequired: false,
+      authorization: null
+    };
+  }
+
+  const signer = getSigningAccount();
+  if (signer.address.toLowerCase() === trader.toLowerCase()) {
+    throw new Error("LEVERUP_AGENT_PRIVATE_KEY must belong to a distinct agent wallet");
+  }
+
+  const authorization = await getAgentAuthorization(trader, signer.address);
+  return {
+    mode: "HOSTED_AGENT",
+    trader,
+    signer: signer.address,
+    agentConfigured: true,
+    authorizationRequired: true,
+    authorization
+  };
 }
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {

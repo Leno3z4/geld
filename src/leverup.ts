@@ -302,7 +302,7 @@ export async function openLeverUpMonTrade(symbol: string, marginMon: number, lev
   if (!isLong && tp && takeProfitUsd >= entry) throw new Error("Short TP must be below entry");
 
   const amountIn = parseUnits(q.marginMon.toFixed(18), 18) + parseUnits(q.openFeeMon.toFixed(18), 18);
-  const fee = await chooseFeeToken(amountIn, action);
+  const fee = await chooseFeeToken(amountIn, ACTION_MARKET_OPEN);
   if (!fee) throw new Error("No enabled LeverUp market-open execution-fee token has enough balance/allowance.");
 
   const { publicClient } = clients();

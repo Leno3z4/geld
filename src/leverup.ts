@@ -247,7 +247,6 @@ export async function getLeverUpQuote(symbol: string, marginMon: number, leverag
   const notionalUsd = marginUsd * leverage;
   const openFeePct = leverage >= 500 ? 0 : 0.0003;
   const openFeeMon = notionalUsd * openFeePct / Math.max(monPrice, 1e-18);
-  const amountInMon = marginMon + openFeeMon;
   if (notionalUsd < config.leverUpMinNotionalUsd) {
     throw new Error(`Minimum configured LeverUp notional is $${config.leverUpMinNotionalUsd}; calculated $${notionalUsd.toFixed(4)}`);
   }
@@ -304,7 +303,8 @@ export async function openLeverUpMonTrade(symbol: string, marginMon: number, lev
 
   const actionValues = [
     pair.base, isLong, WMON, LVMON, amountIn, q.qty,
-    parseUnits(entry.toFixed(18), 18), sl, tp, 0, 0n
+    parseUnits((entry * (isLong ? 1 + Math.min(config.slippagePct, 1) / 100 : 1 - Math.min(config.slippagePct, 1) / 100)).toFixed(18), 18),
+    sl, tp, 0, 0n
   ];
 
   const intentHash = await submitIntent(ACTION_MARKET_OPEN, account.address, actionValues, fee.feeToken, fee.antiDdosFee);

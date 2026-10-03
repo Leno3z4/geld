@@ -170,6 +170,9 @@ export const config = {
   // LeverUp supports an ALL permission wildcard. GELD accepts ALL or an explicit bitmask.
   // Default is ALL because this hosted agent is dedicated to GELD.
   leverUpAgentPermissionMask: bigint("LEVERUP_AGENT_PERMISSION_MASK", (2n ** 256n) - 1n),
+  // Auto-approve only the exact WMON/fee-token amount needed immediately before a live LeverUp trade.
+  // This never grants an unlimited allowance.
+  leverUpAutoApprove: bool("LEVERUP_AUTO_APPROVE", true),
   leverUpPythHermesUrl: process.env.LEVERUP_PYTH_HERMES_URL ?? "https://pyth.dourolabs.app/hermes",
   leverUpPythApiKey: process.env.PYTH_API_KEY ?? "",
   leverUpDefaultLeverage: Math.max(1, Math.floor(num("LEVERUP_DEFAULT_LEVERAGE", 10))),

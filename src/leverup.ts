@@ -23,6 +23,10 @@ const ERC20_ABI = parseAbi([
   "function deposit() payable"
 ]);
 
+const APPROVAL_ABI = parseAbi([
+  "function approve(address spender,uint256 amount) returns (bool)"
+]);
+
 const AGENT_AUTH_ABI = [{
   type: "function",
   name: "getAgentAuth",
@@ -251,6 +255,37 @@ async function refreshFeeConfig(force = false): Promise<FeeOption[]> {
   return options;
 }
 
+async function approveExact(token: Address, required: bigint, label: string) {
+  const { account, publicClient, walletClient } = clients();
+  const current = await publicClient.readContract({
+    address: token,
+    abi: ERC20_ABI,
+    functionName: "allowance",
+    args: [account.address, ONECLICK_DIAMOND]
+  });
+  if (current >= required) return null;
+
+  const approvalHash = await walletClient.writeContract({
+    address: token,
+    abi: APPROVAL_ABI,
+    functionName: "approve",
+    args: [ONECLICK_DIAMOND, required]
+  });
+
+  await publicClient.waitForTransactionReceipt({ hash: approvalHash, confirmations: 1 });
+
+  const updated = await publicClient.readContract({
+    address: token,
+    abi: ERC20_ABI,
+    functionName: "allowance",
+    args: [account.address, ONECLICK_DIAMOND]
+  });
+  if (updated < required) {
+    throw new Error(label + " approval did not reach the required allowance; tx " + approvalHash);
+  }
+  return approvalHash;
+}
+
 async function inspectFeeOptions(additionalSpend: bigint, action = ACTION_MARKET_OPEN) {
   const { account, publicClient } = clients();
   const options = (await refreshFeeConfig()).filter((x) => x.action === action);
@@ -438,7 +473,7 @@ export async function openLeverUpMonTrade(symbol: string, marginMon: number, lev
   if (isLong && limitPriceUsd >= entry) throw new Error("Long limit price must be below market");
   if (!isLong && limitPriceUsd <= entry) throw new Error("Short limit price must be above market");
 
-  const readiness = await getLeverUpReadiness(pair.pairName, marginMon, leverage, ACTION_LIMIT_OPEN);
+  const readiness = await getLeverUpReadiness(pair.pairName, marginMon, leverage, ACTION_LIMIT_OPEN, config.leverUpAutoApprove);
   if (!readiness.ready) throw new Error("LeverUp live preflight blocked: " + readiness.reason);
 
   const selectedFeeToken = readiness.selectedFeeToken;
@@ -494,7 +529,8 @@ export async function openLeverUpMonTrade(symbol: string, marginMon: number, lev
     limitPriceUsd,
     pending: true,
     signerAddress: readiness.agent.signer,
-    mode: readiness.agent.mode
+    mode: readiness.agent.mode,
+    approvalTxHashes: readiness.approvalTxHashes
   };
 }
 
@@ -522,7 +558,8 @@ export async function getLeverUpReadiness(
   symbol = "MON/USD",
   marginMon = 0.005,
   leverage = 5,
-  action = ACTION_LIMIT_OPEN
+  action = ACTION_LIMIT_OPEN,
+  autoApprove = false
 ) {
   const { account, publicClient } = clients();
   const pair = await getPair(symbol);
@@ -534,18 +571,32 @@ export async function getLeverUpReadiness(
   const q = await getLeverUpQuote(pair.pairName, marginMon, leverage);
   const amountIn = parseUnits(q.marginMon.toFixed(18), 18) + parseUnits(q.openFeeMon.toFixed(18), 18);
   const feeOptions = await inspectFeeOptions(amountIn, action);
-  const selected = feeOptions.find((x) => x.ready) ?? null;
+  const selected = feeOptions.find((x) => x.balanceReady && (x.allowanceReady || autoApprove)) ?? null;
+  const approvalTxHashes: Hex[] = [];
+
+  if (autoApprove && selected && !selected.allowanceReady) {
+    const hash = await approveExact(selected.feeToken, BigInt(selected.requiredRaw), selected.actionName ?? "LeverUp execution-fee token");
+    if (hash) approvalTxHashes.push(hash);
+    selected.allowanceReady = true;
+    selected.ready = selected.balanceReady && selected.allowanceReady;
+  }
 
   const wmonBalance = await publicClient.readContract({
     address: WMON, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address]
   });
   const collateralRequired = amountIn + (selected?.sameAsCollateral ? BigInt(selected.antiDdosFeeRaw) : 0n);
-  const wmonAllowance = await publicClient.readContract({
+  let wmonAllowance = await publicClient.readContract({
     address: WMON, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND]
   });
 
+  if (autoApprove && wmonBalance >= collateralRequired && wmonAllowance < collateralRequired) {
+    const hash = await approveExact(WMON, collateralRequired, "WMON collateral");
+    if (hash) approvalTxHashes.push(hash);
+    wmonAllowance = collateralRequired;
+  }
+
   const agent = await getLeverUpAgentStatus();
-  const feeReady = Boolean(selected);
+  const feeReady = selected !== null && selected.balanceReady && selected.allowanceReady;
   const collateralReady = wmonBalance >= collateralRequired && wmonAllowance >= collateralRequired;
   const agentReady = agent.mode === "SELF_SIGNING"
     ? true
@@ -591,6 +642,8 @@ export async function getLeverUpReadiness(
     selectedFeeToken: selected?.feeToken ?? null,
     selectedFeeAntiDdosFeeRaw: selected?.antiDdosFeeRaw ?? "0",
     selectedFeeAntiDdosFeeFormatted: selected?.antiDdosFeeFormatted ?? null,
+    approvalTxHashes,
+    autoApprove,
     agent,
     enabled,
     feeReady,

@@ -251,27 +251,49 @@ async function refreshFeeConfig(force = false): Promise<FeeOption[]> {
   return options;
 }
 
-async function chooseFeeToken(additionalSpend: bigint, action = ACTION_MARKET_OPEN) {
+async function inspectFeeOptions(additionalSpend: bigint, action = ACTION_MARKET_OPEN) {
   const { account, publicClient } = clients();
   const options = (await refreshFeeConfig()).filter((x) => x.action === action);
-  if (!options.length) {
-    const all = await refreshFeeConfig(true);
-    const configured = all.filter((x) => x.action === action);
-    const name = ACTION_NAMES[action] ?? `action ${action}`;
-    if (!configured.length || configured.every((x) => !x.enabled)) {
-      throw new Error(`LeverUp ${name} is currently disabled by the live 1CT relayer`);
-    }
-  }
-  for (const option of options.sort((a, b) => a.priority - b.priority)) {
-    if (option.feeToken === ZERO) continue;
-    const [balance, allowance] = await Promise.all([
+  if (!options.length) return [];
+
+  return Promise.all(options.sort((a, b) => a.priority - b.priority).map(async (option) => {
+    const [balance, allowance, decimals] = await Promise.all([
       publicClient.readContract({ address: option.feeToken, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address] }),
-      publicClient.readContract({ address: option.feeToken, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND] })
+      publicClient.readContract({ address: option.feeToken, abi: ERC20_ABI, functionName: "allowance", args: [account.address, ONECLICK_DIAMOND] }),
+      publicClient.readContract({ address: option.feeToken, abi: ERC20_ABI, functionName: "decimals" })
     ]);
-    const required = BigInt(option.antiDdosFee) + (option.feeToken.toLowerCase() === WMON.toLowerCase() ? additionalSpend : 0n);
-    if (balance >= required && allowance >= required) return { feeToken: option.feeToken, antiDdosFee: BigInt(option.antiDdosFee) };
-  }
-  return null;
+    const antiDdosFee = BigInt(option.antiDdosFee);
+    const sameAsCollateral = option.feeToken.toLowerCase() === WMON.toLowerCase();
+    const required = antiDdosFee + (sameAsCollateral ? additionalSpend : 0n);
+
+    return {
+      action,
+      actionName: ACTION_NAMES[action] ?? ("action " + action),
+      feeToken: option.feeToken,
+      antiDdosFeeRaw: antiDdosFee.toString(),
+      antiDdosFeeFormatted: formatUnits(antiDdosFee, decimals),
+      decimals,
+      balanceRaw: balance.toString(),
+      balanceFormatted: formatUnits(balance, decimals),
+      allowanceRaw: allowance.toString(),
+      allowanceFormatted: formatUnits(allowance, decimals),
+      requiredRaw: required.toString(),
+      requiredFormatted: formatUnits(required, decimals),
+      sameAsCollateral,
+      balanceReady: balance >= required,
+      allowanceReady: allowance >= required,
+      ready: balance >= required && allowance >= required,
+      priority: option.priority
+    };
+  }));
+}
+
+async function chooseFeeToken(additionalSpend: bigint, action = ACTION_MARKET_OPEN) {
+  const options = await inspectFeeOptions(additionalSpend, action);
+  const selected = options.find((x) => x.ready);
+  return selected
+    ? { feeToken: selected.feeToken, antiDdosFee: BigInt(selected.antiDdosFeeRaw) }
+    : null;
 }
 
 function buildActionData(action: number, trader: Address, values: unknown[]): Hex {

@@ -418,7 +418,7 @@ export class GeldBot extends DurableObject<Env> {
   private cycleInFlight = false;
   private learningLastSampleAt = 0;
   private learningSummaryCache: any = null;
-  private learningSummaryAt = 0;
+  private learningSummaryAt = 0;\n  private leverUpReadinessAt = 0;\n  private leverUpReadiness: any = null;
 
   private async getEngine() {
     if (this.engine) return this.engine;
@@ -478,29 +478,59 @@ export class GeldBot extends DurableObject<Env> {
     try {
       const { getLeverUpMarketSnapshots, openLeverUpMonTrade, probeLeverUpMinimums } = await import("./src/leverup.js");
       const snapshots = await getLeverUpMarketSnapshots();
-      const tick = await paper.fetch(new Request("https://leverup/tick", {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ snapshots })
+      const tickResponse = await paper.fetch(new Request("https://leverup/tick", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ snapshots })
       }));
-      if (runtime.leverUpAutoLiveAfterPaper && runtime.liveTrading) {
-        const result = await tick.clone().json() as any;
-        if (result.mode === "LIVE" && Array.isArray(result.signals) && result.signals.length) {
-          const mon = snapshots.find((x:any)=>x.symbol === "MON/USD")?.price ?? 0;
-          if (mon > 0) {
-            const probe = await probeLeverUpMinimums(result.signals[0].symbol, result.signals[0].leverage);
-            const accepted = probe.firstAccepted as any;
-            if (accepted && accepted.marginUsd > 0) {
-              const signal = result.signals[0];
-              const marginMon = accepted.marginUsd / mon;
-              const opened = await openLeverUpMonTrade(signal.symbol, marginMon, signal.leverage, signal.side === "LONG", signal.stop, signal.take);
-              await paper.fetch(new Request("https://leverup/live-opened", {
-                method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ symbol: signal.symbol, txHash: opened.txHash })
-              }));
-            }
-          }
+      const tick = await tickResponse.json() as any;
+      if (tick.mode !== "LIVE" || !runtime.leverUpAutoLiveAfterPaper || !runtime.liveTrading) return;
+
+      if (!this.leverUpReadiness || Date.now() - this.leverUpReadinessAt >= 10 * 60_000) {
+        try {
+          const probe = await probeLeverUpMinimums("BTC/USD", 5);
+          this.leverUpReadiness = {
+            checkedAt: Date.now(),
+            ok: Boolean(probe.firstAccepted),
+            firstAcceptedMarginMon: probe.firstAccepted?.marginMon ?? null,
+            balanceMon: probe.balanceMon,
+            maxAllowedMarginMon: probe.maxAllowedMarginMon,
+            results: probe.results
+          };
+          this.leverUpReadinessAt = Date.now();
+          await paper.fetch(new Request("https://leverup/readiness", {
+            method:"POST", headers:{"content-type":"application/json"},
+            body:JSON.stringify({ok:this.leverUpReadiness.ok,firstAcceptedMarginMon:this.leverUpReadiness.firstAcceptedMarginMon,detail:this.leverUpReadiness})
+          }));
+        } catch (error) {
+          this.leverUpReadiness = {checkedAt:Date.now(),ok:false,error:String(error)};
+          this.leverUpReadinessAt = Date.now();
+          await paper.fetch(new Request("https://leverup/readiness", {
+            method:"POST", headers:{"content-type":"application/json"},
+            body:JSON.stringify({ok:false,detail:this.leverUpReadiness})
+          }));
+          return;
         }
       }
+      if (!this.leverUpReadiness?.ok) return;
+
+      const signal = tick.signals?.[0];
+      if (!signal) return;
+      const minMargin = Number(this.leverUpReadiness.firstAcceptedMarginMon ?? 0);
+      const maxMargin = Number(this.leverUpReadiness.maxAllowedMarginMon ?? 0);
+      const marginMon = Math.min(maxMargin, Math.max(minMargin, Number(signal.marginMon)));
+      if (!(marginMon > 0)) return;
+
+      const opened = await openLeverUpMonTrade(
+        signal.symbol, marginMon, Number(signal.leverage),
+        signal.side === "LONG", Number(signal.stop), Number(signal.take)
+      );
+      await paper.fetch(new Request("https://leverup/live-opened", {
+        method:"POST", headers:{"content-type":"application/json"},
+        body:JSON.stringify({symbol:signal.symbol,txHash:opened.txHash})
+      }));
     } catch (error) {
-      console.error("LeverUp paper tick failed:", error);
+      console.error("LeverUp paper/live tick failed:", error);
     }
   }
 

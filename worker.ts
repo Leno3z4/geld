@@ -3,6 +3,7 @@ import { DurableObject } from "cloudflare:workers";
 interface Env {
   GELD_BOT: DurableObjectNamespace<GeldBot>;
   GELD_STATE: DurableObjectNamespace<GeldState>;
+  GELD_HIGHCAP_LEARNING: DurableObjectNamespace<GeldHighCapLearning>;
 
   GELD_API_SECRET?: string;
   GELD_CONFIG?: string;
@@ -353,6 +354,8 @@ async function getRuntimeConfig(env: Env) {
   return (await import("./src/config.js")).config;
 }
 
+export class GeldHighCapLearning extends (await import("./src/highcap-learning.js")).GeldHighCapLearning {}
+
 export class GeldState extends DurableObject<Env> {
   async fetch(request: Request) {
     const secret = this.env.STATE_SYNC_SECRET;
@@ -380,6 +383,9 @@ export class GeldState extends DurableObject<Env> {
 export class GeldBot extends DurableObject<Env> {
   private engine: any = null;
   private cycleInFlight = false;
+  private learningLastSampleAt = 0;
+  private learningSummaryCache: any = null;
+  private learningSummaryAt = 0;
 
   private async getEngine() {
     if (this.engine) return this.engine;
@@ -387,9 +393,47 @@ export class GeldBot extends DurableObject<Env> {
     hydrateProcessEnv(this.env);
     const { TradingEngine } = await import("./src/engine.js");
 
-    this.engine = new TradingEngine();
+    const learning = this.env.GELD_HIGHCAP_LEARNING.get(this.env.GELD_HIGHCAP_LEARNING.idFromName("highcap-main"));
+    this.engine = new TradingEngine({
+      getSummary: async () => {
+        if (this.learningSummaryCache && Date.now() - this.learningSummaryAt < 15 * 60_000) return this.learningSummaryCache;
+        try {
+          const response = await learning.fetch(new Request("https://learning/summary"));
+          if (response.ok) {
+            this.learningSummaryCache = await response.json();
+            this.learningSummaryAt = Date.now();
+          }
+        } catch {}
+        return this.learningSummaryCache;
+      }
+    });
     await this.engine.init();
     return this.engine;
+  }
+
+  private async sampleHighCaps(engine:any) {
+    const now=Date.now();
+    if(now-this.learningLastSampleAt < 5*60_000) return;
+    this.learningLastSampleAt=now;
+    const state=engine.snapshot();
+    const samples=Object.values(state.tokens)
+      .filter((t:any)=>(t.marketCapUsd??0)>=250000 && (t.priceMon??0)>0)
+      .sort((a:any,b:any)=>(b.localScore??0)-(a.localScore??0))
+      .slice(0,30)
+      .map((t:any)=>({
+        ts:now, token:t.token, symbol:t.symbol, marketCapUsd:t.marketCapUsd??0,
+        liquidityUsd:t.liquidityUsd??0,
+        volume5mUsd:t.apiVolume5mUsd??((t.volume5mMon??0)*(t.monUsdPrice??0)),
+        buySellRatio5m:t.buySellRatio5m??0, buyMakers5m:t.apiBuyMakers5m??0,
+        trend1hPct:t.trendPct1h??0, trend4hPct:t.trendPct4h??0, priceMon:t.priceMon??0,
+        dayHighPriceMon:t.dayHighPriceMon??0, dayLowPriceMon:t.dayLowPriceMon??0,
+        dayAvgPriceMon:t.dayAvgPriceMon??0, strategy:t.entryStrategy, localScore:t.localScore??0
+      }));
+    if(!samples.length) return;
+    try {
+      await this.env.GELD_HIGHCAP_LEARNING.get(this.env.GELD_HIGHCAP_LEARNING.idFromName("highcap-main"))
+        .fetch(new Request("https://learning/observe",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({samples})}));
+    } catch {}
   }
 
   private async runRiskCycle() {
@@ -397,7 +441,10 @@ export class GeldBot extends DurableObject<Env> {
     this.cycleInFlight = true;
     try {
       const engine = await this.getEngine();
-      if (engine.snapshot().running) await engine.runRiskCycle();
+      if (engine.snapshot().running) {
+        await engine.runRiskCycle();
+        await this.sampleHighCaps(engine);
+      }
     } finally {
       this.cycleInFlight = false;
       if (this.engine?.snapshot()?.running) {

@@ -596,7 +596,7 @@ export async function getLeverUpReadiness(
   }
 
   const agent = await getLeverUpAgentStatus();
-  const feeReady = Boolean(selected) && selected.balanceReady && selected.allowanceReady;
+  const feeReady = selected !== null && selected.balanceReady && selected.allowanceReady;
   const collateralReady = wmonBalance >= collateralRequired && wmonAllowance >= collateralRequired;
   const agentReady = agent.mode === "SELF_SIGNING"
     ? true

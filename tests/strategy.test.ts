@@ -236,7 +236,7 @@ test("daily mean reversion is one distinct entry strategy", () => {
     daySamples: 60, dayLowPriceMon: 0.98, dayAvgPriceMon: 1.12,
     distanceFromDayLowPct: 2.04, distanceFromDayAvgPct: -10.71,
     dipPct: 15, trendPct1h: -1, trendPct4h: 2, reboundPct1h: 2,
-    buySellRatio5m: 1.1, volume5mMon: 1000, volumeAcceleration5m: 1.2, monUsdPrice: 0.033
+    buySellRatio5m: 1.1, volume5mMon: 8000, volumeAcceleration5m: 1.2, monUsdPrice: 0.033
   };
   assert.equal(selectEntryStrategy(token), "DAILY_MEAN_REVERSION");
 });
@@ -352,9 +352,13 @@ test("allows an established dip only after rebound and buying flow confirm", () 
     liquidityUsd: 90000, liquidityMon: 3000000, marketCapUsd: 150000,
     volumeMon: 5000, changePct: 2,
     dipPct: 14, trendPct1h: 3, trendPct4h: 1,
-    reboundPct1h: 2.5, buySellRatio5m: 1.25, volume5mMon: 1000,
+    reboundPct1h: 2.5, buySellRatio5m: 1.25, volume5mMon: 10000,
     monUsdPrice: 0.033, dayLowPriceMon: 0.10, dayAvgPriceMon: 0.112,
-    distanceFromDayLowPct: 3, distanceFromDayAvgPct: -8, daySamples: 60
+    distanceFromDayLowPct: 3, distanceFromDayAvgPct: -8, daySamples: 60,
+    priceHistory: [
+      { ts: now - 30 * 60 * 1000, priceMon: 0.10 },
+      { ts: now, priceMon: 0.103 }
+    ]
   };
   const d = entryGateDiagnostics(token, {
     minEstablishedAgeMinutes: 30, minLiquidityUsd: 5000,

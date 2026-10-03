@@ -157,6 +157,7 @@ interface Env {
   LEVERUP_DAILY_LOSS_LIMIT_PCT?: string;
   LEVERUP_MAX_CONSECUTIVE_LOSSES?: string;
   LEVERUP_COOLDOWN_MS?: string;
+  LEVERUP_AUTO_LIVE_AFTER_PAPER?: string;
 }
 
 function isTrue(value?: string) {
@@ -370,7 +371,8 @@ function hydrateProcessEnv(env: Env) {
     LEVERUP_RISK_PER_TRADE_PCT: valueFor("LEVERUP_RISK_PER_TRADE_PCT", env.LEVERUP_RISK_PER_TRADE_PCT),
     LEVERUP_DAILY_LOSS_LIMIT_PCT: valueFor("LEVERUP_DAILY_LOSS_LIMIT_PCT", env.LEVERUP_DAILY_LOSS_LIMIT_PCT),
     LEVERUP_MAX_CONSECUTIVE_LOSSES: valueFor("LEVERUP_MAX_CONSECUTIVE_LOSSES", env.LEVERUP_MAX_CONSECUTIVE_LOSSES),
-    LEVERUP_COOLDOWN_MS: valueFor("LEVERUP_COOLDOWN_MS", env.LEVERUP_COOLDOWN_MS)
+    LEVERUP_COOLDOWN_MS: valueFor("LEVERUP_COOLDOWN_MS", env.LEVERUP_COOLDOWN_MS),
+    LEVERUP_AUTO_LIVE_AFTER_PAPER: valueFor("LEVERUP_AUTO_LIVE_AFTER_PAPER", env.LEVERUP_AUTO_LIVE_AFTER_PAPER)
   };
 
   for (const [key, value] of Object.entries(mapping)) {
@@ -472,11 +474,29 @@ export class GeldBot extends DurableObject<Env> {
     if (!runtime.leverUpEnabled) return;
     const paper = this.env.GELD_LEVERUP_PAPER.get(this.env.GELD_LEVERUP_PAPER.idFromName("leverup-main"));
     try {
-      const { getLeverUpMarketSnapshots } = await import("./src/leverup.js");
+      const { getLeverUpMarketSnapshots, openLeverUpMonTrade, probeLeverUpMinimums } = await import("./src/leverup.js");
       const snapshots = await getLeverUpMarketSnapshots();
-      await paper.fetch(new Request("https://leverup/tick", {
+      const tick = await paper.fetch(new Request("https://leverup/tick", {
         method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ snapshots })
       }));
+      if (runtime.leverUpAutoLiveAfterPaper && runtime.liveTrading) {
+        const result = await tick.clone().json() as any;
+        if (result.mode === "LIVE" && Array.isArray(result.signals) && result.signals.length) {
+          const mon = snapshots.find((x:any)=>x.symbol === "MON/USD")?.price ?? 0;
+          if (mon > 0) {
+            const probe = await probeLeverUpMinimums(result.signals[0].symbol, result.signals[0].leverage);
+            const accepted = probe.firstAccepted as any;
+            if (accepted && accepted.marginUsd > 0) {
+              const signal = result.signals[0];
+              const marginMon = accepted.marginUsd / mon;
+              const opened = await openLeverUpMonTrade(signal.symbol, marginMon, signal.leverage, signal.side === "LONG", signal.stop, signal.take);
+              await paper.fetch(new Request("https://leverup/live-opened", {
+                method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ symbol: signal.symbol, txHash: opened.txHash })
+              }));
+            }
+          }
+        }
+      }
     } catch (error) {
       console.error("LeverUp paper tick failed:", error);
     }

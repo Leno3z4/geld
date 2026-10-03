@@ -159,6 +159,9 @@ export const config = {
 
   leverUpEnabled: bool("LEVERUP_ENABLED", false),
   leverUpDiamond: (process.env.LEVERUP_DIAMOND ?? "0xea1b8E4aB7f14F7dCA68c5B214303B13078FC5ec") as `0x${string}`,
+  leverUpAgentPrivateKey: process.env.LEVERUP_AGENT_PRIVATE_KEY ?? "",
+  // LIMIT_OPEN (2) + MARKET_CLOSE (1) = bitmask 6. Explicit mask; never use a wildcard by default.
+  leverUpAgentPermissionMask: BigInt(process.env.LEVERUP_AGENT_PERMISSION_MASK ?? "6"),
   leverUpPythHermesUrl: process.env.LEVERUP_PYTH_HERMES_URL ?? "https://pyth.dourolabs.app/hermes",
   leverUpPythApiKey: process.env.PYTH_API_KEY ?? "",
   leverUpDefaultLeverage: Math.max(1, Math.floor(num("LEVERUP_DEFAULT_LEVERAGE", 10))),
@@ -166,7 +169,6 @@ export const config = {
   leverUpMinNotionalUsd: Math.max(0, num("LEVERUP_MIN_NOTIONAL_USD", 0)),
   // Optional local safety floor; 0 means no invented minimum beyond LeverUp validation.
   leverUpMinMarginUsd: Math.max(0, num("LEVERUP_MIN_MARGIN_USD", 0)),
-  // Do not impose a made-up protocol minimum. LeverUp may reject undersized orders itself;\n  // this value is only an optional local safety floor.\n  leverUpMinMarginUsd: Math.max(0, num("LEVERUP_MIN_MARGIN_USD", 0)),
   leverUpMaxMarginPct: Math.min(25, Math.max(1, num("LEVERUP_MAX_MARGIN_PCT", 10))),
   leverUpRiskPerTradePct: Math.min(5, Math.max(0.25, num("LEVERUP_RISK_PER_TRADE_PCT", 1))),
   leverUpDailyLossLimitPct: Math.min(10, Math.max(1, num("LEVERUP_DAILY_LOSS_LIMIT_PCT", 4))),

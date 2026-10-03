@@ -12,7 +12,8 @@
     "start": "node dist/src/index.js",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test tests/strategy.test.ts",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "generate:leverup-agent": "node scripts/generate-leverup-agent.mjs"
   },
   "dependencies": {
     "@google/genai": "latest",

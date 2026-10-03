@@ -126,8 +126,8 @@ async function getAgentAuthorization(trader: Address, agent: Address) {
   });
   const requiredPermissions = config.leverUpAgentPermissionMask;
   const authorized = auth.agent !== ZERO;
-  const hasConfiguredPermissions = auth.permissions === MAX_UINT256
-    || (auth.permissions & requiredPermissions) === requiredPermissions;
+  const hasConfiguredPermissions = auth.permissions !== MAX_UINT256
+    && (auth.permissions & requiredPermissions) === requiredPermissions;
   return {
     authorized,
     agent: auth.agent as Address,
@@ -324,7 +324,7 @@ async function submitIntent(action: number, trader: Address, values: unknown[], 
     const auth = await getAgentAuthorization(trader, signer.address);
     const requiredBit = 1n << BigInt(action);
     const permissions = BigInt(auth.permissions);
-    const hasBit = permissions === MAX_UINT256 || (permissions & requiredBit) === requiredBit;
+    const hasBit = permissions !== MAX_UINT256 && (permissions & requiredBit) === requiredBit;
     if (!auth.authorized || !hasBit) {
       throw new Error("LeverUp agent is not authorized for action " + action + "; required permission bit 0x" + requiredBit.toString(16));
     }

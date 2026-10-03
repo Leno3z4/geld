@@ -15,6 +15,13 @@ function csv(name: string) {
   return (process.env[name] ?? "").split(",").map((x) => x.trim()).filter(Boolean);
 }
 
+function bigint(name: string, fallback: bigint) {
+  const value = (process.env[name] ?? "").trim();
+  if (!value) return fallback;
+  if (value.toUpperCase() === "ALL") return (2n ** 256n) - 1n;
+  try { return BigInt(value); } catch { return fallback; }
+}
+
 export const config = {
   network: "mainnet" as const,
   chainId: 143,
@@ -160,8 +167,9 @@ export const config = {
   leverUpEnabled: bool("LEVERUP_ENABLED", false),
   leverUpDiamond: (process.env.LEVERUP_DIAMOND ?? "0xea1b8E4aB7f14F7dCA68c5B214303B13078FC5ec") as `0x${string}`,
   leverUpAgentPrivateKey: process.env.LEVERUP_AGENT_PRIVATE_KEY ?? "",
-  // LIMIT_OPEN (2) + MARKET_CLOSE (1) = bitmask 6. Explicit mask; never use a wildcard by default.
-  leverUpAgentPermissionMask: BigInt(process.env.LEVERUP_AGENT_PERMISSION_MASK ?? "6"),
+  // LeverUp supports an ALL permission wildcard. GELD accepts ALL or an explicit bitmask.
+  // Default is ALL because this hosted agent is dedicated to GELD.
+  leverUpAgentPermissionMask: bigint("LEVERUP_AGENT_PERMISSION_MASK", (2n ** 256n) - 1n),
   leverUpPythHermesUrl: process.env.LEVERUP_PYTH_HERMES_URL ?? "https://pyth.dourolabs.app/hermes",
   leverUpPythApiKey: process.env.PYTH_API_KEY ?? "",
   leverUpDefaultLeverage: Math.max(1, Math.floor(num("LEVERUP_DEFAULT_LEVERAGE", 10))),

@@ -302,7 +302,7 @@ export async function openLeverUpMonTrade(symbol: string, marginMon: number, lev
   if (!isLong && tp && takeProfitUsd >= entry) throw new Error("Short TP must be below entry");
 
   const amountIn = parseUnits(q.marginMon.toFixed(18), 18) + parseUnits(q.openFeeMon.toFixed(18), 18);
-  const fee = await chooseFeeToken(amountIn, ACTION_MARKET_OPEN);
+  const fee = await chooseFeeToken(amountIn, action);
   if (!fee) throw new Error("No enabled LeverUp market-open execution-fee token has enough balance/allowance.");
 
   const { publicClient } = clients();
@@ -343,7 +343,7 @@ export async function getLeverUpMarketSnapshots() {
   });
 }
 
-export async function probeLeverUpMinimums(symbol = "MON/USD", leverage = 5) {
+export async function probeLeverUpMinimums(symbol = "MON/USD", leverage = 5, action = ACTION_MARKET_OPEN) {
   const { account, publicClient } = clients();
   const pair = await getPair(symbol);
   const [balanceMon, monPrice] = await Promise.all([
@@ -377,6 +377,8 @@ export async function probeLeverUpMinimums(symbol = "MON/USD", leverage = 5) {
   return {
     mode: "1CT_SELF_SIGNING",
     oracle: "LEVERUP_RELAYER",
+    action,
+    actionName: ACTION_NAMES[action] ?? `action ${action}`,
     balanceMon,
     monPriceUsd: monPrice,
     maxAllowedMarginMon,

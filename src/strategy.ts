@@ -651,6 +651,43 @@ function money(value: number) {
   return "$" + value.toFixed(0);
 }
 
+export function isEstablishedQualityCandidate(
+  token: TokenSnapshot,
+  rules: {
+    minAgeMinutes: number;
+    minLiquidityUsd: number;
+    minMarketCapUsd: number;
+    minHolders: number;
+    minVolumeUsd: number;
+    minLocalScore: number;
+  }
+) {
+  const age = ageMinutes(token);
+  const liquidity = token.liquidityUsd ?? 0;
+  const marketCap = token.marketCapUsd ?? 0;
+  const holders = token.holders ?? 0;
+  const volumeUsd = (token.volumeMon ?? 0) * (token.monUsdPrice ?? 0);
+  const trend1h = token.trendPct1h ?? 0;
+  const trend4h = token.trendPct4h ?? 0;
+
+  // Established continuation lane: this is deliberately separate from the
+  // dip/reversal lane. It still requires meaningful liquidity, market depth,
+  // age and positive multi-hour momentum, but does not require a fresh 5m
+  // volume burst. AI remains the final BUY decision.
+  return token.createdAt > 0 &&
+    token.graduated &&
+    !token.locked &&
+    age >= rules.minAgeMinutes &&
+    liquidity >= Math.max(rules.minLiquidityUsd, 5_000) &&
+    marketCap >= rules.minMarketCapUsd &&
+    holders >= rules.minHolders &&
+    volumeUsd >= Math.max(rules.minVolumeUsd, 10_000) &&
+    trend1h >= 0.25 &&
+    trend1h <= config.trendMax1hPct &&
+    trend4h >= Math.max(rules.minTrend4hPct, 0.5) &&
+    token.localScore >= rules.minLocalScore;
+}
+
 export function entryGateDiagnostics(
   token: TokenSnapshot,
   rules: EntryGateRules,
@@ -726,6 +763,14 @@ export function entryGateDiagnostics(
     (token.volume5mMon ?? 0) * (token.monUsdPrice ?? 0) >= rules.minVolumeUsd;
 
   const highCapMode = marketCapUsd >= config.highCapMinMarketCapUsd;
+  const establishedQualityEntry = isEstablishedQualityCandidate(token, {
+    minAgeMinutes: rules.minEstablishedAgeMinutes,
+    minLiquidityUsd: rules.minLiquidityUsd,
+    minMarketCapUsd: rules.minMarketCapUsd,
+    minHolders: rules.minHolders,
+    minVolumeUsd: rules.minVolumeUsd,
+    minLocalScore: rules.minLocalScore
+  });
   const highCapQualityFlow =
     highCapMode &&
     (token.apiVolume5mUsd ?? ((token.volume5mMon ?? 0) * (token.monUsdPrice ?? 0))) >= config.highCapMinVolume5mUsd &&
@@ -733,7 +778,7 @@ export function entryGateDiagnostics(
     (token.apiBuyMakers5m ?? 0) >= config.highCapMinBuyMakers5m &&
     metrics.trend4hPct >= config.highCapMinTrend4hPct;
 
-  if (!dipReversalConfirmed && !momentumEntry && !dailyMeanEntry && !flowEntry) {
+  if (!establishedQualityEntry && !dipReversalConfirmed && !momentumEntry && !dailyMeanEntry && !flowEntry) {
     if (metrics.dipPct < rules.dipMinPct) {
       blockers.push(`dip ${metrics.dipPct.toFixed(1)}% < ${rules.dipMinPct}% and momentum is not strong enough`);
     } else if (metrics.dipPct > rules.dipMaxPct) {
@@ -746,7 +791,7 @@ export function entryGateDiagnostics(
     }
   }
 
-  if (metrics.rebound1hPct < rules.recoveryMinPct) {
+  if (!establishedQualityEntry && metrics.rebound1hPct < rules.recoveryMinPct) {
     blockers.push(`rebound ${metrics.rebound1hPct.toFixed(1)}% < ${rules.recoveryMinPct}%`);
   }
 
@@ -763,6 +808,7 @@ export function entryGateDiagnostics(
   }
 
   if (
+    !establishedQualityEntry &&
     highCapMode &&
     (token.entryStrategy === "MOMENTUM" || token.entryStrategy === "FLOW") &&
     !highCapQualityFlow
@@ -872,6 +918,15 @@ export function shouldOpen(
     },
     confidence
   );
+  if (confidence < minConfidence) return false;
+  if (isEstablishedQualityCandidate(token, {
+    minAgeMinutes: minEstablishedAgeMinutes,
+    minLiquidityUsd,
+    minMarketCapUsd,
+    minHolders,
+    minVolumeUsd,
+    minLocalScore: minScore
+  })) return true;
   return diagnostics.blockers.length === 0;
 }
 

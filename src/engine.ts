@@ -20,7 +20,7 @@ import {
 } from "./nadfun.js";
 import { StateStore } from "./store.js";
 import { GeminiBrain } from "./ai.js";
-import { SeasonalityModel, entryGateDiagnostics, positionExitSignal, scoreToken, selectEntryStrategy, shouldClose, shouldOpen, shouldWatch, updateMarketMetrics, curveProgressPct, isLowCapMomentumCandidate, lowCapMomentumBlockers, isEarlyLaunchCandidate, earlyLaunchBlockers, entrySizeVolatilityFactor, type EntryGateRules, type PositionExitRules } from "./strategy.js";
+import { SeasonalityModel, entryGateDiagnostics, positionExitSignal, scoreToken, selectEntryStrategy, shouldClose, shouldOpen, shouldWatch, updateMarketMetrics, curveProgressPct, isLowCapMomentumCandidate, lowCapMomentumBlockers, isEarlyLaunchCandidate, earlyLaunchBlockers, entrySizeVolatilityFactor, type EntryGateRules, type PositionExitRules , isEstablishedQualityCandidate} from "./strategy.js";
 import type { BotState, Position, TokenSnapshot } from "./types.js";
 import { formatUnits } from "viem";
 
@@ -237,6 +237,11 @@ export class TradingEngine {
         s.stats.entryCircuitBreakerUntil = now + 24 * 60 * 60 * 1000;
         s.stats.entryCircuitBreakerReason =
           "Daily loss limit reached: " + s.stats.dailyRiskDrawdownPct.toFixed(2) + "% <= -" + limit.toFixed(2) + "%";
+      } else if ((s.stats.entryCircuitBreakerUntil ?? 0) <= now) {
+        // An expired breaker must not remain persisted as an active-looking
+        // reason after the loss window has ended.
+        s.stats.entryCircuitBreakerUntil = undefined;
+        s.stats.entryCircuitBreakerReason = undefined;
       }
 
       active = (s.stats.entryCircuitBreakerUntil ?? 0) > now;
@@ -774,7 +779,15 @@ export class TradingEngine {
         this.updateCreatorHistory(token);
         this.store.upsertToken(token);
 
-        const entrySetup = lowCapBaseCandidate || diagnostics.blockers.length === 0;
+        const establishedQualityEntry = isEstablishedQualityCandidate(token, {
+          minAgeMinutes: config.minEstablishedAgeMinutes,
+          minLiquidityUsd: config.minLiquidityUsd,
+          minMarketCapUsd: config.minMarketCapUsd,
+          minHolders: config.minHolders,
+          minVolumeUsd: config.minVolumeUsd,
+          minLocalScore: config.minLocalScore
+        });
+        const entrySetup = lowCapBaseCandidate || establishedQualityEntry || diagnostics.blockers.length === 0;
         if (entrySetup) candidates.push(token);
         token.lastEnrichedAt = Date.now();
       }
@@ -970,12 +983,14 @@ export class TradingEngine {
       await phase("POLL_NEW_EVENTS", () => this.pollNewEvents());
       await phase("DISCOVER_TOKENS", () => this.discoverEstablishedTokens());
 
-      if (entriesBlocked) {
-        this.store.update((s) => {
+      this.store.update((s) => {
+        if (entriesBlocked) {
           s.stats.lastIdleReason =
             "ENTRY CIRCUIT BREAKER: scanning/monitoring continues; new entries blocked";
-        });
-      }
+        } else if (s.stats.lastIdleReason?.startsWith("ENTRY CIRCUIT BREAKER:")) {
+          s.stats.lastIdleReason = "ENTRY GATES ACTIVE: waiting for an AI-approved established/dip setup";
+        }
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.store.update((s) => {

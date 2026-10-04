@@ -431,6 +431,8 @@ export class GeldBot extends DurableObject<Env> {
   private learningSummaryAt = 0;
   private leverUpReadinessAt = 0;
   private leverUpReadiness: any = null;
+  private lastFullCycleAttemptAt = 0;
+  private lastLeverUpPaperAt = 0;
 
   private async getEngine() {
     if (this.engine) return this.engine;
@@ -553,8 +555,18 @@ export class GeldBot extends DurableObject<Env> {
       const engine = await this.getEngine();
       if (engine.snapshot().running) {
         await engine.runRiskCycle();
+
+        // LeverUp market polling is useful, but running it every 10s adds a
+        // burst of REST/RPC requests to the same Worker invocation budget.
+        // Keep position/risk management fast and sample LeverUp at most once
+        // per minute.
+        const now = Date.now();
+        if (now - this.lastLeverUpPaperAt >= 60_000) {
+          this.lastLeverUpPaperAt = now;
+          await this.runLeverUpPaper();
+        }
+
         await this.sampleHighCaps(engine);
-        await this.runLeverUpPaper();
       }
     } finally {
       this.cycleInFlight = false;
@@ -567,16 +579,42 @@ export class GeldBot extends DurableObject<Env> {
   private async runFullCycle() {
     if (this.cycleInFlight) return;
     this.cycleInFlight = true;
+    this.lastFullCycleAttemptAt = Date.now();
     try {
       const engine = await this.getEngine();
-      if (engine.snapshot().running) await engine.runScheduledCycle();
+      if (engine.snapshot().running) {
+        await engine.runScheduledCycle();
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("GELD full cycle failed:", error);
+      if (this.engine) {
+        this.engine.store.update((s: any) => {
+          s.stats.lastScheduledError = "WORKER: " + message;
+          s.stats.lastScheduledPhaseErrorAt = Date.now();
+          s.stats.lastError = message;
+        });
+        try { await this.engine.store.save(); } catch {}
+      }
     } finally {
       this.cycleInFlight = false;
     }
   }
 
   async alarm() {
-    await this.runRiskCycle();
+    const engine = await this.getEngine();
+    if (!engine.snapshot().running) return;
+
+    const now = Date.now();
+    const lastFullCycle = engine.snapshot().stats.lastCycleAt ?? 0;
+    // The 1-minute cron remains a second trigger, but the Durable Object alarm
+    // is the reliable heartbeat. If the cron trigger is delayed/missed, the
+    // alarm promotes itself to a full market/discovery cycle.
+    const fullCycleDue =
+      now - Math.max(lastFullCycle, this.lastFullCycleAttemptAt) >= 55_000;
+
+    if (fullCycleDue) await this.runFullCycle();
+    else await this.runRiskCycle();
   }
 
   async fetch(request: Request) {
@@ -597,11 +635,19 @@ export class GeldBot extends DurableObject<Env> {
 
       if (!engine.snapshot().running) {
         await engine.startScheduled();
-        await this.ctx.storage.setAlarm(Date.now() + (await getRuntimeConfig(this.env)).fastCycleMs);
       } else {
-        await this.runFullCycle();
+        const now = Date.now();
+        const lastFullCycle = engine.snapshot().stats.lastCycleAt ?? 0;
+        if (now - Math.max(lastFullCycle, this.lastFullCycleAttemptAt) >= 55_000) {
+          await this.runFullCycle();
+        } else {
+          // Cron is a secondary heartbeat. Keep it cheap when the DO alarm has
+          // already completed a recent full cycle.
+          await this.runRiskCycle();
+        }
       }
 
+      await this.ctx.storage.setAlarm(Date.now() + (await getRuntimeConfig(this.env)).fastCycleMs);
       return Response.json(engine.snapshot());
     }
 
@@ -625,6 +671,12 @@ export class GeldBot extends DurableObject<Env> {
           openPositions: Object.values(state.positions).filter((p: any) => p.status === "OPEN").length,
           chainId: 143,
           lastCycleAt: state.stats.lastCycleAt ?? 0,
+          lastScheduledAttemptAt: state.stats.lastScheduledAttemptAt ?? 0,
+          lastScheduledPhase: state.stats.lastScheduledPhase ?? null,
+          lastScheduledPhaseAt: state.stats.lastScheduledPhaseAt ?? 0,
+          lastScheduledPhaseErrorAt: state.stats.lastScheduledPhaseErrorAt ?? 0,
+          lastScheduledDurationMs: state.stats.lastScheduledDurationMs ?? 0,
+          lastScheduledError: state.stats.lastScheduledError ?? null,
           minLiquidityUsd: runtimeConfig.minLiquidityUsd,
           minMarketCapUsd: runtimeConfig.minMarketCapUsd
         });

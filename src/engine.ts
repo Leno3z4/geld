@@ -209,16 +209,23 @@ export class TradingEngine {
   private entryCircuitBreakerActive() {
     // Daily drawdown is an entry circuit breaker. It never blocks exits:
     // protecting existing capital takes priority over opening another trade.
+    // A prior day's breaker must not bleed into the next UTC risk day.
     const now = Date.now();
     const today = new Date(now).toISOString().slice(0, 10);
     const state = this.store.get();
     const equity = Math.max(0, state.balanceMon + state.openExposureMon);
+    let active = false;
 
     this.store.update((s) => {
-      if (s.stats.dailyRiskDay !== today || !(s.stats.dailyRiskStartEquityMon! > 0)) {
+      const newRiskDay = s.stats.dailyRiskDay !== today || !(s.stats.dailyRiskStartEquityMon! > 0);
+      if (newRiskDay) {
         s.stats.dailyRiskDay = today;
         s.stats.dailyRiskStartEquityMon = equity;
         s.stats.dailyRiskDrawdownPct = 0;
+        // Reset yesterday's entry lock at the UTC day boundary. The new day
+        // gets its own loss budget from the current equity snapshot.
+        s.stats.entryCircuitBreakerUntil = undefined;
+        s.stats.entryCircuitBreakerReason = undefined;
       } else {
         const startEquity = s.stats.dailyRiskStartEquityMon!;
         s.stats.dailyRiskDrawdownPct =
@@ -226,20 +233,16 @@ export class TradingEngine {
       }
 
       const limit = Math.abs(config.dailyLossLimitPct);
-      if (limit > 0 && s.stats.dailyRiskDrawdownPct <= -limit) {
-        s.stats.entryCircuitBreakerUntil = Date.now() + 24 * 60 * 60 * 1000;
+      if (!newRiskDay && limit > 0 && s.stats.dailyRiskDrawdownPct <= -limit) {
+        s.stats.entryCircuitBreakerUntil = now + 24 * 60 * 60 * 1000;
         s.stats.entryCircuitBreakerReason =
           "Daily loss limit reached: " + s.stats.dailyRiskDrawdownPct.toFixed(2) + "% <= -" + limit.toFixed(2) + "%";
-        return;
       }
 
-      if ((s.stats.entryCircuitBreakerUntil ?? 0) <= Date.now()) {
-        s.stats.entryCircuitBreakerUntil = undefined;
-        s.stats.entryCircuitBreakerReason = undefined;
-      }
+      active = (s.stats.entryCircuitBreakerUntil ?? 0) > now;
     });
 
-    return (this.store.get().stats.entryCircuitBreakerUntil ?? 0) > Date.now();
+    return active;
   }
 
   private cleanupStalePendingExecutions() {
@@ -874,7 +877,13 @@ export class TradingEngine {
     if (!this.store.get().running) return;
 
     this.cleanupStalePendingExecutions();
-    await this.reconcileWalletPositions();
+    // Position management stays fast, but full wallet reconciliation is more
+    // expensive and does not need to run every 10s. The scheduler still uses
+    // the wallet as the source of truth, just at a bounded cadence.
+    const lastReconciliationAt = this.store.get().stats.lastReconciliationAt ?? 0;
+    if (Date.now() - lastReconciliationAt >= 30_000) {
+      await this.reconcileWalletPositions();
+    }
     await this.managePositions();
 
     this.store.update((s) => {
@@ -886,67 +895,104 @@ export class TradingEngine {
   async runScheduledCycle() {
     if (!this.store.get().running) return;
 
+    const startedAt = Date.now();
     this.aiCallsThisCycle = 0;
-    assertLiveConfig();
-
-    const persistedBlock = this.store.get().stats.lastProcessedBlock;
-
-    if (this.lastBlock === 0n) {
-      const latest = await this.publicClient.getBlockNumber();
-      const stats = this.store.get().stats;
-      const needsBackfill =
-        !stats.eventBackfillDone &&
-        stats.eventCount === 0 &&
-        Object.keys(this.store.get().tokens).length === 0;
-
-      if (needsBackfill) {
-        this.lastBlock =
-          latest > BigInt(config.eventBackfillBlocks)
-            ? latest - BigInt(config.eventBackfillBlocks)
-            : 0n;
-      } else if (persistedBlock) {
-        this.lastBlock = BigInt(persistedBlock);
-      } else {
-        this.lastBlock = latest;
-      }
-
-      if (needsBackfill) {
-        this.store.update((s) => {
-          s.stats.eventBackfillDone = true;
-        });
-      }
-    }
-
-    this.cleanupStalePendingExecutions();
-
-    await this.reconcileWalletPositions();
-    await this.managePositions();
-
-    const entriesBlocked = this.entryCircuitBreakerActive();
-
-    // Keep event/market synchronization and position review alive even when
-    // the daily entry circuit breaker is active. The BUY boundary itself also
-    // enforces the breaker, so event-driven candidates cannot bypass it.
-    await this.pollLogs();
-    await this.pollDexLogs();
-    await this.reviewOpenPositions();
-
-    await this.pollNewEvents();
-    await this.discoverEstablishedTokens();
-
-    if (entriesBlocked) {
-      this.store.update((s) => {
-        s.stats.lastIdleReason =
-          "ENTRY CIRCUIT BREAKER: scanning/monitoring continues; new entries blocked";
-      });
-    }
-
     this.store.update((s) => {
-      s.stats.lastCycleAt = Date.now();
-      s.stats.lastProcessedBlock = this.lastBlock.toString();
+      s.stats.lastScheduledAttemptAt = startedAt;
+      s.stats.lastScheduledPhase = "START";
+      s.stats.lastScheduledPhaseAt = startedAt;
+      s.stats.lastScheduledError = undefined;
     });
 
-    await this.persist();
+    try {
+      assertLiveConfig();
+
+      const persistedBlock = this.store.get().stats.lastProcessedBlock;
+
+      if (this.lastBlock === 0n) {
+        const latest = await this.publicClient.getBlockNumber();
+        const stats = this.store.get().stats;
+        const needsBackfill =
+          !stats.eventBackfillDone &&
+          stats.eventCount === 0 &&
+          Object.keys(this.store.get().tokens).length === 0;
+
+        if (needsBackfill) {
+          this.lastBlock =
+            latest > BigInt(config.eventBackfillBlocks)
+              ? latest - BigInt(config.eventBackfillBlocks)
+              : 0n;
+        } else if (persistedBlock) {
+          this.lastBlock = BigInt(persistedBlock);
+        } else {
+          this.lastBlock = latest;
+        }
+
+        if (needsBackfill) {
+          this.store.update((s) => {
+            s.stats.eventBackfillDone = true;
+          });
+        }
+      }
+
+      const phase = async (name: string, fn: () => Promise<void>) => {
+        const phaseAt = Date.now();
+        this.store.update((s) => {
+          s.stats.lastScheduledPhase = name;
+          s.stats.lastScheduledPhaseAt = phaseAt;
+        });
+        try {
+          await fn();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.store.update((s) => {
+            s.stats.lastScheduledError = name + ": " + message;
+            s.stats.lastScheduledPhaseErrorAt = Date.now();
+            s.stats.lastError = message;
+          });
+        }
+      };
+
+      await phase("RECONCILE", async () => {
+        this.cleanupStalePendingExecutions();
+        await this.reconcileWalletPositions();
+      });
+      await phase("MANAGE_POSITIONS", () => this.managePositions());
+
+      const entriesBlocked = this.entryCircuitBreakerActive();
+
+      // Keep synchronization alive during a breaker, but isolate every phase.
+      // One provider/subrequest failure must not prevent the cycle heartbeat or
+      // subsequent phases from running.
+      await phase("POLL_CURVE_LOGS", () => this.pollLogs());
+      await phase("POLL_DEX_LOGS", () => this.pollDexLogs());
+      await phase("REVIEW_POSITIONS_AI", () => this.reviewOpenPositions());
+      await phase("POLL_NEW_EVENTS", () => this.pollNewEvents());
+      await phase("DISCOVER_TOKENS", () => this.discoverEstablishedTokens());
+
+      if (entriesBlocked) {
+        this.store.update((s) => {
+          s.stats.lastIdleReason =
+            "ENTRY CIRCUIT BREAKER: scanning/monitoring continues; new entries blocked";
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.store.update((s) => {
+        s.stats.lastScheduledError = "CYCLE: " + message;
+        s.stats.lastScheduledPhaseErrorAt = Date.now();
+        s.stats.lastError = message;
+      });
+    } finally {
+      const finishedAt = Date.now();
+      this.store.update((s) => {
+        s.stats.lastCycleAt = finishedAt;
+        s.stats.lastProcessedBlock = this.lastBlock.toString();
+        s.stats.lastScheduledDurationMs = finishedAt - startedAt;
+        s.stats.lastScheduledPhase = "COMPLETE";
+      });
+      await this.persist();
+    }
   }
 
   async stop() {

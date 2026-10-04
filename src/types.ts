@@ -239,6 +239,12 @@ export interface BotStats {
   eligibleCandidates?: number;
   lastReconciliationAt?: number;
   recoveredPositions?: number;
+  lastScheduledAttemptAt?: number;
+  lastScheduledPhase?: string;
+  lastScheduledPhaseAt?: number;
+  lastScheduledPhaseErrorAt?: number;
+  lastScheduledDurationMs?: number;
+  lastScheduledError?: string;
 }
 
 export interface BotState {

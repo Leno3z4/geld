@@ -103,7 +103,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-broad-universe-edge-cache-v5-2026-10-05";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-profit-priority-probes-v6-2026-10-05";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KURU_MARKET_ABI = parseAbi([
@@ -1605,11 +1605,18 @@ export async function scanLSTArbitrage(
         ...routeDexes
       ].filter((dex: string) => !coveredProbeDexes.has(dex)).length;
 
+      // Probe the routes that look most profitable first. Discovery prices are
+      // only a ranking hint; exact on-chain quotes remain the final gate.
+      // DEX diversity is still a secondary tie-breaker so one venue cannot
+      // monopolize every probe slot.
+      const theoreticalEdgeScore =
+        Math.max(-100, Number(route.grossEdgePct ?? -100)) * 1_000_000;
       const score =
-        newDexCount * 1_000_000 +
+        theoreticalEdgeScore +
+        newDexCount * 100_000 +
         route.distinctDexes * 10_000 +
         route.distinctPools * 1_000 +
-        route.liquidityScore;
+        Math.min(route.liquidityScore, 1_000_000);
 
       if (score > bestScore) {
         bestScore = score;

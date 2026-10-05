@@ -124,7 +124,6 @@ const KYBER_SCOUT_TARGETS: Array<{symbol: string; address: string}> = [
   { symbol: "shMON", address: "0x1b68626dca36c7fe922fd2d55e4f631d962de19c" }
 ];
 const PLANNED_KYBER_SCOUT_REQUESTS = KYBER_SCOUT_TARGETS.length * 2;
-const PLANNED_KYBER_SCOUT_REQUESTS = KYBER_SCOUT_TARGETS.length * 2;
 const KURU_MARKET_ABI = parseAbi([
   "function getMarketParams() view returns (uint256 pricePrecision,uint256 sizePrecision,address baseAssetAddress,uint256 baseAssetDecimals,address quoteAssetAddress,uint256 quoteAssetDecimals,uint256 tickSize,uint256 minSize,uint256 maxSize,int256 takerFeeBps,int256 makerFeeBps)",
   "function placeAndExecuteMarketBuy(uint96 quoteSize,uint256 minAmountOut,bool isMargin,bool isFillOrKill) payable returns (uint256)",

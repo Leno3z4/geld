@@ -173,6 +173,13 @@ export const config = {
   minVolume5mUsd: Math.max(0, num("MIN_VOLUME_5M_USD", 1000)),
   fastCycleMs: Math.max(10000, num("FAST_CYCLE_MS", 10000)),
 
+  // LST arbitrage is continuously scanned and exactly quoted, but remains
+  // paper-only unless this dedicated flag is explicitly enabled elsewhere.
+  lstArbitrageEnabled: bool("LST_ARBITRAGE_ENABLED", true),
+  lstArbitrageLiveExecution: bool("LST_ARBITRAGE_LIVE_EXECUTION", false),
+  lstArbitrageExecutorAddress: process.env.LST_ARBITRAGE_EXECUTOR_ADDRESS ?? "",
+  lstArbitrageIntervalMs: Math.max(60_000, num("LST_ARBITRAGE_INTERVAL_MS", 60_000)),
+
   leverUpEnabled: bool("LEVERUP_ENABLED", false),
   leverUpDiamond: (process.env.LEVERUP_DIAMOND ?? "0xea1b8E4aB7f14F7dCA68c5B214303B13078FC5ec") as `0x${string}`,
   leverUpAgentPrivateKey: process.env.LEVERUP_AGENT_PRIVATE_KEY ?? "",

@@ -84,6 +84,8 @@ const DEXPAPRIKA_BASE_URL = "https://api.dexpaprika.com";
 const DEXPAPRIKA_CACHE_TTL_MS = 5 * 60_000;
 const DEXPAPRIKA_ASSET_LIMIT = 100;
 const DEXPAPRIKA_PRICE_BATCH_LIMIT = 10;
+const DEXSCREENER_BASE_URL = "https://api.dexscreener.com";
+const DEXSCREENER_CACHE_TTL_MS = 5 * 60_000;
 const FREE_EXTERNAL_SUBREQUEST_LIMIT = 50;
 const PLANNED_DISCOVERY_REQUESTS = 7;
 const PLANNED_EXACT_REQUESTS =
@@ -98,7 +100,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-dexpaprika-ratelimit-guard-v3-2026-10-05";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-multisource-discovery-v4-2026-10-05";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KURU_MARKET_ABI = parseAbi([
@@ -514,8 +516,133 @@ async function discoverDexPaprikaMonadPools(
       "profitability is determined exclusively by exact on-chain quotes."
   };
 
+  if (providerBlocked) {
+    const fallback = await discoverDexScreenerMonadPools(
+      cache,
+      Math.max(0, PLANNED_DISCOVERY_REQUESTS - requestsThisScan)
+    );
+    for (const pool of fallback.pools) {
+      const key = String(pool?.attributes?.address ?? pool?.id).toLowerCase();
+      if (!deduped.has(key)) deduped.set(key, pool);
+    }
+    provider.fallbackUsed = fallback.pools.length > 0;
+    provider.fallbackSource = fallback.provider.source;
+    provider.fallbackRequestsThisScan = fallback.provider.requestsThisScan;
+    provider.fallbackRefreshedAssets = fallback.provider.refreshedAssets;
+    provider.fallbackCachedAssets = fallback.provider.cachedAssets;
+    provider.fallbackAvailableDexes = fallback.provider.availableDexes;
+    provider.fallbackErrors = fallback.provider.errors;
+    provider.requestsThisScan += fallback.provider.requestsThisScan;
+  }
+
   return { pools: [...deduped.values()], provider };
 }
+async function discoverDexScreenerMonadPools(cache: LSTArbitrageCache | undefined, maxRequests: number) {
+  const assets = assetMap();
+  const pools: any[] = [];
+  const refreshedAssets: string[] = [];
+  const cachedAssets: string[] = [];
+  const errors: string[] = [];
+  let requestsThisScan = 0;
+
+  for (const asset of ARBITRAGE_ASSETS) {
+    if (requestsThisScan >= maxRequests) break;
+    const cacheKey = `lst-arb:dexscreener:pairs:${asset.address.toLowerCase()}:v1`;
+    const cached = await readCache<any[]>(cache, cacheKey);
+    let rows: any[] = [];
+
+    if (cached && Date.now() - cached.fetchedAt < DEXSCREENER_CACHE_TTL_MS) {
+      rows = cached.data ?? [];
+      cachedAssets.push(asset.symbol);
+    } else {
+      try {
+        const response = await fetch(
+          `${DEXSCREENER_BASE_URL}/token-pairs/v1/monad/${asset.address}`,
+          { headers: { accept: "application/json", "user-agent": "geld-lst-arbitrage/1.0" } }
+        );
+        requestsThisScan++;
+        if (!response.ok) throw new Error(`DexScreener pairs HTTP ${response.status} for ${asset.symbol}`);
+        const json = await response.json() as any;
+        rows = Array.isArray(json) ? json : [];
+        await writeCache(cache, cacheKey, rows);
+        refreshedAssets.push(asset.symbol);
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : String(error));
+        if (cached?.data?.length) {
+          rows = cached.data;
+          cachedAssets.push(asset.symbol);
+        }
+      }
+    }
+
+    for (const row of rows) {
+      const base = normalizeAssetAddress(row?.baseToken?.address);
+      const quote = normalizeAssetAddress(row?.quoteToken?.address);
+      if (!base || !quote || base === quote || !assets.has(base) || !assets.has(quote)) continue;
+      const baseAsset = assets.get(base)!;
+      const quoteAsset = assets.get(quote)!;
+      const baseUsd = num(row?.priceUsd);
+      const priceNative = num(row?.priceNative);
+      const baseToQuote =
+        quoteAsset.symbol === "WMON" && priceNative > 0
+          ? priceNative
+          : baseUsd > 0 && quoteAsset.symbol === "USDC"
+            ? baseUsd
+            : 0;
+      if (!(baseToQuote > 0)) continue;
+
+      const dex = String(row?.dexId ?? "").toLowerCase();
+      const labels = Array.isArray(row?.labels) ? row.labels.map((x: unknown) => String(x).toLowerCase()) : [];
+      let quoteKind: QuoteKind = "unsupported";
+      if (dex === "uniswap" && labels.includes("v3")) quoteKind = "uniswap-v3";
+      else if (dex === "uniswap" && labels.includes("v2")) quoteKind = "uniswap-v2";
+      else if (dex === "pancakeswap" && labels.includes("v3")) quoteKind = "pancake-v3";
+      else if (dex === "pancakeswap" && labels.includes("v2")) quoteKind = "pancake-v2";
+
+      const poolAddress = addr(row?.pairAddress);
+      if (!poolAddress) continue;
+      pools.push({
+        id: poolAddress,
+        attributes: {
+          address: poolAddress,
+          name: `${baseAsset.symbol}/${quoteAsset.symbol} ${dex}${labels.length ? ` ${labels.join("/")}` : ""}`,
+          base_token_price_quote_token: String(baseToQuote),
+          pool_fee_percentage: 0,
+          reserve_in_usd: num(row?.liquidity?.usd),
+          volume_usd: { h24: num(row?.volume?.h24) }
+        },
+        relationships: {
+          base_token: { data: { id: base } },
+          quote_token: { data: { id: quote } },
+          dex: { data: { id: dex } }
+        },
+        __baseTokenMeta: { attributes: { address: base, symbol: baseAsset.symbol, decimals: baseAsset.decimals } },
+        __quoteTokenMeta: { attributes: { address: quote, symbol: quoteAsset.symbol, decimals: quoteAsset.decimals } },
+        __dexMeta: { id: dex },
+        __quoteKind: quoteKind
+      });
+    }
+  }
+
+  const deduped = new Map<string, any>();
+  for (const pool of pools) {
+    const key = String(pool?.attributes?.address ?? pool?.id).toLowerCase();
+    if (!deduped.has(key)) deduped.set(key, pool);
+  }
+  return {
+    pools: [...deduped.values()],
+    provider: {
+      source: "dexscreener-fallback",
+      network: "monad",
+      requestsThisScan,
+      refreshedAssets,
+      cachedAssets,
+      errors: errors.length ? [...new Set(errors)] : undefined,
+      availableDexes: [...new Set([...deduped.values()].map(pool => String(pool?.__dexMeta?.id ?? "").toLowerCase()).filter(Boolean))].sort()
+    }
+  };
+}
+
 function parseDiscoveredPool(
   record: any,
   assets: Map<string, ArbitrageAsset>
@@ -566,7 +693,7 @@ function parseDiscoveredPool(
     liquidityUsd: num(a.reserve_in_usd),
     volume24hUsd: num(a.volume_usd?.h24),
     dex,
-    quoteKind: classifyQuoteKind(poolAddress, dex),
+    quoteKind: record?.__quoteKind && record.__quoteKind !== "unsupported" ? record.__quoteKind : classifyQuoteKind(poolAddress, dex),
     createdAtBlock: record?.__createdAtBlock ? String(record.__createdAtBlock) : undefined
   };
 }

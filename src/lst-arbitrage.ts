@@ -755,6 +755,14 @@ async function discoverGeckoMonadDexPools(
     );
   }
 
+  const fallbackTelemetry = {
+    fallbackTokenSnapshotCount:
+      Number(fallbackPairs.length > 0 ? 1 : 0),
+    fallbackTargetAsset: null as string | null,
+    fallbackRefreshedAsset: null as string | null,
+    fallbackWarmupComplete: false
+  };
+
   const dedupedPools = new Map<string, any>();
   for (const record of allPoolRecords) {
     const poolAddress = poolIdentifier(
@@ -842,14 +850,10 @@ async function discoverGeckoMonadDexPools(
     queryMode: "dex_inventory_rotation_with_token_fallback",
     fallbackProvider: "DEX Screener token-pair snapshot",
     fallbackPairCount: fallbackPairs.length,
-    fallbackTokenSnapshotCount:
-      Number(fallback.provider?.tokenSnapshotCount ?? 0),
-    fallbackTargetAsset:
-      fallback.provider?.targetAsset ?? null,
-    fallbackRefreshedAsset:
-      fallback.provider?.refreshedAsset ?? null,
-    fallbackWarmupComplete:
-      Boolean(fallback.provider?.warmupComplete),
+    fallbackTokenSnapshotCount: fallbackTelemetry.fallbackTokenSnapshotCount,
+    fallbackTargetAsset: fallbackTelemetry.fallbackTargetAsset,
+    fallbackRefreshedAsset: fallbackTelemetry.fallbackRefreshedAsset,
+    fallbackWarmupComplete: fallbackTelemetry.fallbackWarmupComplete,
     inventoryDexCount:
       normalizedInventory.length,
     poolSnapshotCount:

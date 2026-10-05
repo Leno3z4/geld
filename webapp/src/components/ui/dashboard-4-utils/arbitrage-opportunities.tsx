@@ -40,16 +40,47 @@ export function ArbitrageOpportunities() {
   }, [potential]);
 
   const rows = useMemo(() => {
-    const source = view === "potential"
-      ? potential
-      : discovered.map((item: any) => ({
-          ...item,
-          ...(potentialByAddress.get(String(item?.address ?? "").toLowerCase()) ?? {}),
-          discoveredOnly: !potentialByAddress.has(String(item?.address ?? "").toLowerCase())
-        }));
+    if (view === "potential") return potential;
 
+    const merged = new Map<string, any>();
+
+    for (const item of discovered) {
+      const address = String(item?.address ?? item?.token ?? "").toLowerCase();
+      if (!address) continue;
+      const arbItem = potentialByAddress.get(address);
+      merged.set(address, {
+        ...item,
+        ...(arbItem ?? {}),
+        address,
+        symbol: arbItem?.symbol ?? item?.symbol ?? "UNKNOWN",
+        discoveredOnly: !arbItem,
+        source: "arb-discovery"
+      });
+    }
+
+    for (const item of monitored) {
+      const address = String(item?.token ?? item?.address ?? "").toLowerCase();
+      if (!address) continue;
+      const arbItem = potentialByAddress.get(address);
+      merged.set(address, {
+        ...item,
+        ...(arbItem ?? {}),
+        address,
+        symbol: arbItem?.symbol ?? item?.symbol ?? "UNKNOWN",
+        decimals: arbItem?.decimals ?? Number(item?.decimals ?? 18),
+        venues: arbItem?.venues ?? [],
+        poolCount: arbItem?.poolCount ?? 0,
+        venueCount: arbItem?.venueCount ?? 0,
+        exactSupported: arbItem?.exactSupported ?? false,
+        discoveredOnly: !arbItem,
+        source: arbItem ? "arb-discovery+engine" : "trading-engine"
+      });
+    }
+
+    const source = [...merged.values()];
     const needle = filter.trim().toLowerCase();
     if (!needle) return source;
+
     return source.filter((item: any) =>
       String(item.symbol ?? "").toLowerCase().includes(needle) ||
       String(item.address ?? "").toLowerCase().includes(needle) ||
@@ -141,6 +172,8 @@ export function ArbitrageOpportunities() {
                       <span className="truncate font-semibold">{item.symbol}</span>
                       {item.exactSupported ? (
                         <Badge variant="outline" className="border-lime-900 text-lime-400">EXACT</Badge>
+                      ) : item.source === "trading-engine" ? (
+                        <Badge variant="outline" className="border-zinc-700 text-zinc-500">MONITORED</Badge>
                       ) : item.discoveredOnly ? (
                         <Badge variant="outline" className="border-zinc-700 text-zinc-500">DISCOVERED</Badge>
                       ) : (

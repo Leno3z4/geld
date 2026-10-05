@@ -510,6 +510,12 @@ async function discoverDexPaprikaMonadPools(
       String(pool?.__dexMeta?.id ?? "").toLowerCase()
     ).filter(Boolean))].sort(),
     fallbackUsed: false,
+    fallbackSource: undefined as string | undefined,
+    fallbackRequestsThisScan: 0,
+    fallbackRefreshedAssets: [] as string[],
+    fallbackCachedAssets: [] as string[],
+    fallbackAvailableDexes: [] as string[],
+    fallbackErrors: undefined as string[] | undefined,
     errors: errors.length ? [...new Set(errors)] : undefined,
     note:
       "DexPaprika is the discovery provider. Pool topology is used only to build candidate routes; " +

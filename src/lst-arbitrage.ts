@@ -515,9 +515,41 @@ async function simulateTriangle(
     };
   }
 }
+
+export async function scanLSTArbitrage(rpcUrl: string) {
+  const assets = assetMap();
+  const [tokenPrices, poolPayloads] = await Promise.all([
+    fetchTokenPrices(),
+    Promise.all(ARBITRAGE_ASSETS.map(fetchTokenPools))
+  ]);
+
+  const pools: PoolRecord[] = poolPayloads
+    .flat()
+    .map((record: any) => parsePool(record, assets))
+    .filter((pool: PoolRecord | null): pool is PoolRecord => Boolean(pool));
+
+  const edges: PoolEdge[] = [];
+  for (const pool of pools) addEdge(edges, pool);
+  addIndicativeCurveEdges(edges, tokenPrices);
+
+  const wmon = ARBITRAGE_ASSETS.find(a => a.symbol === "WMON")!;
+  const triangles = findTriangles(edges, wmon.address.toLowerCase())
+    .filter(t => t.exactQuoteSupported)
+    .slice(0, MAX_EXACT_TRIANGLES);
+
+  const client = createClient(rpcUrl);
+  const exactResults = await Promise.all(
+    triangles.map(async route => {
+      const exactQuotes = await Promise.all(
+        TRADE_SIZES_MON.map(size => simulateTriangle(client, route, size))
+      );
+      return { ...route, exactQuotes };
+    })
+  );
+
   const signals: ArbitrageSignal[] = exactResults.flatMap(route =>
     route.exactQuotes
-      .filter(q => q.ok && q.candidate)
+      .filter((q): q is Extract<typeof q, { ok: true }> => q.ok && q.candidate)
       .map(q => ({
         path: route.path,
         sizeMon: q.sizeMon,
@@ -550,3 +582,30 @@ async function simulateTriangle(
         liveExecutable: false as const
       }))
   ).sort((a, b) => b.netProfitMon - a.netProfitMon);
+
+  return {
+    mode: "PAPER_SIGNAL_ONLY" as const,
+    generatedAt: new Date().toISOString(),
+    rpcUrl,
+    assets: ARBITRAGE_ASSETS,
+    poolCount: pools.length,
+    edgeCount: edges.length,
+    triangleCount: triangles.length,
+    routes: exactResults,
+    signals,
+    topSignal: signals[0] ?? null,
+    thresholds: {
+      minimumLiquidityUsd: MIN_LIQUIDITY_USD,
+      minimumGrossEdgePct: MIN_GROSS_EDGE_PCT,
+      executionBufferPct: EXECUTION_BUFFER_PCT,
+      minimumNetProfitMon: MIN_NET_PROFIT_MON,
+      gasBufferMon: GAS_BUFFER_MON,
+      tradeSizesMon: TRADE_SIZES_MON
+    },
+    execution: {
+      live: false,
+      transactionsSubmitted: 0,
+      reason: "Arbitrage execution is disabled; this endpoint only discovers and simulates routes."
+    }
+  };
+}

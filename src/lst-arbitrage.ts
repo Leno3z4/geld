@@ -78,11 +78,11 @@ export const TRADE_SIZES_MON = [1, 5, 10];
 export const MAX_EXACT_TRIANGLES = 4;
 const EXECUTION_BUFFER_BPS = Math.round(EXECUTION_BUFFER_PCT * 100);
 const DEXPAPRIKA_POOLS_URL = "https://api.dexpaprika.com/networks/monad/pools/search?order_by=volume_usd_24h&sort=desc&limit=250";
+const DEXSCREENER_TOKEN_URL = "https://api.dexscreener.com/tokens/v1/monad";
+const DEXSCREENER_CACHE_TTL_MS = 60_000;
 const DEXPAPRIKA_CACHE_TTL_MS = 5 * 60_000;
 const KURU_MARKET_ABI = parseAbi([
-  "function getMarketParams() view returns (uint256 pricePrecision,uint256 sizePrecision,address baseAssetAddress,uint256 baseAssetDecimals,address quoteAssetAddress,uint256 quoteAssetDecimals,uint256 tickSize,uint256 minSize,uint256 maxSize,int256 takerFeeBps,int256 makerFeeBps)",
-  "function placeAndExecuteMarketSell(uint256 size,uint256 minAmountOut,bool isMargin,bool fillOrKill) returns (uint256)",
-  "function placeAndExecuteMarketBuy(uint256 size,uint256 minAmountOut,bool isMargin,bool fillOrKill) returns (uint256)"
+  "function getMarketParams() view returns (uint256 pricePrecision,uint256 sizePrecision,address baseAssetAddress,uint256 baseAssetDecimals,address quoteAssetAddress,uint256 quoteAssetDecimals,uint256 tickSize,uint256 minSize,uint256 maxSize,int256 takerFeeBps,int256 makerFeeBps)"
 ]);
 const V2_PAIR_ABI = parseAbi([
   "function token0() view returns (address)",
@@ -889,31 +889,20 @@ async function quoteExactEdge(
   }
 
   if (edge.quoteKind === "kuru") {
+    // Kuru is discovered as a venue, but exact market-buy/sell estimation
+    // requires its orderbook state (CostEstimator / L2 book). Do not turn a
+    // guessed mid-price into an arbitrage signal.
     let params = kuruParamsCache.get(edge.pool.toLowerCase());
     if (!params) {
-      params = await client.readContract({ address: edge.pool as Address, abi: KURU_MARKET_ABI, functionName: "getMarketParams" });
+      params = await client.readContract({
+        address: edge.pool as Address,
+        abi: KURU_MARKET_ABI,
+        functionName: "getMarketParams"
+      });
       kuruParamsCache.set(edge.pool.toLowerCase(), params);
     }
-    const p = params as readonly [bigint,bigint,Address,bigint,Address,bigint,bigint,bigint,bigint,bigint,bigint];
-    const base = normalizeAssetAddress(p[2]);
-    const quote = normalizeAssetAddress(p[4]);
-    const baseDecimals = Number(p[3]);
-    const quoteDecimals = Number(p[5]);
-    const sizePrecisionDecimals = Math.max(0, String(p[1]).length - 1);
-    const pricePrecisionDecimals = Math.max(0, String(p[0]).length - 1);
+    return null;
 
-    if (edge.from.toLowerCase() === base && edge.to.toLowerCase() === quote) {
-      const sizeHuman = Number(formatUnits(amountIn, baseDecimals));
-      const size = parseUnits(sizeHuman.toFixed(sizePrecisionDecimals), sizePrecisionDecimals);
-      const out = await client.readContract({ address: edge.pool as Address, abi: KURU_MARKET_ABI, functionName: "placeAndExecuteMarketSell", args: [size, 0n, false, true] });
-      return { amountOut: BigInt(out as bigint) };
-    }
-    if (edge.from.toLowerCase() === quote && edge.to.toLowerCase() === base) {
-      const quoteHuman = Number(formatUnits(amountIn, quoteDecimals));
-      const size = parseUnits(quoteHuman.toFixed(pricePrecisionDecimals), pricePrecisionDecimals);
-      const out = await client.readContract({ address: edge.pool as Address, abi: KURU_MARKET_ABI, functionName: "placeAndExecuteMarketBuy", args: [size, 0n, false, true] });
-      return { amountOut: BigInt(out as bigint) };
-    }
   }
   return null;
 }
@@ -1033,7 +1022,8 @@ export async function scanLSTArbitrage(
   const discovery = await discoverDexPaprikaPools(cache);
   const discoveredPools = discovery.pools
     .map((record: any) => parseDexPaprikaPool(record, assets))
-    .filter((pool: PoolRecord | null): pool is PoolRecord => Boolean(pool) && pool.liquidityUsd >= MIN_LIQUIDITY_USD);
+    .filter((pool): pool is PoolRecord => pool !== null)
+    .filter(pool => pool.liquidityUsd >= MIN_LIQUIDITY_USD);
 
   const poolByAddress = new Map<string, PoolRecord>();
   for (const pool of KNOWN_UNISWAP_POOLS) poolByAddress.set(pool.address.toLowerCase(), pool);

@@ -2648,6 +2648,7 @@ async function simulateCycle(
 export type LSTArbitrageScanOptions = {
   probeLimit?: number;
   includeKyberScout?: boolean;
+  discoveryOnly?: boolean;
 };
 
 export async function scanLSTArbitrage(
@@ -2977,6 +2978,89 @@ export async function scanLSTArbitrage(
   }
 
   const arbitragePotentialTokens = buildArbitragePotentialTokens(pools, assets);
+
+  if (options.discoveryOnly) {
+    return {
+      mode: "PAPER_DISCOVERY_ONLY" as const,
+      generatedAt: new Date().toISOString(),
+      rpcUrl,
+      buildRevision: LST_ARBITRAGE_BUILD_REVISION,
+      assets: [...assets.values()],
+      poolCount: pools.length,
+      edgeCount: edges.length,
+      triangleCount: allRoutes.length,
+      cycleCount: allRoutes.length,
+      routeCount: allRoutes.length,
+      discoveryRouteCount: discoveryRoutes.length,
+      probeRouteCount: 0,
+      arbitragePotentialTokenCount: arbitragePotentialTokens.length,
+      arbitragePotentialTokens,
+      discoveredTokenCount: assets.size,
+      discoveredTokens: [...assets.values()].sort((a, b) => a.symbol.localeCompare(b.symbol)),
+      availableDexCount:
+        new Set([
+          ...(discovery.provider.availableDexes ?? []),
+          ...(kuruDiscovery.provider.availableDexes ?? [])
+        ]).size,
+      exactSupportedDexCount: [
+        ...new Set(
+          pools
+            .filter(pool => isExactQuoteSupported(pool.quoteKind))
+            .map(pool => pool.dex)
+        )
+      ].length,
+      routes: [],
+      discoveryRoutes,
+      signals: [],
+      topSignal: null,
+      kyberScout: {
+        enabled: false,
+        requestsThisScan: 0,
+        targetCount: 0,
+        results: [],
+        topSignal: null
+      },
+      aggregatorSignals: [],
+      topAggregatorSignal: null,
+      provider: {
+        ...discovery.provider,
+        requestsThisScan:
+          Number(discovery.provider.requestsThisScan ?? 0) +
+          Number(kuruDiscovery.provider.requestsThisScan ?? 0),
+        kuruRequestsThisScan: kuruDiscovery.provider.requestsThisScan,
+        kuruMarketCount: kuruDiscovery.provider.marketCount,
+        kuruAvailable: kuruDiscovery.provider.marketCount > 0,
+        kuruErrors: kuruDiscovery.provider.errors,
+        parsedPoolCount: parsedPools.length + kuruParsedPools.length,
+        discoveredDexes: [...new Set(pools.map(pool => pool.dex))].sort(),
+        exactSupportedDexes: [
+          ...new Set(
+            pools
+              .filter(pool => isExactQuoteSupported(pool.quoteKind))
+              .map(pool => pool.dex)
+          )
+        ].sort(),
+        exactUnsupportedDexes: [
+          ...new Set(
+            pools
+              .filter(pool => !isExactQuoteSupported(pool.quoteKind))
+              .map(pool => pool.dex)
+          )
+        ].sort(),
+        note:
+          "Discovery mode scans the dynamic Monad token/DEX universe without performing exact " +
+          "quote probes. Potential rows are not execution or profitability confirmations."
+      },
+      execution: {
+        live: false,
+        attempted: false,
+        submitted: false,
+        transactionsSubmitted: 0,
+        reason: "Discovery-only scanner. No transaction submission is performed."
+      }
+    };
+  }
+
   const signals: ArbitrageSignal[] = [];
 
   for (const route of exactResults) {

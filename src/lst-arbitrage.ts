@@ -60,8 +60,8 @@ export async function scanLSTArbitrage() {
   // Both venues are normalized to MON/shMON using the pool's native-currency
   // quote when available. GeckoTerminal documents base_token_price_quote_token
   // and base_token_price_native_currency as canonical pool ratios.
-  const curveMonPerShmon = curve.priceInQuote > 0 ? curve.priceInQuote : 0;
-  const uniMonPerShmon = uni.priceInQuote > 0 ? curveMonPerShmon : 0;
+  const curveMonPerShmon = curve.priceInQuote > 0 ? 1 / curve.priceInQuote : 0;
+  const uniMonPerShmon = uni.priceInQuote > 0 ? 1 / uni.priceInQuote : 0;
   const ratio = curveMonPerShmon > 0 && uniMonPerShmon > 0
     ? Math.max(curveMonPerShmon, uniMonPerShmon) / Math.min(curveMonPerShmon, uniMonPerShmon) - 1
     : 0;

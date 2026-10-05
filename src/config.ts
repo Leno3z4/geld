@@ -25,7 +25,7 @@ function bigint(name: string, fallback: bigint) {
 export const config = {
   network: "mainnet" as const,
   chainId: 143,
-  rpcUrl: process.env.MONAD_RPC_URL ?? "https://rpc.monad.xyz",
+  rpcUrl: process.env.ALCHEMY_RPC_URL ?? process.env.MONAD_RPC_URL ?? "https://rpc.monad.xyz",
   wsUrl: process.env.MONAD_WS_URL ?? "",
   privateKey: process.env.MONAD_PRIVATE_KEY ?? "",
   // Temporarily disable normal meme-token execution. Keep the engine/code intact

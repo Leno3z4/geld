@@ -1,3 +1,4 @@
+// LST arbitrage scanner: primary market discovery via DEX Screener, GeckoTerminal fallback.
 import {
   createPublicClient,
   http,

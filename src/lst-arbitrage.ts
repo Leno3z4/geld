@@ -161,11 +161,11 @@ export const ARBITRAGE_ASSETS: ArbitrageAsset[] = [
   // arbitrage universe. Exact execution still requires a supported quote adapter.
   { symbol: "FLING", address: "0xa9da3c77ec7cdc4dfaa1fe142af583543d1c540f", decimals: 18 },
   { symbol: "ANAGO", address: "0x99ae2dc76c43979e3bcc0ae8d69f1fca077c8888", decimals: 18 },
-  { symbol: "UNIT", address: "0x788571e0e5067adea87e6ba22a2b738ffd f48888".replace(/ /g, ""), decimals: 18 },
+  { symbol: "UNIT", address: "0x788571e0e5067adea87e6ba22a2b738ffdf48888", decimals: 18 },
   { symbol: "DUST", address: "0xad96c3dffcd6374294e2573a7fbba96097cc8d7c", decimals: 18 },
   { symbol: "ALLOCA", address: "0x1ad7052bb331a0529c1981c3ec2bc4663498a110", decimals: 18 },
   { symbol: "WBTC", address: "0x0555e30da8f98308edb960aa94c0db47230d2b9c", decimals: 8 },
-  { symbol: "cbBTC", address: "0xd18b7ec58cdf4876f6afeb3d ed1730e4ce10414b".replace(/ /g, ""), decimals: 8 },
+  { symbol: "cbBTC", address: "0xd18b7ec58cdf4876f6afeb3ed1730e4ce10414b", decimals: 8 },
   { symbol: "WETH", address: "0xee8c0e9f1bffb4eb878d8f15f368a02a35481242", decimals: 18 },
   { symbol: "USDT0", address: "0xe7cd86e13ac4309349f30b3435a9d337750fc82d", decimals: 6 },
   { symbol: "AUSD", address: "0x00000000efe302beaa2b3e6e1b18d08d69a9012a", decimals: 6 },

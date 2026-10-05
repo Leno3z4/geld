@@ -1,4 +1,5 @@
 name: Deploy Cloudflare
+# Keep production Worker deployment tied to every main-branch push.
 
 on:
   workflow_dispatch:

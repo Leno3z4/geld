@@ -75,8 +75,8 @@ export const EXECUTION_BUFFER_PCT = 0.20;
 export const MIN_NET_PROFIT_MON = 0.005;
 export const GAS_BUFFER_MON = 0.001;
 export const TRADE_SIZES_MON = [1, 5, 10];
-export const MAX_EXACT_ROUTES = 6;
-export const MAX_REFINED_ROUTES = 1;
+export const MAX_EXACT_ROUTES = 4;
+export const MAX_REFINED_ROUTES = 0;
 // Search every simple closed route possible across the six configured assets.
 // A closed arbitrage path needs at least 2 hops; six is the maximum without revisiting an asset.
 export const MAX_ARBITRAGE_HOPS = 6;
@@ -91,19 +91,24 @@ const DEXSCREENER_BASE_URL = "https://api.dexscreener.com";
 const DEXSCREENER_CACHE_TTL_MS = 5 * 60_000;
 const FREE_EXTERNAL_SUBREQUEST_LIMIT = 50;
 const PLANNED_DISCOVERY_REQUESTS = 7;
+// A route with six hops can consume one external RPC call per exact leg.
+// Keep enough headroom for provider/cache calls on the Free 50-subrequest plan.
+const PLANNED_CACHE_API_CALLS = 10;
 const PLANNED_EXACT_REQUESTS =
-  MAX_EXACT_ROUTES * 3 * 2 + TRADE_SIZES_MON.length;
+  MAX_EXACT_ROUTES * MAX_ARBITRAGE_HOPS;
+
 const PLANNED_DISCOVERY_FALLBACK_REQUESTS = 0;
 const PLANNED_WORST_CASE_EXTERNAL_REQUESTS =
   PLANNED_DISCOVERY_REQUESTS +
   PLANNED_EXACT_REQUESTS +
-  PLANNED_DISCOVERY_FALLBACK_REQUESTS;
+  PLANNED_DISCOVERY_FALLBACK_REQUESTS +
+  PLANNED_CACHE_API_CALLS;
 const PANCAKE_V3_QUOTER_V2 = "0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997" as Address;
 const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-profit-priority-probes-v6-2026-10-05";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-subrequest-safe-probes-v7-2026-10-05";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KURU_MARKET_ABI = parseAbi([

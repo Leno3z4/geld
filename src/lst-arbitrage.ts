@@ -1890,10 +1890,10 @@ export async function scanLSTArbitrage(
   cache?: LSTArbitrageCache
 ) {
   const assets = assetMap();
-  const discovery = await discoverDexPaprikaPools(cache);
+  const discovery = await discoverGeckoMonadDexPools(cache);
 
   const parsedPools = discovery.pools
-    .map((record: any) => parseDexPaprikaPool(record, assets))
+    .map((record: any) => parseGeckoPool(record, assets))
     .filter(
       (pool: PoolRecord | null): pool is PoolRecord =>
         pool !== null

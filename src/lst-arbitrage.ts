@@ -343,6 +343,7 @@ async function discoverGeckoMonadDexPools(
   const inventoryKey = "lst-arb:gecko:dexes:v2";
   const lastGoodInventoryKey = "lst-arb:gecko:dexes:last-good:v2";
   const now = Date.now();
+  const knownAssets = assetMap();
 
   const [cachedInventory, lastGoodInventory] =
     await Promise.all([
@@ -709,7 +710,7 @@ async function discoverGeckoMonadDexPools(
               address: parsed.base,
               symbol: parsed.baseSymbol,
               decimals:
-                assets.get(parsed.base)?.decimals ?? 18
+                knownAssets.get(parsed.base)?.decimals ?? 18
             }
           },
           __quoteTokenMeta: {
@@ -717,7 +718,7 @@ async function discoverGeckoMonadDexPools(
               address: parsed.quote,
               symbol: parsed.quoteSymbol,
               decimals:
-                assets.get(parsed.quote)?.decimals ?? 18
+                knownAssets.get(parsed.quote)?.decimals ?? 18
             }
           }
         });

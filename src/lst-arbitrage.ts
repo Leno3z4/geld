@@ -1793,7 +1793,8 @@ export async function preflightAllLSTArbitrage(
             from: tx.from,
             to: tx.to,
             value: tx.value,
-            data: tx.input
+            data: tx.input,
+            gas: "0x4c4b40"
           }))
         })),
         traceTransfers: true,

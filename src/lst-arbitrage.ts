@@ -578,6 +578,31 @@ async function discoverDexPaprikaMonadPools(
     nextCursor = pageData.next_cursor;
   }
 
+  // Register every token found in the primary pool index BEFORE the secondary
+  // frontier runs. This lets the batched DexScreener crawl enrich newly discovered
+  // tokens during the same scan instead of waiting for the next 30s refresh.
+  for (const row of pageRows) {
+    const tokens = Array.isArray(row?.tokens) ? row.tokens.slice(0, 2) : [];
+    for (const token of tokens) {
+      const tokenAddress = normalizeAssetAddress(
+        tokenIdentifier(token) ??
+        (token === tokens[0] ? row?.base_token_id : row?.quote_token_id)
+      );
+      if (!tokenAddress) continue;
+      const known = discoveredAssets.get(tokenAddress);
+      if (!known) {
+        discoveredAssets.set(tokenAddress, {
+          symbol: tokenSymbol(
+            token,
+            "TKN_" + tokenAddress.slice(2, 8).toUpperCase()
+          ),
+          address: tokenAddress,
+          decimals: tokenDecimals(token, 18)
+        });
+      }
+    }
+  }
+
   // Always augment the primary index with a dynamic token-address frontier.
   // Newly discovered addresses are queued and can be batched (up to 30/request)
   // so the dashboard is not limited to the static seed list.

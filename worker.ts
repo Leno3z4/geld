@@ -22,6 +22,11 @@ interface Env {
   MONAD_RPC_URL?: string;
   MONAD_WS_URL?: string;
 
+  LST_ARBITRAGE_ENABLED?: string;
+  LST_ARBITRAGE_LIVE_EXECUTION?: string;
+  LST_ARBITRAGE_EXECUTOR_ADDRESS?: string;
+  LST_ARBITRAGE_INTERVAL_MS?: string;
+
   GEMINI_FAST_MODEL?: string;
   GEMINI_ESCALATION_MODEL?: string;
   STARTING_CAPITAL_MON?: string;
@@ -249,6 +254,10 @@ function hydrateProcessEnv(env: Env) {
     NADFUN_SITE_URL: valueFor("NADFUN_SITE_URL", env.NADFUN_SITE_URL),
     MONAD_RPC_URL: valueFor("MONAD_RPC_URL", env.MONAD_RPC_URL),
     MONAD_WS_URL: valueFor("MONAD_WS_URL", env.MONAD_WS_URL),
+    LST_ARBITRAGE_ENABLED: valueFor("LST_ARBITRAGE_ENABLED", env.LST_ARBITRAGE_ENABLED),
+    LST_ARBITRAGE_LIVE_EXECUTION: valueFor("LST_ARBITRAGE_LIVE_EXECUTION", env.LST_ARBITRAGE_LIVE_EXECUTION),
+    LST_ARBITRAGE_EXECUTOR_ADDRESS: valueFor("LST_ARBITRAGE_EXECUTOR_ADDRESS", env.LST_ARBITRAGE_EXECUTOR_ADDRESS),
+    LST_ARBITRAGE_INTERVAL_MS: valueFor("LST_ARBITRAGE_INTERVAL_MS", env.LST_ARBITRAGE_INTERVAL_MS),
     GEMINI_FAST_MODEL: valueFor("GEMINI_FAST_MODEL", env.GEMINI_FAST_MODEL),
     GEMINI_ESCALATION_MODEL: valueFor("GEMINI_ESCALATION_MODEL", env.GEMINI_ESCALATION_MODEL),
     STARTING_CAPITAL_MON: valueFor("STARTING_CAPITAL_MON", env.STARTING_CAPITAL_MON),
@@ -435,6 +444,9 @@ export class GeldBot extends DurableObject<Env> {
   private leverUpReadiness: any = null;
   private lastFullCycleAttemptAt = 0;
   private lastLeverUpPaperAt = 0;
+  private lastLSTArbitrageAt = 0;
+  private lstArbitrageInFlight = false;
+  private lastLSTArbitrageResult: any = null;
 
   private async getEngine() {
     if (this.engine) return this.engine;
@@ -550,6 +562,75 @@ export class GeldBot extends DurableObject<Env> {
     }
   }
 
+  private async runLSTArbitrageCycle(options: { force?: boolean; allowExecution?: boolean } = {}) {
+    const runtime = await getRuntimeConfig(this.env);
+    if (!runtime.lstArbitrageEnabled) return this.lastLSTArbitrageResult;
+
+    const now = Date.now();
+    const force = Boolean(options.force);
+    if (
+      !force &&
+      this.lastLSTArbitrageResult &&
+      now - this.lastLSTArbitrageAt < runtime.lstArbitrageIntervalMs
+    ) {
+      return this.lastLSTArbitrageResult;
+    }
+
+    if (this.lstArbitrageInFlight) return this.lastLSTArbitrageResult;
+
+    this.lstArbitrageInFlight = true;
+    this.lastLSTArbitrageAt = now;
+
+    try {
+      const scan = await scanLSTArbitrage(runtime.rpcUrl);
+      const result = {
+        ...scan,
+        executionPolicy: {
+          enabled: runtime.lstArbitrageEnabled,
+          liveExecutionEnabled: runtime.lstArbitrageLiveExecution,
+          requiresGlobalLiveTrading: true,
+          executorConfigured: Boolean(runtime.lstArbitrageExecutorAddress)
+        },
+        execution: {
+          attempted: false,
+          submitted: false,
+          reason: "Paper-only scanner. No transaction submission is performed."
+        },
+        scheduledAt: now
+      };
+
+      // The arbitrage scanner is intentionally isolated from the normal
+      // memecoin position engine. Store the latest exact-quote snapshot so
+      // the dashboard/API can inspect opportunities without triggering
+      // another burst of GeckoTerminal/RPC requests.
+      await this.ctx.storage.put("lst-arbitrage:last", JSON.stringify(result));
+      this.lastLSTArbitrageResult = result;
+      return result;
+    } catch (error) {
+      const failure = {
+        mode: "PAPER_SIGNAL_ONLY",
+        generatedAt: new Date().toISOString(),
+        executionPolicy: {
+          enabled: runtime.lstArbitrageEnabled,
+          liveExecutionEnabled: runtime.lstArbitrageLiveExecution,
+          requiresGlobalLiveTrading: true,
+          executorConfigured: Boolean(runtime.lstArbitrageExecutorAddress)
+        },
+        execution: {
+          attempted: false,
+          submitted: false,
+          reason: "Scanner failure; no transaction submission is performed."
+        },
+        error: error instanceof Error ? error.message : String(error)
+      };
+      await this.ctx.storage.put("lst-arbitrage:last", JSON.stringify(failure));
+      this.lastLSTArbitrageResult = failure;
+      return failure;
+    } finally {
+      this.lstArbitrageInFlight = false;
+    }
+  }
+
   private async runRiskCycle() {
     if (this.cycleInFlight) return;
     this.cycleInFlight = true;
@@ -569,6 +650,7 @@ export class GeldBot extends DurableObject<Env> {
         }
 
         await this.sampleHighCaps(engine);
+        await this.runLSTArbitrageCycle({ allowExecution: false });
       }
     } finally {
       this.cycleInFlight = false;
@@ -587,6 +669,7 @@ export class GeldBot extends DurableObject<Env> {
       if (engine.snapshot().running) {
         await engine.runScheduledCycle();
       }
+      await this.runLSTArbitrageCycle({ allowExecution: false });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("GELD full cycle failed:", error);
@@ -819,21 +902,18 @@ export class GeldBot extends DurableObject<Env> {
         earlyLaunchMinScore: runtimeConfig.earlyLaunchMinScore,
         earlyLaunchProbePortfolioPct: runtimeConfig.earlyLaunchProbePortfolioPct,
         newEventPollMs: runtimeConfig.newEventPollMs,
-        newEventCandidateLimit: runtimeConfig.newEventCandidateLimit
+        newEventCandidateLimit: runtimeConfig.newEventCandidateLimit,
+        lstArbitrageEnabled: runtimeConfig.lstArbitrageEnabled,
+        lstArbitrageLiveExecution: runtimeConfig.lstArbitrageLiveExecution,
+        lstArbitrageExecutorConfigured: Boolean(runtimeConfig.lstArbitrageExecutorAddress),
+        lstArbitrageIntervalMs: runtimeConfig.lstArbitrageIntervalMs
       });
     }
 
     if (path === "/api/lst/arbitrage") {
-      try {
-        const result = await scanLSTArbitrage(env.MONAD_RPC_URL ?? "https://rpc.monad.xyz");
-        return Response.json(result, { headers: { "Cache-Control": "no-store" } });
-      } catch (error) {
-        return Response.json({
-          mode: "PAPER_SIGNAL_ONLY",
-          error: error instanceof Error ? error.message : String(error),
-          generatedAt: new Date().toISOString()
-        }, { status: 502, headers: { "Cache-Control": "no-store" } });
-      }
+      const force = url.searchParams.get("refresh") === "1";
+      const result = await this.runLSTArbitrageCycle({ force, allowExecution: false });
+      return Response.json(result, { headers: { "Cache-Control": "no-store" } });
     }
 
     if (path === "/api/leverup/paper") {

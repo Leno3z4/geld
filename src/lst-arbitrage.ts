@@ -113,7 +113,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-universal-token-discovery-v17-2026-10-05";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-universal-token-discovery-v18-rotating-frontier-2026-10-05";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KYBER_BASE_URL = "https://aggregator-api.kyberswap.com";
@@ -191,6 +191,8 @@ const PROVIDER_COOLDOWN_MS = 2 * 60_000;
 const DEXPAPRIKA_CACHE_PREFIX = "lst-arb:dexpaprika";
 const PROVIDER_BLOCK_KEY = "lst-arb:dexpaprika:blocked-until";
 const DEXSCREENER_BLOCK_KEY = "lst-arb:dexscreener:blocked-until:v2";
+const DEXSCREENER_BOOSTS_URL = DEXSCREENER_BASE_URL + "/token-boosts/latest/v1";
+const DEXSCREENER_FRONTIER_CURSOR_KEY = "lst-arb:dexscreener:frontier-cursor:v1";
 export type ArbitrageAsset = {
   symbol: string;
   address: string;
@@ -796,6 +798,10 @@ async function discoverDexScreenerMonadPools(
   let requestsThisScan = 0;
   let latestProfileCount = 0;
   let latestProfileRequests = 0;
+  let latestBoostCount = 0;
+  let latestBoostRequests = 0;
+  let queriedTokenCount = 0;
+  let frontierStartIndex = 0;
 
   const blockedEntry = await readCache<number>(cache, DEXSCREENER_BLOCK_KEY);
   const persistedBlockedUntil = Number(blockedEntry?.data ?? 0);
@@ -816,13 +822,45 @@ async function discoverDexScreenerMonadPools(
     };
   }
 
-  // Seed the frontier with DEX Screener's latest Monad token profiles as well as
-  // everything already discovered from pool indexes. This catches newly listed
-  // tokens even when the primary pool index is temporarily rate-limited.
+  // Seed the frontier with multiple public DEX Screener indexes. Profiles catch
+  // newly surfaced Monad tokens; boosts add another independent high-activity
+  // frontier. Both are discovery inputs only and never bypass exact execution gates.
   const discoveryBudget = Math.max(0, Math.floor(maxRequests));
+
+  const addDiscoveredToken = (rawToken: unknown, rawSymbol?: unknown, rawDecimals?: unknown) => {
+    const tokenAddress = normalizeAssetAddress(
+      typeof rawToken === "string" ? rawToken : String((rawToken as any)?.tokenAddress ?? (rawToken as any)?.address ?? "")
+    );
+    if (!tokenAddress) return;
+
+    const symbol = String(
+      rawSymbol ??
+      (typeof rawToken === "object" && rawToken ? (rawToken as any).symbol ?? (rawToken as any).tokenSymbol : "") ??
+      ("TKN_" + tokenAddress.slice(2, 8).toUpperCase())
+    ).trim() || ("TKN_" + tokenAddress.slice(2, 8).toUpperCase());
+
+    const decimals = Number(
+      rawDecimals ??
+      (typeof rawToken === "object" && rawToken ? (rawToken as any).decimals : 18)
+    );
+
+    if (!assets.has(tokenAddress)) {
+      assets.set(tokenAddress, {
+        symbol,
+        address: tokenAddress,
+        decimals: Number.isFinite(decimals) && decimals >= 0 && decimals <= 36 ? decimals : 18
+      });
+    } else {
+      const existing = assets.get(tokenAddress)!;
+      if ((!existing.symbol || existing.symbol.startsWith("TKN_")) && symbol) {
+        assets.set(tokenAddress, { ...existing, symbol });
+      }
+    }
+  };
+
   if (discoveryBudget >= 2) {
     try {
-      const profileKey = "lst-arb:dexscreener:latest-profiles:monad:v1";
+      const profileKey = "lst-arb:dexscreener:latest-profiles:monad:v2";
       const result = await fetchProviderJson<any[]>(
         profileKey,
         DEXSCREENER_BASE_URL + "/token-profiles/latest/v1",
@@ -838,52 +876,77 @@ async function discoverDexScreenerMonadPools(
       const profiles = Array.isArray(result.data) ? result.data : [];
       for (const profile of profiles) {
         if (String(profile?.chainId ?? "").toLowerCase() !== "monad") continue;
-
-        const tokenAddress = normalizeAssetAddress(
-          profile?.tokenAddress ?? profile?.address
-        );
+        const tokenAddress = normalizeAssetAddress(profile?.tokenAddress ?? profile?.address);
         if (!tokenAddress) continue;
-
         latestProfileCount++;
-        if (!assets.has(tokenAddress)) {
-          assets.set(tokenAddress, {
-            symbol: String(
-              profile?.symbol ??
-              profile?.tokenSymbol ??
-              ("TKN_" + tokenAddress.slice(2, 8).toUpperCase())
-            ),
-            address: tokenAddress,
-            decimals: Number(profile?.decimals ?? 18)
-          });
-        }
-
-        if (!queued.has(tokenAddress)) {
-          queue.push(tokenAddress);
-          queued.add(tokenAddress);
-        }
+        addDiscoveredToken(profile, profile?.symbol ?? profile?.tokenSymbol, profile?.decimals);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       errors.push("DexScreener latest profiles: " + message);
       const status = Number(message.match(/HTTP (\\d+)/)?.[1] ?? 0);
       if (status === 402 || status === 429) {
-        await writeCache(
-          cache,
-          DEXSCREENER_BLOCK_KEY,
-          now + PROVIDER_COOLDOWN_MS,
-          now
-        );
+        await writeCache(cache, DEXSCREENER_BLOCK_KEY, now + PROVIDER_COOLDOWN_MS, now);
       }
     }
   }
 
-  // Existing primary/fallback discoveries are still crawled after the newest
-  // profiles, giving the frontier both breadth and continuity across scans.
-  for (const address of assets.keys()) {
-    const normalized = address.toLowerCase();
-    if (!queued.has(normalized)) {
-      queue.push(normalized);
-      queued.add(normalized);
+  if (discoveryBudget >= 3 && requestsThisScan < discoveryBudget) {
+    try {
+      const boostKey = "lst-arb:dexscreener:latest-boosts:monad:v1";
+      const result = await fetchProviderJson<any[]>(
+        boostKey,
+        DEXSCREENER_BOOSTS_URL,
+        { accept: "application/json", "user-agent": "geld-arbitrage/2.1" },
+        DEXSCREENER_CACHE_TTL_MS
+      );
+
+      if (!result.fromCache) {
+        requestsThisScan++;
+        latestBoostRequests = 1;
+      }
+
+      const boosts = Array.isArray(result.data) ? result.data : [];
+      for (const boost of boosts) {
+        const chainId = String(boost?.chainId ?? "").toLowerCase();
+        if (chainId && chainId !== "monad") continue;
+        const tokenAddress = normalizeAssetAddress(boost?.tokenAddress ?? boost?.address);
+        if (!tokenAddress) continue;
+        latestBoostCount++;
+        addDiscoveredToken(boost, boost?.symbol ?? boost?.tokenSymbol, boost?.decimals);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      errors.push("DexScreener latest boosts: " + message);
+      const status = Number(message.match(/HTTP (\\d+)/)?.[1] ?? 0);
+      if (status === 402 || status === 429) {
+        await writeCache(cache, DEXSCREENER_BLOCK_KEY, now + PROVIDER_COOLDOWN_MS, now);
+      }
+    }
+  }
+
+  // Rotate through the complete known/discovered token universe instead of
+  // repeatedly refreshing the first 180-240 addresses. The cursor lives in the
+  // edge cache so it survives Worker isolate churn without consuming DO storage.
+  const frontierAddresses = [...new Set(
+    [...assets.keys()].map(address => address.toLowerCase())
+  )].sort();
+
+  if (frontierAddresses.length) {
+    const cursorEntry = await readEdgeCache<number>(DEXSCREENER_FRONTIER_CURSOR_KEY);
+    const storedCursor = Number(cursorEntry?.data ?? 0);
+    frontierStartIndex =
+      Number.isFinite(storedCursor) && storedCursor >= 0
+        ? Math.floor(storedCursor) % frontierAddresses.length
+        : 0;
+
+    for (let offset = 0; offset < frontierAddresses.length; offset++) {
+      const index = (frontierStartIndex + offset) % frontierAddresses.length;
+      const address = frontierAddresses[index];
+      if (!queued.has(address)) {
+        queue.push(address);
+        queued.add(address);
+      }
     }
   }
 
@@ -907,6 +970,7 @@ async function discoverDexScreenerMonadPools(
     let rows: any[] = [];
 
     try {
+      queriedTokenCount += batch.length;
       const result = await fetchProviderJson<any[]>(
         cacheKey,
         DEXSCREENER_BASE_URL + "/tokens/v1/monad/" + batch.join(","),
@@ -1022,6 +1086,14 @@ async function discoverDexScreenerMonadPools(
   }
 
   const deduped = dedupePoolRecords(pools);
+  if (frontierAddresses.length && queriedTokenCount > 0) {
+    await writeEdgeCache(
+      DEXSCREENER_FRONTIER_CURSOR_KEY,
+      frontierStartIndex + queriedTokenCount,
+      now
+    );
+  }
+
   return {
     pools: deduped,
     assets: [...assets.values()],
@@ -1031,6 +1103,12 @@ async function discoverDexScreenerMonadPools(
       requestsThisScan,
       latestProfileCount,
       latestProfileRequests,
+      latestBoostCount,
+      latestBoostRequests,
+      queriedTokenCount,
+      frontierStartIndex,
+      frontierUniverseSize: frontierAddresses.length,
+      coverageMode: "rotating-network-frontier",
       refreshedAssets,
       cachedAssets,
       blockedUntil: null,

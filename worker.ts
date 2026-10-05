@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { GeldHighCapLearning } from "./src/highcap-learning.js";
 import { GeldLeverUpPaper } from "./src/leverup-paper.js";
-import { scanLSTArbitrage } from "./src/lst-arbitrage.js";
+import { preflightKyberRoundTrip, scanLSTArbitrage } from "./src/lst-arbitrage.js";
 
 interface Env {
   GELD_BOT: DurableObjectNamespace<GeldBot>;
@@ -1091,6 +1091,20 @@ export default {
     const publicRead = isPublicApiRead(request);
     if (!publicRead && !isAuthorized(request, env)) {
       return new Response("Unauthorized", { status: 401 });
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/lst/arbitrage/preflight") {
+      try {
+        const runtime = await getRuntimeConfig(env);
+        const targetParam = url.searchParams.get("target") ?? url.searchParams.get("token") ?? "";
+        const targetAsset = targetParam
+          ? (await import("./src/lst-arbitrage.js")).ARBITRAGE_ASSETS.find((asset: any) => asset.symbol.toLowerCase() === targetParam.toLowerCase() || asset.address.toLowerCase() === targetParam.toLowerCase())
+          : null;
+        const target = targetAsset;
+        return Response.json(target);
+      } catch (error) {
+        return Response.json({ ok: false, error: error instanceof Error ? error.message : String(error) }, { status: 503 });
+      }
     }
 
     if (url.pathname === "/api/lst/arbitrage") {

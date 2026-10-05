@@ -1039,6 +1039,7 @@ async function discoverKuruMarkets(
 
     return {
       pools,
+      assets: [...assets.values()],
       provider: {
         source: "kuru",
         network: "monad",
@@ -1053,6 +1054,7 @@ async function discoverKuruMarkets(
     errors.push(error instanceof Error ? error.message : String(error));
     return {
       pools: [],
+      assets: availableAssets ? [...availableAssets.values()] : [...assetMap().values()],
       provider: {
         source: "kuru",
         network: "monad",
@@ -1261,7 +1263,6 @@ function addEdge(edges: PoolEdge[], pool: PoolRecord) {
     feePct: pool.feePct,
     liquidityUsd: pool.liquidityUsd,
     volume24hUsd: pool.volume24hUsd,
-    priceUsd: pool.priceUsd,
     quoteKind: pool.quoteKind,
     createdAtBlock: pool.createdAtBlock,
     kuruMarket: pool.kuruMarket
@@ -1279,7 +1280,6 @@ function addEdge(edges: PoolEdge[], pool: PoolRecord) {
     feePct: pool.feePct,
     liquidityUsd: pool.liquidityUsd,
     volume24hUsd: pool.volume24hUsd,
-    priceUsd: pool.priceUsd,
     quoteKind: pool.quoteKind,
     createdAtBlock: pool.createdAtBlock,
     kuruMarket: pool.kuruMarket

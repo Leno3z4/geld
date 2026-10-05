@@ -2550,7 +2550,7 @@ export async function scanLSTArbitrage(
   }
 
   while (
-    probeRoutes.length < MAX_EXACT_ROUTES &&
+    probeRoutes.length < probeLimit &&
     remainingRoutes.length > 0
   ) {
     let bestIndex = 0;

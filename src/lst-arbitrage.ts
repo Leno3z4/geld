@@ -1538,14 +1538,14 @@ async function quoteExactEdge(
       (fromIsQuote && cachedMarket.quoteAsset.toUpperCase() === "MON");
 
     const amountOut = fromIsBase
-      ? await client.readContract({
+      ? await (client as any).readContract({
           address: cachedMarket.marketAddress as Address,
           abi: KURU_MARKET_ABI,
           functionName: "placeAndExecuteMarketSell",
           args: [marketSize, 0n, false, true],
           value: nativeInput ? amountIn : 0n
         })
-      : await client.readContract({
+      : await (client as any).readContract({
           address: cachedMarket.marketAddress as Address,
           abi: KURU_MARKET_ABI,
           functionName: "placeAndExecuteMarketBuy",

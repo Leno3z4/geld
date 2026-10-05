@@ -582,7 +582,10 @@ export class GeldBot extends DurableObject<Env> {
     this.lastLSTArbitrageAt = now;
 
     try {
-      const scan = await scanLSTArbitrage(runtime.rpcUrl);
+      const scan = await scanLSTArbitrage(runtime.rpcUrl, {
+        get: (key) => this.ctx.storage.get<string>(key),
+        put: (key, value) => this.ctx.storage.put(key, value)
+      });
       const result = {
         ...scan,
         executionPolicy: {

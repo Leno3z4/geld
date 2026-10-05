@@ -1333,8 +1333,7 @@ function isExactQuoteSupported(kind: QuoteKind) {
     kind === "uniswap-v3" ||
     kind === "uniswap-v2" ||
     kind === "pancake-v3" ||
-    kind === "pancake-v2" ||
-    kind === "kuru"
+    kind === "pancake-v2"
   );
 }
 

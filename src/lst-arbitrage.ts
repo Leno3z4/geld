@@ -1412,8 +1412,7 @@ function buildArbitragePotentialTokens(
       (b.score - a.score) ||
       (b.venueCount - a.venueCount) ||
       (b.maxLiquidityUsd - a.maxLiquidityUsd)
-    )
-    .slice(0, 250);
+    );
 }
 
 function addKnownCurveEdges(edges: PoolEdge[]) {

@@ -113,7 +113,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-universal-token-discovery-v16-2026-10-05";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-universal-token-discovery-v17-2026-10-05";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KYBER_BASE_URL = "https://aggregator-api.kyberswap.com";
@@ -790,10 +790,12 @@ async function discoverDexScreenerMonadPools(
   const cachedAssets: string[] = [];
   const errors: string[] = [];
   const now = Date.now();
-  const queue = [...assets.keys()].map(address => address.toLowerCase());
-  const queued = new Set(queue);
+  const queue: string[] = [];
+  const queued = new Set<string>();
   const queried = new Set<string>();
   let requestsThisScan = 0;
+  let latestProfileCount = 0;
+  let latestProfileRequests = 0;
 
   const blockedEntry = await readCache<number>(cache, DEXSCREENER_BLOCK_KEY);
   const persistedBlockedUntil = Number(blockedEntry?.data ?? 0);
@@ -812,6 +814,77 @@ async function discoverDexScreenerMonadPools(
         availableDexes: []
       }
     };
+  }
+
+  // Seed the frontier with DEX Screener's latest Monad token profiles as well as
+  // everything already discovered from pool indexes. This catches newly listed
+  // tokens even when the primary pool index is temporarily rate-limited.
+  const discoveryBudget = Math.max(0, Math.floor(maxRequests));
+  if (discoveryBudget >= 2) {
+    try {
+      const profileKey = "lst-arb:dexscreener:latest-profiles:monad:v1";
+      const result = await fetchProviderJson<any[]>(
+        profileKey,
+        DEXSCREENER_BASE_URL + "/token-profiles/latest/v1",
+        { accept: "application/json", "user-agent": "geld-arbitrage/2.1" },
+        DEXSCREENER_CACHE_TTL_MS
+      );
+
+      if (!result.fromCache) {
+        requestsThisScan++;
+        latestProfileRequests = 1;
+      }
+
+      const profiles = Array.isArray(result.data) ? result.data : [];
+      for (const profile of profiles) {
+        if (String(profile?.chainId ?? "").toLowerCase() !== "monad") continue;
+
+        const tokenAddress = normalizeAssetAddress(
+          profile?.tokenAddress ?? profile?.address
+        );
+        if (!tokenAddress) continue;
+
+        latestProfileCount++;
+        if (!assets.has(tokenAddress)) {
+          assets.set(tokenAddress, {
+            symbol: String(
+              profile?.symbol ??
+              profile?.tokenSymbol ??
+              ("TKN_" + tokenAddress.slice(2, 8).toUpperCase())
+            ),
+            address: tokenAddress,
+            decimals: Number(profile?.decimals ?? 18)
+          });
+        }
+
+        if (!queued.has(tokenAddress)) {
+          queue.push(tokenAddress);
+          queued.add(tokenAddress);
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      errors.push("DexScreener latest profiles: " + message);
+      const status = Number(message.match(/HTTP (\\d+)/)?.[1] ?? 0);
+      if (status === 402 || status === 429) {
+        await writeCache(
+          cache,
+          DEXSCREENER_BLOCK_KEY,
+          now + PROVIDER_COOLDOWN_MS,
+          now
+        );
+      }
+    }
+  }
+
+  // Existing primary/fallback discoveries are still crawled after the newest
+  // profiles, giving the frontier both breadth and continuity across scans.
+  for (const address of assets.keys()) {
+    const normalized = address.toLowerCase();
+    if (!queued.has(normalized)) {
+      queue.push(normalized);
+      queued.add(normalized);
+    }
   }
 
   // DEX Screener accepts up to 30 token addresses in the multi-token endpoint.
@@ -956,6 +1029,8 @@ async function discoverDexScreenerMonadPools(
       source: "dexscreener-frontier",
       network: "monad",
       requestsThisScan,
+      latestProfileCount,
+      latestProfileRequests,
       refreshedAssets,
       cachedAssets,
       blockedUntil: null,

@@ -214,6 +214,17 @@ function addr(value: unknown) {
   return match ? match[0].toLowerCase() : "";
 }
 
+function normalizeAssetAddress(value: unknown) {
+  const a = addr(value);
+  // Kuru represents native MON as address(0); treat it as WMON for route
+  // discovery, while the Kuru quote adapter handles the market's native side.
+  if (a === "0x0000000000000000000000000000000000000000" ||
+      a === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") {
+    return "0x3bd359c1119da7da1d913d1c4d2b7c461115433a";
+  }
+  return a;
+}
+
 
 async function discoverDexPaprikaPools(cache?: LSTArbitrageCache) {
   const key = "lst-arb:dexpaprika:pools";
@@ -241,8 +252,8 @@ async function discoverDexPaprikaPools(cache?: LSTArbitrageCache) {
 function parseDexPaprikaPool(record: any, assets: Map<string, ArbitrageAsset>): PoolRecord | null {
   const tokens = Array.isArray(record?.tokens) ? record.tokens : [];
   if (tokens.length !== 2) return null;
-  const base = addr(tokens[0]?.id);
-  const quote = addr(tokens[1]?.id);
+  const base = normalizeAssetAddress(tokens[0]?.id);
+  const quote = normalizeAssetAddress(tokens[1]?.id);
   if (!base || !quote || base === quote) return null;
   const baseAsset = assets.get(base);
   const quoteAsset = assets.get(quote);
@@ -884,8 +895,8 @@ async function quoteExactEdge(
       kuruParamsCache.set(edge.pool.toLowerCase(), params);
     }
     const p = params as readonly [bigint,bigint,Address,bigint,Address,bigint,bigint,bigint,bigint,bigint,bigint];
-    const base = String(p[2]).toLowerCase();
-    const quote = String(p[4]).toLowerCase();
+    const base = normalizeAssetAddress(p[2]);
+    const quote = normalizeAssetAddress(p[4]);
     const baseDecimals = Number(p[3]);
     const quoteDecimals = Number(p[5]);
     const sizePrecisionDecimals = Math.max(0, String(p[1]).length - 1);

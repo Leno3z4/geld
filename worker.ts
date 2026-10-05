@@ -17,6 +17,7 @@ interface Env {
   MONAD_PRIVATE_KEY?: string;
   GEMINI_API_KEYS?: string;
   NADFUN_API_KEY?: string;
+  DEXPAPRIKA_API_KEY?: string;
   STATE_SYNC_SECRET?: string;
   STATE_SYNC_URL?: string;
   MONAD_RPC_URL?: string;
@@ -298,6 +299,7 @@ function hydrateProcessEnv(env: Env) {
     MONAD_PRIVATE_KEY: env.MONAD_PRIVATE_KEY,
     GEMINI_API_KEYS: env.GEMINI_API_KEYS,
     NADFUN_API_KEY: env.NADFUN_API_KEY,
+    DEXPAPRIKA_API_KEY: env.DEXPAPRIKA_API_KEY,
     STATE_SYNC_SECRET: env.STATE_SYNC_SECRET,
     STATE_SYNC_URL: valueFor("STATE_SYNC_URL", env.STATE_SYNC_URL),
     NADFUN_API_URL: valueFor("NADFUN_API_URL", env.NADFUN_API_URL),
@@ -667,7 +669,7 @@ export class GeldBot extends DurableObject<Env> {
           this.lstArbitrageCache.delete(key);
           this.lstArbitrageCache.set(key, value);
         }
-      });
+      }, this.env.DEXPAPRIKA_API_KEY);
       const result = {
         ...scan,
         executionPolicy: {

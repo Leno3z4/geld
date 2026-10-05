@@ -91,6 +91,7 @@ const DEXSCREENER_BASE_URL = "https://api.dexscreener.com";
 const DEXSCREENER_CACHE_TTL_MS = 5 * 60_000;
 const FREE_EXTERNAL_SUBREQUEST_LIMIT = 50;
 const PLANNED_DISCOVERY_REQUESTS = 8;
+const PLANNED_KYBER_SCOUT_REQUESTS = KYBER_SCOUT_TARGETS.length * 2;
 // A route with six hops can consume one external RPC call per exact leg.
 // Keep enough headroom for provider/cache calls on the Free 50-subrequest plan.
 const PLANNED_CACHE_API_CALLS = 10;
@@ -100,6 +101,7 @@ const PLANNED_EXACT_REQUESTS =
 const PLANNED_DISCOVERY_FALLBACK_REQUESTS = 0;
 const PLANNED_WORST_CASE_EXTERNAL_REQUESTS =
   PLANNED_DISCOVERY_REQUESTS +
+  PLANNED_KYBER_SCOUT_REQUESTS +
   PLANNED_EXACT_REQUESTS +
   PLANNED_DISCOVERY_FALLBACK_REQUESTS +
   PLANNED_CACHE_API_CALLS;
@@ -111,6 +113,17 @@ const UNISWAP_V4_QUOTER =
 const LST_ARBITRAGE_BUILD_REVISION = "arb-kuru-subrequest-safe-v12-2026-10-05";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
+const KYBER_BASE_URL = "https://aggregator-api.kyberswap.com";
+const KYBER_CACHE_TTL_MS = 30_000;
+const KYBER_PROBE_SIZE_MON = 5;
+const KYBER_SCOUT_TARGETS: Array<{symbol: string; address: string}> = [
+  { symbol: "USDC", address: "0x754704bc059f8c67012fed69bc8a327a5aafb603" },
+  { symbol: "AUSD", address: "0x00000000efe302beaa2b3e6e1b18d08d69a9012a" },
+  { symbol: "WETH", address: "0xee8c0e9f1bffb4eb878d8f15f368a02a35481242" },
+  { symbol: "gMON", address: "0x8498312a6b3cbd158bf0c93abdcf29e6e4f55081" },
+  { symbol: "sMON", address: "0xa3227c5969757783154c60bf0bc1944180ed81b9" },
+  { symbol: "shMON", address: "0x1b68626dca36c7fe922fd2d55e4f631d962de19c" }
+];
 const KURU_MARKET_ABI = parseAbi([
   "function getMarketParams() view returns (uint256 pricePrecision,uint256 sizePrecision,address baseAssetAddress,uint256 baseAssetDecimals,address quoteAssetAddress,uint256 quoteAssetDecimals,uint256 tickSize,uint256 minSize,uint256 maxSize,int256 takerFeeBps,int256 makerFeeBps)",
   "function placeAndExecuteMarketBuy(uint96 quoteSize,uint256 minAmountOut,bool isMargin,bool isFillOrKill) payable returns (uint256)",
@@ -1215,6 +1228,110 @@ function addKnownCurveEdges(edges: PoolEdge[]) {
     }
   }
 }
+async function scoutKyberRoundTrips(rpcMonUsd = 0) {
+  const mon = "0x3bd359c1119da7da1d913d1c4d2b7c461115433a";
+  const amountIn = parseUnits(String(KYBER_PROBE_SIZE_MON), 18).toString();
+  const results: any[] = [];
+  const errors: string[] = [];
+  let requestsThisScan = 0;
+
+  for (const target of KYBER_SCOUT_TARGETS) {
+    const forwardKey = `kyber:roundtrip:${mon}:${target.address}:forward:${amountIn}`;
+    const reverseKeyPrefix = `kyber:roundtrip:${target.address}:${mon}:reverse:`;
+
+    try {
+      const forward = await fetchProviderJson<any>(
+        forwardKey,
+        `${KYBER_BASE_URL}/monad/api/v1/routes?tokenIn=${mon}&tokenOut=${target.address}&amountIn=${amountIn}`,
+        { accept: "application/json", "user-agent": "geld-arbitrage/1.0" },
+        KYBER_CACHE_TTL_MS
+      );
+      if (!forward.fromCache) requestsThisScan++;
+
+      const routeSummary = forward.data?.data?.routeSummary;
+      const mid = String(routeSummary?.amountOut ?? "");
+      if (!/^\\d+$/.test(mid) || BigInt(mid) <= 0n) {
+        errors.push(`Kyber no forward quote for ${target.symbol}`);
+        continue;
+      }
+
+      const reverse = await fetchProviderJson<any>(
+        reverseKeyPrefix + mid,
+        `${KYBER_BASE_URL}/monad/api/v1/routes?tokenIn=${target.address}&tokenOut=${mon}&amountIn=${mid}`,
+        { accept: "application/json", "user-agent": "geld-arbitrage/1.0" },
+        KYBER_CACHE_TTL_MS
+      );
+      if (!reverse.fromCache) requestsThisScan++;
+
+      const backRaw = String(reverse.data?.data?.routeSummary?.amountOut ?? "");
+      if (!/^\\d+$/.test(backRaw) || BigInt(backRaw) <= 0n) {
+        errors.push(`Kyber no reverse quote for ${target.symbol}`);
+        continue;
+      }
+
+      const backMon = Number(backRaw) / 1e18;
+      const grossProfitMon = backMon - KYBER_PROBE_SIZE_MON;
+      const gasUsd =
+        Number(routeSummary?.gasUsd ?? 0) +
+        Number(reverse.data?.data?.routeSummary?.gasUsd ?? 0);
+
+      const impliedMonUsd =
+        rpcMonUsd > 0
+          ? rpcMonUsd
+          : target.symbol === "USDC"
+            ? (Number(mid) / 1e6) / KYBER_PROBE_SIZE_MON
+            : 0;
+      const gasMon = impliedMonUsd > 0 ? gasUsd / impliedMonUsd : 0;
+      const netProfitMon = grossProfitMon - gasMon - GAS_BUFFER_MON;
+
+      const flatten = (summary: any) =>
+        (summary?.route ?? []).flat().map((leg: any) => ({
+          exchange: String(leg?.exchange ?? ""),
+          poolType: String(leg?.poolType ?? ""),
+          pool: String(leg?.pool ?? ""),
+          tokenIn: String(leg?.tokenIn ?? ""),
+          tokenOut: String(leg?.tokenOut ?? ""),
+          swapAmount: String(leg?.swapAmount ?? ""),
+          amountOut: String(leg?.amountOut ?? "")
+        }));
+
+      results.push({
+        provider: "kyberswap",
+        path: ["MON", target.symbol, "MON"],
+        sizeMon: KYBER_PROBE_SIZE_MON,
+        intermediateAmountRaw: mid,
+        finalMon: backMon,
+        grossProfitMon,
+        gasUsd,
+        gasMon,
+        netProfitMon,
+        candidate: netProfitMon >= MIN_NET_PROFIT_MON,
+        routes: {
+          forward: flatten(routeSummary),
+          reverse: flatten(reverse.data?.data?.routeSummary)
+        }
+      });
+    } catch (error) {
+      errors.push(
+        error instanceof Error
+          ? `Kyber ${target.symbol}: ${error.message}`
+          : `Kyber ${target.symbol}: ${String(error)}`
+      );
+    }
+  }
+
+  results.sort((a, b) => b.netProfitMon - a.netProfitMon);
+  return {
+    enabled: true,
+    probeSizeMon: KYBER_PROBE_SIZE_MON,
+    requestsThisScan,
+    targetCount: KYBER_SCOUT_TARGETS.length,
+    results,
+    topSignal: results.find(x => x.candidate === true) ?? null,
+    errors: errors.length ? [...new Set(errors)] : undefined
+  };
+}
+
 function findCycles(edges: PoolEdge[], startAddress: string, maxHops = MAX_ARBITRAGE_HOPS): any[] {
   const byFrom = new Map<string, PoolEdge[]>();
 
@@ -2019,6 +2136,17 @@ export async function scanLSTArbitrage(
     (a, b) => b.netProfitMon - a.netProfitMon
   );
 
+  const kyberScout = await scoutKyberRoundTrips(
+    (() => {
+      const usdcQuote = exactResults
+        .flatMap((route: any) => route.exactQuotes ?? [])
+        .find((q: any) => q.ok === true && q.finalQuoteRaw && q.sizeMon > 0);
+      return usdcQuote && usdcQuote.finalQuoteRaw
+        ? Number(usdcQuote.finalQuoteRaw) / 1e6 / Number(usdcQuote.sizeMon)
+        : 0;
+    })()
+  );
+
   return {
     mode: "PAPER_SIGNAL_ONLY" as const,
     generatedAt: new Date().toISOString(),
@@ -2053,6 +2181,9 @@ export async function scanLSTArbitrage(
     routes: exactResults,
     signals,
     topSignal: signals[0] ?? null,
+    kyberScout,
+    aggregatorSignals: kyberScout.results,
+    topAggregatorSignal: kyberScout.topSignal,
     thresholds: {
       minimumLiquidityUsd: MIN_LIQUIDITY_USD,
       minimumGrossEdgePct: MIN_GROSS_EDGE_PCT,

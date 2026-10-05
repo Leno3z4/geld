@@ -86,7 +86,6 @@ const GECKO_DEX_CACHE_TTL_MS = 15 * 60_000;
 const GECKO_DEX_POOL_CACHE_TTL_MS = 5 * 60_000;
 const GECKO_DEXES_PER_SCAN = 6;
 const GECKO_POOL_PAGES_PER_DEX_REFRESH = 1;
-const GECKO_DEX_ATTEMPT_COOLDOWN_MS = 60_000;
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const FREE_EXTERNAL_SUBREQUEST_LIMIT = 50;
@@ -485,9 +484,6 @@ async function discoverGeckoMonadDexPools(
       `lst-arb:gecko:dex:${dex.dexId}:pools:v2`;
     const lastGoodKey =
       `lst-arb:gecko:dex:${dex.dexId}:last-good:v2`;
-    const attemptKey =
-      `lst-arb:gecko:dex:${dex.dexId}:attempt:v1`;
-
     const [cachedPools, lastGoodPools] =
       await Promise.all([
         readCache<any[]>(cache, cacheKey),
@@ -503,36 +499,10 @@ async function discoverGeckoMonadDexPools(
       );
 
     if (!isFresh) {
-      let lastAttemptAt = 0;
-      if (cache) {
-        try {
-          lastAttemptAt = Number(
-            await cache.get(attemptKey) ?? 0
-          );
-          if (!Number.isFinite(lastAttemptAt)) {
-            lastAttemptAt = 0;
-          }
-        } catch {
-          lastAttemptAt = 0;
-        }
-      }
-
-      if (
-        now - lastAttemptAt >=
-        GECKO_DEX_ATTEMPT_COOLDOWN_MS
-      ) {
-        if (cache) {
-          try {
-            await cache.put(
-              attemptKey,
-              String(now)
-            );
-          } catch {
-            // Best-effort attempt guard.
-          }
-        }
-
-        try {
+      // No per-DEX attempt lock: six DEXes are deliberately refreshed
+      // every invocation. This guarantees the five-minute warm-up completes
+      // and keeps the worst-case external request budget at 46/50.
+      try {
           const url =
             `https://api.geckoterminal.com/api/v2/networks/${GECKO_NETWORK}/dexes/${safeDexId}/pools?page=1&include=base_token,quote_token,dex`;
 
@@ -623,19 +593,16 @@ async function discoverGeckoMonadDexPools(
           );
 
           refreshedDexes.push(dex.dexId);
-        } catch (error) {
-          errors.push(
-            error instanceof Error
-              ? error.message
-              : String(error)
-          );
+      } catch (error) {
+        errors.push(
+          error instanceof Error
+            ? error.message
+            : String(error)
+        );
 
-          if (lastGoodPools?.data?.length) {
-            snapshot = lastGoodPools;
-          }
+        if (lastGoodPools?.data?.length) {
+          snapshot = lastGoodPools;
         }
-      } else if (lastGoodPools?.data?.length) {
-        snapshot = lastGoodPools;
       }
     }
 

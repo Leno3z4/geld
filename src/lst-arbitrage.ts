@@ -1422,6 +1422,419 @@ export async function preflightKyberRoundTrip(rpcUrl: string, targetAddress: str
   };
 }
 
+function hexValue(value: bigint) {
+  return "0x" + value.toString(16);
+}
+
+function txFrom(to: string, input: string, value = 0n, from: string) {
+  return {
+    from,
+    to,
+    value: hexValue(value),
+    input,
+    chainId: "0x8f"
+  };
+}
+
+function minOutWithBuffer(amountOutRaw: string) {
+  const amount = BigInt(amountOutRaw);
+  return amount * (10_000n - BigInt(EXECUTION_BUFFER_BPS)) / 10_000n;
+}
+
+function universalRouterForQuoteKind(kind: QuoteKind) {
+  if (kind === "uniswap-v3" || kind === "uniswap-v2") return UNISWAP_UNIVERSAL_ROUTER;
+  if (kind === "pancake-v3" || kind === "pancake-v2") return PANCAKE_UNIVERSAL_ROUTER;
+  return null;
+}
+
+function curveIndexes(edge: any) {
+  const indexByAddress: Record<string, number> = {
+    "0x3bd359c1119da7da1d913d1c4d2b7c461115433a": 0,
+    "0x1b68626dca36c7fe922fd2d55e4f631d962de19c": 1,
+    "0xa3227c5969757783154c60bf0bc1944180ed81b9": 2,
+    "0x8498312a6b3cbd158bf0c93abdcf29e6e4f55081": 3
+  };
+  const i = indexByAddress[String(edge.from).toLowerCase()];
+  const j = indexByAddress[String(edge.to).toLowerCase()];
+  return i === undefined || j === undefined ? null : { i, j };
+}
+
+function buildUniversalRouterExecute(
+  router: Address,
+  edge: any,
+  amountIn: bigint,
+  minOut: bigint,
+  sender: string,
+  deadline: number,
+  nativeInput: boolean
+) {
+  const commands: string[] = [];
+  const inputs: string[] = [];
+  const tokenOut = edge.to as Address;
+
+  if (nativeInput) {
+    commands.push("0x0b");
+    inputs.push(encodeAbiParameters(
+      [{ type: "address" }, { type: "uint256" }],
+      [router, amountIn]
+    ));
+  }
+
+  if (edge.quoteKind === "uniswap-v3" || edge.quoteKind === "pancake-v3") {
+    const feeBps = Number(edge.feeBps ?? 0);
+    const fee = feeBps > 0 ? Math.round(feeBps * 100) : Math.max(1, Math.round(Number(edge.feePct ?? 0) * 10_000));
+    if (!(fee > 0 && fee <= 1_000_000)) {
+      throw new Error("Invalid V3 fee for " + edge.venue);
+    }
+    const path = encodePacked(
+      ["address", "uint24", "address"],
+      [edge.from as Address, fee, edge.to as Address]
+    );
+    commands.push("0x00");
+    inputs.push(encodeAbiParameters(
+      [
+        { type: "address" },
+        { type: "uint256" },
+        { type: "uint256" },
+        { type: "bytes" },
+        { type: "bool" },
+        { type: "uint256[]" }
+      ],
+      [router, amountIn, minOut, path, false, []]
+    ));
+  } else if (edge.quoteKind === "uniswap-v2" || edge.quoteKind === "pancake-v2") {
+    commands.push("0x08");
+    inputs.push(encodeAbiParameters(
+      [
+        { type: "address" },
+        { type: "uint256" },
+        { type: "uint256" },
+        { type: "address[]" },
+        { type: "bool" },
+        { type: "uint256[]" }
+      ],
+      [router, amountIn, minOut, [edge.from as Address, edge.to as Address], false, []]
+    ));
+  } else {
+    throw new Error("Universal Router unsupported quote kind: " + edge.quoteKind);
+  }
+
+  commands.push("0x04");
+  inputs.push(encodeAbiParameters(
+    [{ type: "address" }, { type: "address" }, { type: "uint256" }],
+    [tokenOut, sender as Address, minOut]
+  ));
+
+  return encodeFunctionData({
+    abi: UNIVERSAL_ROUTER_ABI,
+    functionName: "execute",
+    args: [("0x" + commands.map(x => x.slice(2)).join("")) as `0x${string}`, inputs as `0x${string}`[], BigInt(deadline)]
+  });
+}
+
+function buildCurveExchange(edge: any, amountIn: bigint, minOut: bigint, sender: string) {
+  const indexes = curveIndexes(edge);
+  if (!indexes) throw new Error("Curve indexes unavailable for " + edge.from + "->" + edge.to);
+  return encodeFunctionData({
+    abi: CURVE_SWAP_ABI,
+    functionName: "exchange",
+    args: [BigInt(indexes.i), BigInt(indexes.j), amountIn, minOut, sender as Address]
+  });
+}
+
+function buildKuruCall(edge: any, amountIn: bigint, minOut: bigint) {
+  const market = edge.kuruMarket;
+  if (!market) throw new Error("Kuru market metadata unavailable");
+
+  const fromIsBase = String(edge.from).toLowerCase() === market.baseAssetAddress.toLowerCase();
+  const fromIsQuote = String(edge.from).toLowerCase() === market.quoteAssetAddress.toLowerCase();
+  if (!fromIsBase && !fromIsQuote) throw new Error("Kuru edge token mismatch");
+
+  const inputDecimals = fromIsBase ? market.baseAssetPrecision : market.quoteAssetPrecision;
+  const precision = fromIsBase ? BigInt(market.sizePrecision) : BigInt(market.pricePrecision);
+  const marketSize = amountIn * precision / (10n ** BigInt(inputDecimals));
+  const nativeInput =
+    (fromIsBase && String(market.baseAsset).toUpperCase() === "MON") ||
+    (fromIsQuote && String(market.quoteAsset).toUpperCase() === "MON");
+
+  const input = fromIsBase
+    ? encodeFunctionData({
+        abi: KURU_MARKET_ABI,
+        functionName: "placeAndExecuteMarketSell",
+        args: [marketSize, minOut, false, true]
+      })
+    : encodeFunctionData({
+        abi: KURU_MARKET_ABI,
+        functionName: "placeAndExecuteMarketBuy",
+        args: [marketSize, minOut, false, true]
+      });
+
+  return {
+    input,
+    value: nativeInput ? amountIn : 0n,
+    nativeInput,
+    marketAddress: market.marketAddress
+  };
+}
+
+export async function preflightAllLSTArbitrage(
+  rpcUrl: string,
+  cache: LSTArbitrageCache | undefined,
+  apiKey: string | undefined,
+  sender: string,
+  sizeMon = 1
+) {
+  const scan = await scanLSTArbitrage(rpcUrl, cache, apiKey, {
+    probeLimit: 4,
+    includeKyberScout: false
+  });
+
+  const results: any[] = [];
+  for (const route of scan.routes as any[]) {
+    const quote = (route.exactQuotes ?? []).find((q: any) => q.ok === true && Number(q.sizeMon) === sizeMon)
+      ?? (route.exactQuotes ?? []).find((q: any) => q.ok === true);
+    if (!quote?.exactLegs?.length) {
+      results.push({ route: route.path, ok: false, reason: "No exact quote legs available" });
+      continue;
+    }
+
+    let amount = parseUnits(String(sizeMon), 18);
+    let nativeHeld = false;
+    let routeBuildable = true;
+    const transactions: any[] = [];
+    const legResults: any[] = [];
+    const deadline = Math.floor(Date.now() / 1000) + 120;
+
+    try {
+      for (const leg of quote.exactLegs) {
+        const fromIsWmon = String(leg.tokenIn).toLowerCase() === WMON_ADDRESS.toLowerCase();
+        const minOut = minOutWithBuffer(String(leg.quoteAmountOutRaw));
+        const kind = leg.quoteKind as QuoteKind;
+
+        if (kind === "uniswap-v3" || kind === "uniswap-v2" || kind === "pancake-v3" || kind === "pancake-v2") {
+          const router = universalRouterForQuoteKind(kind);
+          if (!router) throw new Error("No Universal Router for " + kind);
+
+          if (fromIsWmon) {
+            transactions.push(
+              txFrom(
+                router,
+                buildUniversalRouterExecute(router, leg, amount, minOut, sender, deadline, true),
+                amount,
+                sender
+              )
+            );
+          } else {
+            transactions.push(
+              txFrom(
+                leg.tokenIn,
+                encodeFunctionData({
+                  abi: ERC20_TX_ABI,
+                  functionName: "transfer",
+                  args: [router, amount]
+                }),
+                0n,
+                sender
+              )
+            );
+            transactions.push(
+              txFrom(
+                router,
+                buildUniversalRouterExecute(router, leg, amount, minOut, sender, deadline, false),
+                0n,
+                sender
+              )
+            );
+          }
+          nativeHeld = false;
+        } else if (kind === "curve-lst") {
+          if (fromIsWmon && nativeHeld) {
+            transactions.push(
+              txFrom(
+                WMON_ADDRESS,
+                encodeFunctionData({ abi: WMON_WRAP_ABI, functionName: "deposit", args: [] }),
+                amount,
+                sender
+              )
+            );
+            nativeHeld = false;
+          }
+          if (fromIsWmon && transactions.length === 0) {
+            transactions.push(
+              txFrom(
+                WMON_ADDRESS,
+                encodeFunctionData({ abi: WMON_WRAP_ABI, functionName: "deposit", args: [] }),
+                amount,
+                sender
+              )
+            );
+          }
+          transactions.push(
+            txFrom(
+              leg.tokenIn,
+              encodeFunctionData({
+                abi: ERC20_TX_ABI,
+                functionName: "approve",
+                args: [leg.pool as Address, amount]
+              }),
+              0n,
+              sender
+            )
+          );
+          transactions.push(
+            txFrom(
+              leg.pool,
+              buildCurveExchange(leg, amount, minOut, sender),
+              0n,
+              sender
+            )
+          );
+          nativeHeld = false;
+        } else if (kind === "kuru") {
+          const built = buildKuruCall(leg, amount, minOut);
+
+          if (!built.nativeInput) {
+            transactions.push(
+              txFrom(
+                leg.tokenIn,
+                encodeFunctionData({
+                  abi: ERC20_TX_ABI,
+                  functionName: "approve",
+                  args: [built.marketAddress as Address, amount]
+                }),
+                0n,
+                sender
+              )
+            );
+          } else if (fromIsWmon && !nativeHeld && transactions.length > 0) {
+            transactions.push(
+              txFrom(
+                WMON_ADDRESS,
+                encodeFunctionData({ abi: WMON_WRAP_ABI, functionName: "withdraw", args: [amount] }),
+                0n,
+                sender
+              )
+            );
+          }
+
+          transactions.push(txFrom(built.marketAddress, built.input, built.value, sender));
+          nativeHeld = built.nativeInput && String(leg.tokenOut).toLowerCase() === WMON_ADDRESS.toLowerCase();
+        } else if (kind === "uniswap-v4") {
+          routeBuildable = false;
+          legResults.push({ from: leg.from, to: leg.to, quoteKind: kind, status: "quote-only" });
+          break;
+        } else {
+          throw new Error("Transaction builder unavailable for " + kind);
+        }
+
+        legResults.push({
+          from: leg.from,
+          to: leg.to,
+          venue: leg.venue,
+          dex: leg.dex,
+          quoteKind: kind,
+          amountInRaw: String(leg.amountInRaw),
+          quotedOutRaw: String(leg.quoteAmountOutRaw),
+          minOutRaw: minOut.toString()
+        });
+        amount = BigInt(String(leg.quoteAmountOutRaw));
+      }
+
+      if (!routeBuildable) {
+        results.push({
+          route: route.path,
+          ok: true,
+          quoteOnly: true,
+          reason: "Uniswap V4 calldata builder is not yet wired; exact quote remains available.",
+          quotedNetProfitMon: quote.netProfitMon,
+          legResults
+        });
+        continue;
+      }
+
+      const blockNumber = await rpcJson(rpcUrl, "eth_blockNumber");
+      const callMany = await rpcJson(rpcUrl, "eth_callMany", [
+        [{ transactions }],
+        { blockNumber, transactionIndex: 0 },
+        { [sender]: { balance: hexValue(1000n * 10n ** 18n) } },
+        9000
+      ]);
+      const simulated = Array.isArray(callMany?.[0]) ? callMany[0].map(decodeCallManyResult) : [];
+      const successful = simulated.length === transactions.length && simulated.every((x: any) => x.ok === true);
+
+      const gasPriceRaw = await rpcJson(rpcUrl, "eth_gasPrice").catch(() => "0x0");
+      const gasPrice = BigInt(String(gasPriceRaw));
+      let gasUnits = 0n;
+      let gasEstimateError: string | null = null;
+      try {
+        const last = transactions[transactions.length - 1];
+        const gasRaw = await rpcJson(rpcUrl, "eth_estimateGas", [last]);
+        gasUnits = BigInt(String(gasRaw));
+      } catch (error) {
+        gasEstimateError = error instanceof Error ? error.message : String(error);
+      }
+      const gasCostMon = gasUnits > 0n ? Number(gasUnits * gasPrice) / 1e18 : null;
+
+      results.push({
+        route: route.path,
+        ok: true,
+        quoteOnly: false,
+        sizeMon,
+        quotedFinalMon: quote.finalMon,
+        quotedGrossProfitMon: quote.grossProfitMon,
+        quotedNetProfitMon: quote.netProfitMon,
+        gasUnits: gasUnits.toString(),
+        gasPriceRaw: gasPrice.toString(),
+        gasCostMon,
+        candidate: successful && quote.candidate === true,
+        transactionCount: transactions.length,
+        transactions,
+        simulation: {
+          method: "eth_callMany",
+          blockNumber,
+          successful,
+          results: simulated,
+          error: null
+        },
+        gasEstimateError,
+        legResults
+      });
+    } catch (error) {
+      results.push({
+        route: route.path,
+        ok: false,
+        quoteOnly: false,
+        quotedNetProfitMon: quote.netProfitMon,
+        error: error instanceof Error ? error.message : String(error),
+        transactions,
+        legResults
+      });
+    }
+  }
+
+  return {
+    mode: "PAPER_PREFLIGHT_ALL",
+    generatedAt: new Date().toISOString(),
+    sender,
+    sizeMon,
+    scan: {
+      poolCount: scan.poolCount,
+      routeCount: scan.routeCount,
+      probeRouteCount: scan.probeRouteCount,
+      exactSupportedDexes: scan.provider?.exactSupportedDexes ?? []
+    },
+    results,
+    successfulCount: results.filter((x: any) => x.ok && x.simulation?.successful).length,
+    candidateCount: results.filter((x: any) => x.candidate === true).length,
+    safety: {
+      broadcasted: false,
+      liveExecutionEnabled: false,
+      atomic: false,
+      note: "Preflight only. No approval, transfer, swap, or arbitrage transaction is broadcast."
+    }
+  };
+}
+
 async function scoutKyberRoundTrips(rpcMonUsd = 0) {
   const mon = "0x3bd359c1119da7da1d913d1c4d2b7c461115433a";
   const amountIn = parseUnits(String(KYBER_PROBE_SIZE_MON), 18).toString();

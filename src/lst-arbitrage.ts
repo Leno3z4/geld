@@ -75,8 +75,8 @@ export const EXECUTION_BUFFER_PCT = 0.20;
 export const MIN_NET_PROFIT_MON = 0.005;
 export const GAS_BUFFER_MON = 0.001;
 export const TRADE_SIZES_MON = [1, 5, 10];
-export const MAX_EXACT_ROUTES = 64;
-export const MAX_REFINED_ROUTES = 8;
+export const MAX_EXACT_ROUTES = 8;
+export const MAX_REFINED_ROUTES = 1;
 export const PROBE_SIZE_MON = 1;
 const EXECUTION_BUFFER_BPS = Math.round(EXECUTION_BUFFER_PCT * 100);
 const DEXPAPRIKA_POOLS_URL = "https://api.dexpaprika.com/networks/monad/pools/search";
@@ -168,6 +168,7 @@ export type PoolEdge = {
   liquidityUsd: number;
   volume24hUsd: number;
   quoteKind: QuoteKind;
+  createdAtBlock?: string;
 };
 
 export type ArbitrageSignal = {
@@ -216,6 +217,7 @@ type PoolRecord = {
   volume24hUsd: number;
   dex: string;
   quoteKind: QuoteKind;
+  createdAtBlock?: string;
 };
 
 function num(v: unknown) {
@@ -477,7 +479,11 @@ function parseDexPaprikaPool(record: any, assets: Map<string, ArbitrageAsset>): 
     liquidityUsd: num(record?.liquidity_usd),
     volume24hUsd: num(record?.volume_usd_24h),
     dex: dexId || dexName,
-    quoteKind
+    quoteKind,
+    createdAtBlock:
+      record?.created_at_block_number !== undefined
+        ? String(record.created_at_block_number)
+        : undefined
   };
 }
 
@@ -914,7 +920,8 @@ function addEdge(edges: PoolEdge[], pool: PoolRecord) {
     feePct: pool.feePct,
     liquidityUsd: pool.liquidityUsd,
     volume24hUsd: pool.volume24hUsd,
-    quoteKind: pool.quoteKind
+    quoteKind: pool.quoteKind,
+    createdAtBlock: pool.createdAtBlock
   });
 
   edges.push({
@@ -929,7 +936,8 @@ function addEdge(edges: PoolEdge[], pool: PoolRecord) {
     feePct: pool.feePct,
     liquidityUsd: pool.liquidityUsd,
     volume24hUsd: pool.volume24hUsd,
-    quoteKind: pool.quoteKind
+    quoteKind: pool.quoteKind,
+    createdAtBlock: pool.createdAtBlock
   });
 }
 
@@ -1098,11 +1106,16 @@ async function quoteExactEdge(
 
     if (poolKey === undefined) {
       try {
-        const logs = await client.getLogs({
+        const logQuery: Parameters<typeof client.getLogs>[0] = {
           address: UNISWAP_V4_POOL_MANAGER,
           event: V4_INITIALIZE_EVENT_ABI[0],
           args: { id: edge.pool as `0x${string}` }
-        });
+        };
+        if (edge.createdAtBlock) {
+          logQuery.fromBlock = BigInt(edge.createdAtBlock);
+          logQuery.toBlock = BigInt(edge.createdAtBlock);
+        }
+        const logs = await client.getLogs(logQuery);
 
         const log = logs[logs.length - 1] as any;
         if (!log?.args) {
@@ -1584,7 +1597,7 @@ export async function scanLSTArbitrage(
     mode: "PAPER_SIGNAL_ONLY" as const,
     generatedAt: new Date().toISOString(),
     rpcUrl,
-    assets: ARBITRAGE_ASSETS,
+    assets: [...assets.values()],
     poolCount: pools.length,
     edgeCount: edges.length,
     triangleCount: allRoutes.length,

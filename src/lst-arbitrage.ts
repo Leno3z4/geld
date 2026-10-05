@@ -108,7 +108,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-kuru-exact-routing-v9-2026-10-05";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-kuru-cross-venue-v10-2026-10-05";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KURU_MARKET_ABI = parseAbi([
@@ -1795,9 +1795,15 @@ export async function scanLSTArbitrage(
   // Always spend one exact probe on Kuru when a complete Kuru cycle exists.
   // This prevents a neutral discovery rate from starving Kuru routes from
   // exact validation.
-  const kuruIndex = remainingRoutes.findIndex(route =>
-    route.legs.some((leg: PoolEdge) => leg.quoteKind === "kuru")
-  );
+  const kuruIndex = remainingRoutes.findIndex(route => {
+    const dexes = new Set(
+      route.legs.map((leg: PoolEdge) => String(leg.dex).toLowerCase())
+    );
+    return (
+      route.legs.some((leg: PoolEdge) => leg.quoteKind === "kuru") &&
+      dexes.size >= 2
+    );
+  });
   if (kuruIndex >= 0 && probeRoutes.length < MAX_EXACT_ROUTES) {
     const [kuruRoute] = remainingRoutes.splice(kuruIndex, 1);
     probeRoutes.push(kuruRoute);

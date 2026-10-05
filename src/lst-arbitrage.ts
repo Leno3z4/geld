@@ -488,23 +488,18 @@ function addEdge(edges: PoolEdge[], pool: PoolRecord) {
   });
 }
 
-function addIndicativeCurveEdges(
-  edges: PoolEdge[],
-  tokenPrices: Record<string, string>
-) {
+function addKnownCurveEdges(edges: PoolEdge[]) {
   const symbols = ["WMON", "shMON", "sMON", "gMON"];
   const bySymbol = new Map(ARBITRAGE_ASSETS.map(a => [a.symbol, a]));
 
+  // Known 4-asset Curve pool on Monad. Exact quotes are still required before
+  // a route can become a signal, so these edges are only route-discovery seeds.
   for (const fromSymbol of symbols) {
     for (const toSymbol of symbols) {
       if (fromSymbol === toSymbol) continue;
       const from = bySymbol.get(fromSymbol);
       const to = bySymbol.get(toSymbol);
       if (!from || !to) continue;
-
-      const fromUsd = num(tokenPrices[from.address]);
-      const toUsd = num(tokenPrices[to.address]);
-      if (!(fromUsd > 0) || !(toUsd > 0)) continue;
 
       edges.push({
         pool: CURVE_LST_POOL,
@@ -514,16 +509,15 @@ function addIndicativeCurveEdges(
         to: to.address,
         fromSymbol,
         toSymbol,
-        rate: fromUsd / toUsd,
+        rate: 1,
         feePct: 0,
-        liquidityUsd: 919_000,
-        volume24hUsd: 173_000,
+        liquidityUsd: 900_000,
+        volume24hUsd: 0,
         quoteKind: "curve-lst"
       });
     }
   }
 }
-
 function findTriangles(edges: PoolEdge[], startAddress: string) {
   const byFrom = new Map<string, PoolEdge[]>();
   for (const edge of edges) {

@@ -93,8 +93,11 @@ const PLANNED_DISCOVERY_REQUESTS =
   1 + GECKO_DEXES_PER_SCAN * GECKO_POOL_PAGES_PER_DEX_REFRESH;
 const PLANNED_EXACT_REQUESTS =
   MAX_EXACT_ROUTES * 3 * 2 + TRADE_SIZES_MON.length;
+const PLANNED_DISCOVERY_FALLBACK_REQUESTS = 1;
 const PLANNED_WORST_CASE_EXTERNAL_REQUESTS =
-  PLANNED_DISCOVERY_REQUESTS + PLANNED_EXACT_REQUESTS;
+  PLANNED_DISCOVERY_REQUESTS +
+  PLANNED_DISCOVERY_FALLBACK_REQUESTS +
+  PLANNED_EXACT_REQUESTS;
 const PANCAKE_V3_QUOTER_V2 = "0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997" as Address;
 const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
@@ -654,6 +657,80 @@ async function discoverGeckoMonadDexPools(
     }
   }
 
+  let fallbackRequestsThisScan = 0;
+  let fallbackPairs: any[] = [];
+  try {
+    const fallback = await getDexScreenerSnapshot(cache);
+    fallbackRequestsThisScan =
+      Number(fallback.provider?.requestsThisScan ?? 0);
+    fallbackPairs = Array.isArray(fallback.pairs)
+      ? fallback.pairs
+      : [];
+    for (const pair of fallbackPairs) {
+      const parsed = parseDexScreenerPair(
+        pair,
+        assetMap()
+      );
+      if (parsed) {
+        allPoolRecords.push({
+          id: parsed.id,
+          attributes: {
+            address: parsed.address,
+            name: parsed.name,
+            base_token_price_quote_token:
+              String(parsed.baseToQuote),
+            pool_fee_percentage:
+              parsed.feePct,
+            reserve_in_usd:
+              parsed.liquidityUsd,
+            volume_usd: {
+              h24: parsed.volume24hUsd
+            }
+          },
+          relationships: {
+            base_token: {
+              data: {
+                id: `monad_${parsed.base}`
+              }
+            },
+            quote_token: {
+              data: {
+                id: `monad_${parsed.quote}`
+              }
+            },
+            dex: {
+              data: {
+                id: parsed.dex
+              }
+            }
+          },
+          __baseTokenMeta: {
+            attributes: {
+              address: parsed.base,
+              symbol: parsed.baseSymbol,
+              decimals:
+                assets.get(parsed.base)?.decimals ?? 18
+            }
+          },
+          __quoteTokenMeta: {
+            attributes: {
+              address: parsed.quote,
+              symbol: parsed.quoteSymbol,
+              decimals:
+                assets.get(parsed.quote)?.decimals ?? 18
+            }
+          }
+        });
+      }
+    }
+  } catch (error) {
+    errors.push(
+      error instanceof Error
+        ? error.message
+        : String(error)
+    );
+  }
+
   const dedupedPools = new Map<string, any>();
   for (const record of allPoolRecords) {
     const poolAddress = poolIdentifier(
@@ -716,12 +793,15 @@ async function discoverGeckoMonadDexPools(
     name: "GeckoTerminal Monad DEX rotation",
     requestsThisScan:
       inventoryRequestsThisScan +
-      poolRequestsThisScan,
+      poolRequestsThisScan +
+      fallbackRequestsThisScan,
     inventoryRequestsThisScan,
     poolRequestsThisScan,
+    fallbackRequestsThisScan,
     cached:
       inventoryRequestsThisScan === 0 &&
-      poolRequestsThisScan === 0,
+      poolRequestsThisScan === 0 &&
+      fallbackRequestsThisScan === 0,
     stale,
     staleFrom:
       inventoryStaleFrom ??
@@ -735,7 +815,9 @@ async function discoverGeckoMonadDexPools(
             now - inventoryStaleFrom
           )
         : 0,
-    queryMode: "dex_inventory_rotation",
+    queryMode: "dex_inventory_rotation_with_token_fallback",
+    fallbackProvider: "DEX Screener token-pair snapshot",
+    fallbackPairCount: fallbackPairs.length,
     inventoryDexCount:
       normalizedInventory.length,
     poolSnapshotCount:
@@ -769,6 +851,7 @@ async function discoverGeckoMonadDexPools(
     inventoryTtlMs:
       GECKO_DEX_CACHE_TTL_MS,
     externalMarketDataRequired: false,
+    fallbackUsed: fallbackPairs.length > 0,
     errors: errors.length
       ? [...new Set(errors)]
       : undefined,

@@ -45,7 +45,7 @@ const KNOWN_UNISWAP_POOLS: PoolRecord[] = [
     quoteKind: "uniswap-v3"
   }
 ];
-// LST arbitrage scanner: DexPaprika network-wide discovery with exact on-chain quotes.
+// LST arbitrage scanner: GeckoTerminal + DEX Screener topology discovery with exact on-chain quotes.
 import {
   createPublicClient,
   http,
@@ -103,12 +103,24 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const DEXSCREENER_TOKEN_URL = "https://api.dexscreener.com/tokens/v1/monad";
-const DEXSCREENER_CACHE_TTL_MS = 60_000;
+const DEXSCREENER_TOKEN_PAIRS_URL = "https://api.dexscreener.com/token-pairs/v1/monad";
+const DEXSCREENER_CACHE_TTL_MS = 15 * 60_000;
+const DEXSCREENER_ASSET_ROTATION_MS = 60_000;
 const DEXPAPRIKA_CACHE_TTL_MS = 5 * 60_000;
+const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
+const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
+const PANCAKE_V3_QUOTER_V2 = "0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997" as Address;
+const UNISWAP_V4_POOL_MANAGER =
+  "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
+const UNISWAP_V4_QUOTER =
+  "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
+const NADFUN_LENS =
+  "0x7e78A8DE94f21804F7a17F4E8BF9EC2c872187ea" as Address;
+
 const KURU_MARKET_ABI = parseAbi([
   "function getMarketParams() view returns (uint256 pricePrecision,uint256 sizePrecision,address baseAssetAddress,uint256 baseAssetDecimals,address quoteAssetAddress,uint256 quoteAssetDecimals,uint256 tickSize,uint256 minSize,uint256 maxSize,int256 takerFeeBps,int256 makerFeeBps)"
 ]);
+
 const V2_PAIR_ABI = parseAbi([
   "function token0() view returns (address)",
   "function getReserves() view returns (uint112 reserve0,uint112 reserve1,uint32 blockTimestampLast)"
@@ -120,6 +132,22 @@ const V4_INITIALIZE_EVENT_ABI = parseAbi([
 
 const V4_QUOTER_ABI = parseAbi([
   "function quoteExactInputSingle((address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks) poolKey,bool zeroForOne,uint128 exactAmount,bytes hookData) returns (uint256 amountOut,uint256 gasEstimate)"
+]);
+
+const QUOTER_V2_ABI = parseAbi([
+  "function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96) params) returns (uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)"
+]);
+
+const UNISWAP_V3_POOL_ABI = parseAbi([
+  "function fee() view returns (uint24)"
+]);
+
+const CURVE_POOL_ABI = parseAbi([
+  "function get_dy(int128 i,int128 j,uint256 dx) view returns (uint256)"
+]);
+
+const NADFUN_LENS_ABI = parseAbi([
+  "function getAmountOut(address token,uint256 amountIn,bool isBuy) view returns (address router,uint256 amountOut)"
 ]);
 
 export type LSTArbitrageCache = {
@@ -171,7 +199,7 @@ export const ARBITRAGE_ASSETS: ArbitrageAsset[] = [
   { symbol: "USDC", address: "0x754704bc059f8c67012fed69bc8a327a5aafb603", decimals: 6 }
 ];
 
-type QuoteKind = "uniswap-v4" | "uniswap-v3" | "uniswap-v2" | "pancake-v3" | "pancake-v2" | "curve-lst" | "kuru" | "unsupported";
+type QuoteKind = "uniswap-v4" | "uniswap-v3" | "uniswap-v2" | "pancake-v3" | "pancake-v2" | "curve-lst" | "nadfun-lens" | "kuru" | "unsupported";
 type KuruMarket = {
   symbol: string;
   status: string;
@@ -459,6 +487,7 @@ async function discoverGeckoMonadDexPools(
   const missingDexSnapshots: string[] = [];
   const allPoolRecords: any[] = [];
   let poolRequestsThisScan = 0;
+  let geckoBlockedUntil = await providerBlockedUntil(cache);
 
   const rotationBase =
     Math.floor(now / 60_000) *
@@ -502,7 +531,7 @@ async function discoverGeckoMonadDexPools(
           GECKO_DEX_POOL_CACHE_TTL_MS
       );
 
-    if (!isFresh) {
+    if (!isFresh && now >= geckoBlockedUntil) {
       // Refresh a small sequential batch each invocation. Three DEXes per
       // minute stays well below GeckoTerminal's public request rate while
       // allowing the full inventory to warm in about nine minutes.
@@ -524,6 +553,16 @@ async function discoverGeckoMonadDexPools(
             const retry = retryAfterMs(
               response.headers.get("retry-after")
             );
+            if (response.status === 429) {
+              geckoBlockedUntil = now + Math.max(
+                PROVIDER_RETRY_FLOOR_MS,
+                retry ?? PROVIDER_RETRY_FLOOR_MS
+              );
+              await setProviderBlockedUntil(
+                cache,
+                geckoBlockedUntil
+              );
+            }
             throw new GeckoHttpError(
               response.status,
               retry,
@@ -819,6 +858,14 @@ async function discoverGeckoMonadDexPools(
     queryMode: "dex_inventory_rotation_with_token_fallback",
     fallbackProvider: "DEX Screener token-pair snapshot",
     fallbackPairCount: fallbackPairs.length,
+    fallbackTokenSnapshotCount:
+      Number(fallback.provider?.tokenSnapshotCount ?? 0),
+    fallbackTargetAsset:
+      fallback.provider?.targetAsset ?? null,
+    fallbackRefreshedAsset:
+      fallback.provider?.refreshedAsset ?? null,
+    fallbackWarmupComplete:
+      Boolean(fallback.provider?.warmupComplete),
     inventoryDexCount:
       normalizedInventory.length,
     poolSnapshotCount:
@@ -857,10 +904,9 @@ async function discoverGeckoMonadDexPools(
       ? [...new Set(errors)]
       : undefined,
     note:
-      "The inventory is the complete Monad DEX set returned by GeckoTerminal. " +
-"Three DEXes are refreshed sequentially per minute and their cached top pool " +
-      "snapshots are retained, giving the 27-DEX inventory a roughly nine-minute " +
-      "warm-up with one pool page per DEX. Exact on-chain quotes remain the profitability gate."
+      "GeckoTerminal provides the Monad DEX inventory; public pool endpoints are " +
+      "cached and throttled after rate limits. DEX Screener token-pair snapshots rotate " +
+      "across every tracked arbitrage asset. Exact on-chain quotes remain the profitability gate."
   };
 
   return { pools, provider };
@@ -1058,6 +1104,17 @@ async function fetchDexScreenerPairs() {
   return Array.isArray(json) ? json : [];
 }
 
+function dexScreenerCacheKey(asset: ArbitrageAsset) {
+  return `${CACHE_KEY_PREFIX}:dexscreener:token-pairs:v2:${asset.address.toLowerCase()}`;
+}
+
+async function fetchDexScreenerTokenPairs(asset: ArbitrageAsset) {
+  const json = await fetchJson(
+    `${DEXSCREENER_TOKEN_PAIRS_URL}/${asset.address}`
+  );
+  return Array.isArray(json) ? json : [];
+}
+
 function parseDexScreenerPair(
   pair: any,
   assets: Map<string, ArbitrageAsset>
@@ -1079,7 +1136,9 @@ function parseDexScreenerPair(
     : [];
   const pairAddress = addr(pair?.pairAddress);
   const isV3 = labels.includes("v3");
-  const isV2 = labels.includes("v2");
+  const isV2 = labels.some(label => label === "v2" || label.startsWith("v2."));
+  const wmon = "0x3bd359c1119da7da1d913d1c4d2b7c461115433a";
+
   let dex = rawDex;
   let quoteKind: QuoteKind = "unsupported";
 
@@ -1087,11 +1146,17 @@ function parseDexScreenerPair(
     dex = "curve-monad";
     quoteKind = "curve-lst";
   } else if (rawDex === "uniswap") {
-    dex = isV3 ? "uniswap-v3-monad" : isV2 ? "uniswap-v2-monad" : "uniswap-v2-monad";
+    dex = isV3 ? "uniswap-v3-monad" : "uniswap-v2-monad";
     quoteKind = isV3 ? "uniswap-v3" : "uniswap-v2";
   } else if (rawDex === "pancakeswap") {
     dex = isV3 ? "pancakeswap-v3-monad" : "pancakeswap-v2-monad";
     quoteKind = isV3 ? "pancake-v3" : "pancake-v2";
+  } else if (
+    rawDex === "nad-fun" &&
+    (base === wmon || quote === wmon)
+  ) {
+    dex = "nad-fun";
+    quoteKind = "nadfun-lens";
   }
 
   return {
@@ -1103,8 +1168,6 @@ function parseDexScreenerPair(
     baseSymbol: baseAsset.symbol,
     quoteSymbol: quoteAsset.symbol,
     baseToQuote,
-    // Uniswap v3 fee is read directly from the pool contract before exact
-    // quoting. DEX Screener does not expose the fee tier in this response.
     feePct: 0,
     liquidityUsd: num(pair?.liquidity?.usd),
     volume24hUsd: num(pair?.volume?.h24),
@@ -1114,56 +1177,106 @@ function parseDexScreenerPair(
 }
 
 async function getDexScreenerSnapshot(cache?: LSTArbitrageCache) {
-  const key = `${CACHE_KEY_PREFIX}:dexscreener:pairs`;
+  const assets = ARBITRAGE_ASSETS;
   const now = Date.now();
-  const cached = await readCache<any[]>(cache, key);
+  const entries = new Map<string, CacheEntry<any[]> | null>();
 
-  if (cached && now - cached.fetchedAt < DEXSCREENER_CACHE_TTL_MS) {
-    return {
-      pairs: cached.data,
-      provider: {
-        name: "DEX Screener",
-        requestsThisScan: 0,
-        cached: true,
-        fetchedAt: cached.fetchedAt,
-        cacheTtlMs: DEXSCREENER_CACHE_TTL_MS
-      }
-    };
+  for (const asset of assets) {
+    entries.set(
+      asset.address.toLowerCase(),
+      await readCache<any[]>(
+        cache,
+        dexScreenerCacheKey(asset)
+      )
+    );
   }
 
-  try {
-    const pairs = await fetchDexScreenerPairs();
-    await writeCache(cache, key, pairs, now);
-    return {
-      pairs,
-      provider: {
-        name: "DEX Screener",
-        requestsThisScan: 1,
-        cached: false,
-        fetchedAt: now,
-        cacheTtlMs: DEXSCREENER_CACHE_TTL_MS
-      }
-    };
-  } catch (error) {
-    // A stale snapshot is preferable to turning the arbitrage endpoint red.
-    // Exact quotes still come from Monad RPC, so stale market topology cannot
-    // become a submitted transaction.
-    if (cached) {
-      return {
-        pairs: cached.data,
-        provider: {
-          name: "DEX Screener",
-          requestsThisScan: 1,
-          cached: true,
-          stale: true,
-          fetchedAt: cached.fetchedAt,
-          cacheTtlMs: DEXSCREENER_CACHE_TTL_MS,
-          error: error instanceof Error ? error.message : String(error)
+  const slot =
+    Math.floor(now / DEXSCREENER_ASSET_ROTATION_MS) %
+    assets.length;
+  const target = assets[slot];
+  const targetEntry =
+    entries.get(target.address.toLowerCase()) ?? null;
+  const targetFresh = Boolean(
+    targetEntry &&
+    now - targetEntry.fetchedAt < DEXSCREENER_CACHE_TTL_MS
+  );
+
+  let requestsThisScan = 0;
+  let refreshedAsset: string | null = null;
+  let targetError: string | undefined;
+
+  if (!targetFresh) {
+    try {
+      const pairs = await fetchDexScreenerTokenPairs(target);
+      requestsThisScan = 1;
+
+      await writeCache(
+        cache,
+        dexScreenerCacheKey(target),
+        pairs,
+        now
+      );
+
+      entries.set(
+        target.address.toLowerCase(),
+        {
+          fetchedAt: now,
+          data: pairs
         }
-      };
+      );
+      refreshedAsset = target.symbol;
+    } catch (error) {
+      requestsThisScan = 1;
+      targetError =
+        error instanceof Error
+          ? error.message
+          : String(error);
     }
-    throw error;
   }
+
+  const allPairs: any[] = [];
+  const cachedAssets: string[] = [];
+  const staleAssets: string[] = [];
+
+  for (const asset of assets) {
+    const entry =
+      entries.get(asset.address.toLowerCase()) ?? null;
+
+    if (entry?.data?.length) {
+      allPairs.push(...entry.data);
+      cachedAssets.push(asset.symbol);
+
+      if (
+        now - entry.fetchedAt >=
+        DEXSCREENER_CACHE_TTL_MS
+      ) {
+        staleAssets.push(asset.symbol);
+      }
+    } else {
+      staleAssets.push(asset.symbol);
+    }
+  }
+
+  return {
+    pairs: allPairs,
+    provider: {
+      name: "DEX Screener token-pair rotation",
+      requestsThisScan,
+      cached: requestsThisScan === 0,
+      stale: staleAssets.length > 0,
+      refreshedAsset,
+      targetAsset: target.symbol,
+      cachedAssets,
+      staleAssets,
+      tokenSnapshotCount: cachedAssets.length,
+      tokenSnapshotTargetCount: assets.length,
+      warmupComplete: staleAssets.length === 0,
+      rotationMinutes: assets.length,
+      cacheTtlMs: DEXSCREENER_CACHE_TTL_MS,
+      error: targetError
+    }
+  };
 }
 
 type CacheEntry<T> = {
@@ -1414,6 +1527,7 @@ function classifyQuoteKind(address: string, dex: string) {
   ) {
     return "pancake-v2" as const;
   }
+  if (d === "nad-fun") return "nadfun-lens" as const;
   if (d === "kuru") return "kuru" as const;
   return "unsupported" as const;
 }
@@ -1425,7 +1539,8 @@ function isExactQuoteSupported(kind: QuoteKind) {
     kind === "uniswap-v3" ||
     kind === "uniswap-v2" ||
     kind === "pancake-v3" ||
-    kind === "pancake-v2"
+    kind === "pancake-v2" ||
+    kind === "nadfun-lens"
   );
 }
 
@@ -1829,21 +1944,48 @@ async function quoteExactEdge(
       : null;
   }
 
-  if (edge.quoteKind === "kuru") {
-    // Kuru is discovered as a venue, but exact market-buy/sell estimation
-    // requires its orderbook state (CostEstimator / L2 book). Do not turn a
-    // guessed mid-price into an arbitrage signal.
-    let params = kuruParamsCache.get(edge.pool.toLowerCase());
-    if (!params) {
-      params = await client.readContract({
-        address: edge.pool as Address,
-        abi: KURU_MARKET_ABI,
-        functionName: "getMarketParams"
-      });
-      kuruParamsCache.set(edge.pool.toLowerCase(), params);
-    }
-    return null;
+  if (edge.quoteKind === "nadfun-lens") {
+    const wmon =
+      "0x3bd359c1119da7da1d913d1c4d2b7c461115433a";
+    const fromIsWmon =
+      edge.from.toLowerCase() === wmon;
+    const toIsWmon =
+      edge.to.toLowerCase() === wmon;
 
+    if (fromIsWmon === toIsWmon) return null;
+
+    const token = (
+      fromIsWmon ? edge.to : edge.from
+    ) as Address;
+    const isBuy = fromIsWmon;
+
+    const result = await client.readContract({
+      address: NADFUN_LENS,
+      abi: NADFUN_LENS_ABI,
+      functionName: "getAmountOut",
+      args: [token, amountIn, isBuy]
+    });
+
+    const values = result as readonly [
+      Address,
+      bigint
+    ];
+
+    if (values[1] <= 0n) return null;
+
+    return {
+      amountOut: values[1],
+      feeBps: null,
+      feePct: null,
+      feeSource:
+        `nadfun_lens:${String(values[0])}`
+    };
+  }
+
+  if (edge.quoteKind === "kuru") {
+    // Kuru requires live orderbook state for an exact market fill. Keep it
+    // discovery-visible but do not spend an RPC call on a discarded quote.
+    return null;
   }
   return null;
 }
@@ -2341,10 +2483,9 @@ export async function scanLSTArbitrage(
       ].sort(),
       probeDexes: [...coveredProbeDexes].sort(),
       note:
-        "Routes are built from the complete paginated Monad pool graph. " +
-        "Only DEXs with a validated exact quote adapter are allowed into " +
-        "profitability routing. Every exact leg consumes the actual output " +
-        "of the prior leg."
+        "Routes are built from cached multi-DEX topology. Discovery data never becomes " +
+        "a profitability result; only venues with validated exact quote adapters enter " +
+        "routing, and every exact leg consumes the actual output of the prior leg."
     },
     externalRequestBudget: {
       freeTierLimit: FREE_EXTERNAL_SUBREQUEST_LIMIT,

@@ -91,6 +91,7 @@ const DEXSCREENER_BASE_URL = "https://api.dexscreener.com";
 const DEXSCREENER_CACHE_TTL_MS = 5 * 60_000;
 const FREE_EXTERNAL_SUBREQUEST_LIMIT = 50;
 const PLANNED_DISCOVERY_REQUESTS = 8;
+const PLANNED_KYBER_SCOUT_REQUESTS = 12;
 // A route with six hops can consume one external RPC call per exact leg.
 // Keep enough headroom for provider/cache calls on the Free 50-subrequest plan.
 const PLANNED_CACHE_API_CALLS = 10;
@@ -123,7 +124,6 @@ const KYBER_SCOUT_TARGETS: Array<{symbol: string; address: string}> = [
   { symbol: "sMON", address: "0xa3227c5969757783154c60bf0bc1944180ed81b9" },
   { symbol: "shMON", address: "0x1b68626dca36c7fe922fd2d55e4f631d962de19c" }
 ];
-const PLANNED_KYBER_SCOUT_REQUESTS = KYBER_SCOUT_TARGETS.length * 2;
 const KURU_MARKET_ABI = parseAbi([
   "function getMarketParams() view returns (uint256 pricePrecision,uint256 sizePrecision,address baseAssetAddress,uint256 baseAssetDecimals,address quoteAssetAddress,uint256 quoteAssetDecimals,uint256 tickSize,uint256 minSize,uint256 maxSize,int256 takerFeeBps,int256 makerFeeBps)",
   "function placeAndExecuteMarketBuy(uint96 quoteSize,uint256 minAmountOut,bool isMargin,bool isFillOrKill) payable returns (uint256)",

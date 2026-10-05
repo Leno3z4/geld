@@ -547,10 +547,11 @@ export async function scanLSTArbitrage(rpcUrl: string) {
     })
   );
 
-  const signals: ArbitrageSignal[] = exactResults.flatMap(route =>
-    route.exactQuotes
-      .filter((q): q is Extract<typeof q, { ok: true }> => q.ok && q.candidate)
-      .map(q => ({
+  const signals: ArbitrageSignal[] = [];
+  for (const route of exactResults) {
+    for (const q of route.exactQuotes) {
+      if (q.ok !== true || q.candidate !== true) continue;
+      signals.push({
         path: route.path,
         sizeMon: q.sizeMon,
         amountInRaw: parseUnits(String(q.sizeMon), 18).toString(),
@@ -579,9 +580,11 @@ export async function scanLSTArbitrage(rpcUrl: string) {
           quoteAmountOutRaw: leg.quoteAmountOutRaw,
           minAmountOutRaw: leg.minAmountOutRaw
         })),
-        liveExecutable: false as const
-      }))
-  ).sort((a, b) => b.netProfitMon - a.netProfitMon);
+        liveExecutable: false
+      });
+    }
+  }
+  signals.sort((a, b) => b.netProfitMon - a.netProfitMon);
 
   return {
     mode: "PAPER_SIGNAL_ONLY" as const,

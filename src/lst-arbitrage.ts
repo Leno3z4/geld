@@ -275,8 +275,10 @@ async function discoverDexPaprikaPools(cache?: LSTArbitrageCache) {
   // Use the network-wide index as the Worker-safe discovery path. It is
   // paginated and does not require one subrequest per DEX.
   const key = "lst-arb:dexpaprika:pools:v6";
+  const legacyKey = "lst-arb:dexpaprika:pools:v4";
   const now = Date.now();
   const cached = await readCache<any[]>(cache, key);
+  const legacyCached = cached ? null : await readCache<any[]>(cache, legacyKey);
 
   if (cached && now - cached.fetchedAt < DEXPAPRIKA_CACHE_TTL_MS) {
     return {
@@ -347,8 +349,22 @@ async function discoverDexPaprikaPools(cache?: LSTArbitrageCache) {
     errors.push(error instanceof Error ? error.message : String(error));
   }
 
-  const pools = [...deduped.values()];
-  if (pools.length > 0) {
+  let pools = [...deduped.values()];
+  let usedStaleFallback = false;
+
+  // During provider incidents the API can return an HTTP-success response
+  // with an empty result set. Keep the previous known-good topology rather
+  // than collapsing back to only the three hard-coded pools.
+  if (
+    pools.length === 0 &&
+    legacyCached?.data?.length &&
+    legacyCached.data.length > 0
+  ) {
+    pools = legacyCached.data;
+    usedStaleFallback = true;
+  }
+
+  if (deduped.size > 0) {
     await writeCache(cache, key, pools, now);
   }
 
@@ -361,10 +377,15 @@ async function discoverDexPaprikaPools(cache?: LSTArbitrageCache) {
     poolCount: pools.length,
     truncated,
     pageSize: 100,
-    externalMarketDataRequired: false
+    externalMarketDataRequired: false,
+    staleFallbackUsed: usedStaleFallback
   };
 
   if (errors.length > 0) provider.errors = errors;
+  if (usedStaleFallback) {
+    provider.stale = true;
+    provider.staleFrom = legacyCached?.fetchedAt ?? null;
+  }
   if (pools.length === 0) {
     provider.note = "DexPaprika returned no pools; scanner will retain only configured known pools.";
   }

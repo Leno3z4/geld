@@ -77,6 +77,9 @@ export const GAS_BUFFER_MON = 0.001;
 export const TRADE_SIZES_MON = [1, 5, 10];
 export const MAX_EXACT_ROUTES = 6;
 export const MAX_REFINED_ROUTES = 1;
+// Search every simple closed route possible across the six configured assets.
+// A closed arbitrage path needs at least 2 hops; six is the maximum without revisiting an asset.
+export const MAX_ARBITRAGE_HOPS = 6;
 export const PROBE_SIZE_MON = 1;
 const EXECUTION_BUFFER_BPS = Math.round(EXECUTION_BUFFER_PCT * 100);
 const DEXPAPRIKA_NETWORK = "monad";
@@ -892,7 +895,7 @@ function addKnownCurveEdges(edges: PoolEdge[]) {
     }
   }
 }
-function findCycles(edges: PoolEdge[], startAddress: string, maxHops = 3): any[] {
+function findCycles(edges: PoolEdge[], startAddress: string, maxHops = MAX_ARBITRAGE_HOPS): any[] {
   const byFrom = new Map<string, PoolEdge[]>();
 
   for (const edge of edges) {
@@ -1339,7 +1342,7 @@ export async function scanLSTArbitrage(
   const allRoutes = findCycles(
     edges,
     wmon.address.toLowerCase(),
-    3
+    MAX_ARBITRAGE_HOPS
   )
     .filter((route) =>
       route.legs.every(

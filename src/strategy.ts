@@ -336,6 +336,7 @@ export function isLowCapMomentumCandidate(
     minVolumeAcceleration5m: number;
     minTrend1hPct: number;
     minLocalScore: number;
+    minTrend4hPct?: number;
   }
 ) {
   if (!rules.enabled) return false;
@@ -684,7 +685,7 @@ export function isEstablishedQualityCandidate(
     volumeUsd >= Math.max(rules.minVolumeUsd, 10_000) &&
     trend1h >= 0.25 &&
     trend1h <= config.trendMax1hPct &&
-    trend4h >= Math.max(rules.minTrend4hPct, 0.5) &&
+    trend4h >= Math.max(rules.minTrend4hPct ?? 0.5, 0.5) &&
     token.localScore >= rules.minLocalScore;
 }
 

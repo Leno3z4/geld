@@ -1020,8 +1020,7 @@ async function discoverDexScreenerMonadPools(
   // HTTP 429s without improving Monad coverage, so discovery spends its limited
   // request budget on batched Monad token-pair lookups instead.
   const discoveryBudget = Math.max(0, Math.floor(maxRequests));
-  const searchQueries: string[] = [];
-  const searchRequests = 0;  // Rotate through the complete known/discovered token universe instead of
+  // Rotate through the complete known/discovered token universe instead of
   // repeatedly refreshing the first 180-240 addresses. The cursor lives in the
   // edge cache so it survives Worker isolate churn without consuming DO storage.
   const frontierAddresses = [...new Set(

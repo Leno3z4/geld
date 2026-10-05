@@ -260,14 +260,43 @@ function tokenIdentifier(value: unknown) {
 
 function tokenSymbol(value: unknown, fallback: string) {
   if (!value || typeof value !== "object") return fallback;
-  const symbol = String((value as Record<string, unknown>).symbol ?? "").trim();
+  const item = value as Record<string, unknown>;
+  const attributes =
+    item.attributes &&
+    typeof item.attributes === "object"
+      ? item.attributes as Record<string, unknown>
+      : null;
+  const symbol = String(
+    item.symbol ??
+      attributes?.symbol ??
+      ""
+  ).trim();
   return symbol || fallback;
 }
 
 function tokenDecimals(value: unknown, fallback = 18) {
   if (!value || typeof value !== "object") return fallback;
-  const decimals = Number((value as Record<string, unknown>).decimals);
-  return Number.isFinite(decimals) && decimals >= 0 && decimals <= 36 ? decimals : fallback;
+  const item = value as Record<string, unknown>;
+  const attributes =
+    item.attributes &&
+    typeof item.attributes === "object"
+      ? item.attributes as Record<string, unknown>
+      : null;
+  const decimals = Number(
+    item.decimals ??
+      attributes?.decimals
+  );
+  return Number.isFinite(decimals) &&
+    decimals >= 0 &&
+    decimals <= 36
+    ? decimals
+    : fallback;
+}
+
+function poolIdentifier(value: unknown) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (bytes32(raw)) return raw;
+  return addr(raw);
 }
 
 function shortAddress(value: string) {
@@ -640,7 +669,7 @@ async function discoverGeckoMonadDexPools(
 
   const dedupedPools = new Map<string, any>();
   for (const record of allPoolRecords) {
-    const poolAddress = addr(
+    const poolAddress = poolIdentifier(
       record?.attributes?.address ??
         record?.id
     );
@@ -870,7 +899,7 @@ function parseGeckoPool(
       dex
     );
 
-  const poolAddress = addr(
+  const poolAddress = poolIdentifier(
     a.address ??
       record?.id
   );
@@ -1268,14 +1297,57 @@ function inferV3FeePct(name: string, fallback: number) {
 
 function classifyQuoteKind(address: string, dex: string) {
   const d = dex.toLowerCase();
-  if (address.toLowerCase() === CURVE_LST_POOL.toLowerCase()) return "curve-lst" as const;
-  if (d.includes("uniswap") && d.includes("v4")) return "uniswap-v4" as const;
-  if (d.includes("uniswap") && d.includes("v3")) return "uniswap-v3" as const;
-  if (d.includes("uniswap") && d.includes("v2")) return "uniswap-v2" as const;
-  if (d.includes("pancake") && d.includes("v3")) return "pancake-v3" as const;
-  if (d.includes("pancake") && d.includes("v2")) return "pancake-v2" as const;
-  if (d.includes("kuru")) return "kuru" as const;
+  if (
+    address.toLowerCase() ===
+    CURVE_LST_POOL.toLowerCase()
+  ) {
+    return "curve-lst" as const;
+  }
+  if (
+    d === "uniswap-v4-monad" ||
+    d === "uniswap_v4"
+  ) {
+    return "uniswap-v4" as const;
+  }
+  if (
+    d === "uniswap-v3-monad" ||
+    d === "uniswap_v3"
+  ) {
+    return "uniswap-v3" as const;
+  }
+  if (
+    d === "uniswap-v2-monad" ||
+    d === "uniswap_v2"
+  ) {
+    return "uniswap-v2" as const;
+  }
+  if (
+    d === "pancakeswap-v3-monad" ||
+    d === "pancakeswap_v3" ||
+    d === "pancake_v3"
+  ) {
+    return "pancake-v3" as const;
+  }
+  if (
+    d === "pancakeswap-v2-monad" ||
+    d === "pancakeswap_v2" ||
+    d === "pancake_v2"
+  ) {
+    return "pancake-v2" as const;
+  }
+  if (d === "kuru") return "kuru" as const;
   return "unsupported" as const;
+}
+
+function isExactQuoteSupported(kind: QuoteKind) {
+  return (
+    kind === "curve-lst" ||
+    kind === "uniswap-v4" ||
+    kind === "uniswap-v3" ||
+    kind === "uniswap-v2" ||
+    kind === "pancake-v3" ||
+    kind === "pancake-v2"
+  );
 }
 
 function parsePool(record: any, assets: Map<string, ArbitrageAsset>): PoolRecord | null {
@@ -1443,7 +1515,9 @@ function findCycles(edges: PoolEdge[], startAddress: string, maxHops = 3): any[]
       multiplier,
       grossEdgePct: (multiplier - 1) * 100,
       exactQuoteSupported: legs.every(
-        leg => leg.quoteKind !== "unsupported"
+        leg => isExactQuoteSupported(
+          leg.quoteKind
+        )
       )
     });
   }
@@ -1850,7 +1924,12 @@ export async function scanLSTArbitrage(
     wmon.address.toLowerCase(),
     3
   )
-    .filter(route => route.exactQuoteSupported)
+    .filter((route) =>
+      route.legs.every(
+        (leg: PoolEdge) =>
+          isExactQuoteSupported(leg.quoteKind)
+      )
+    )
     .filter(
       route =>
         new Set(
@@ -2104,6 +2183,19 @@ export async function scanLSTArbitrage(
     cycleCount: allRoutes.length,
     routeCount: allRoutes.length,
     probeRouteCount: probeRoutes.length,
+    availableDexCount:
+      discovery.provider.availableDexes?.length ?? 0,
+    exactSupportedDexCount: [
+      ...new Set(
+        pools
+          .filter(pool =>
+            isExactQuoteSupported(
+              pool.quoteKind
+            )
+          )
+          .map(pool => pool.dex)
+      )
+    ].length,
     refinedRouteCount: exactResults.filter(
       route => route.refined
     ).length,
@@ -2134,20 +2226,46 @@ export async function scanLSTArbitrage(
             .map(pool => pool.quoteKind)
         )
       ].sort(),
-      unsupportedDexes: [
+      exactSupportedDexes: [
+        ...new Set(
+          pools
+            .filter(pool =>
+              isExactQuoteSupported(
+                pool.quoteKind
+              )
+            )
+            .map(pool => pool.dex)
+        )
+      ].sort(),
+      exactUnsupportedDexes: [
+        ...new Set(
+          pools
+            .filter(pool =>
+              !isExactQuoteSupported(
+                pool.quoteKind
+              )
+            )
+            .map(pool => pool.dex)
+        )
+      ].sort(),
+      unsupportedQuoteKinds: [
         ...new Set(
           pools
             .filter(
-              pool => pool.quoteKind === "unsupported"
+              pool =>
+                !isExactQuoteSupported(
+                  pool.quoteKind
+                )
             )
-            .map(pool => pool.dex)
+            .map(pool => pool.quoteKind)
         )
       ].sort(),
       probeDexes: [...coveredProbeDexes].sort(),
       note:
         "Routes are built from the complete paginated Monad pool graph. " +
-        "Exact profitability is accepted only after sequential on-chain " +
-        "quotes, with each leg consuming the actual output of the prior leg."
+        "Only DEXs with a validated exact quote adapter are allowed into " +
+        "profitability routing. Every exact leg consumes the actual output " +
+        "of the prior leg."
     },
     externalRequestBudget: {
       freeTierLimit: FREE_EXTERNAL_SUBREQUEST_LIMIT,
@@ -2155,6 +2273,7 @@ export async function scanLSTArbitrage(
       plannedExactAndRefinementRequests: PLANNED_EXACT_REQUESTS,
       plannedWorstCaseExternalRequests:
         PLANNED_WORST_CASE_EXTERNAL_REQUESTS,
+      safetyMarginRequests: 4,
       headroom:
         FREE_EXTERNAL_SUBREQUEST_LIMIT -
         PLANNED_WORST_CASE_EXTERNAL_REQUESTS

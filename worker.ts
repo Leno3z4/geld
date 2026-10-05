@@ -236,6 +236,56 @@ function parseGeldConfig(env: Env): Record<string, string | undefined> {
   }
 }
 
+let standaloneLSTInFlight = false;
+let standaloneLSTLastAt = 0;
+let standaloneLSTLastResult: any = null;
+const standaloneLSTCache = new Map<string, string>();
+
+async function runStandaloneLSTArbitrage(env: Env, force = false) {
+  const runtime = await getRuntimeConfig(env);
+  if (!runtime.lstArbitrageEnabled) return standaloneLSTLastResult;
+
+  const now = Date.now();
+  if (!force && standaloneLSTLastResult && now - standaloneLSTLastAt < runtime.lstArbitrageIntervalMs) {
+    return standaloneLSTLastResult;
+  }
+  if (standaloneLSTInFlight) return standaloneLSTLastResult;
+
+  standaloneLSTInFlight = true;
+  standaloneLSTLastAt = now;
+  try {
+    const scan = await scanLSTArbitrage(runtime.rpcUrl, {
+      get: async (key) => standaloneLSTCache.get(key),
+      put: async (key, value) => {
+        if (!standaloneLSTCache.has(key) && standaloneLSTCache.size >= 128) {
+          const oldest = standaloneLSTCache.keys().next().value;
+          if (oldest) standaloneLSTCache.delete(oldest);
+        }
+        standaloneLSTCache.delete(key);
+        standaloneLSTCache.set(key, value);
+      }
+    });
+    standaloneLSTLastResult = {
+      ...scan,
+      executionPolicy: {
+        enabled: runtime.lstArbitrageEnabled,
+        liveExecutionEnabled: runtime.lstArbitrageLiveExecution,
+        requiresGlobalLiveTrading: true,
+        executorConfigured: Boolean(runtime.lstArbitrageExecutorAddress)
+      },
+      execution: {
+        attempted: false,
+        submitted: false,
+        reason: "Paper-only scanner. No transaction submission is performed."
+      },
+      scheduledAt: now
+    };
+    return standaloneLSTLastResult;
+  } finally {
+    standaloneLSTInFlight = false;
+  }
+}
+
 function hydrateProcessEnv(env: Env) {
   const config = parseGeldConfig(env);
 
@@ -1037,6 +1087,22 @@ export default {
     const publicRead = isPublicApiRead(request);
     if (!publicRead && !isAuthorized(request, env)) {
       return new Response("Unauthorized", { status: 401 });
+    }
+
+    if (url.pathname === "/api/lst/arbitrage") {
+      const force = url.searchParams.get("refresh") === "1";
+      try {
+        const result = await runStandaloneLSTArbitrage(env, force);
+        return Response.json(result, { headers: { "Cache-Control": "no-store" } });
+      } catch (error) {
+        console.error("Standalone LST arbitrage API failed:", error);
+        return Response.json({
+          mode: "PAPER_SIGNAL_ONLY",
+          generatedAt: new Date().toISOString(),
+          execution: { attempted: false, submitted: false },
+          error: error instanceof Error ? error.message : String(error)
+        }, { status: 503, headers: { "Cache-Control": "no-store" } });
+      }
     }
 
     const id = env.GELD_BOT.idFromName("singleton");

@@ -77,7 +77,8 @@ export const GAS_BUFFER_MON = 0.001;
 export const TRADE_SIZES_MON = [1, 5, 10];
 export const MAX_EXACT_TRIANGLES = 2;
 const EXECUTION_BUFFER_BPS = Math.round(EXECUTION_BUFFER_PCT * 100);
-const DEXPAPRIKA_POOLS_URL = "https://api.dexpaprika.com/networks/monad/pools/search?order_by=volume_usd_24h&sort=desc&limit=250";
+const DEXPAPRIKA_POOLS_URL = "https://api.dexpaprika.com/networks/monad/pools/search";
+const PANCAKE_V3_QUOTER_V2 = "0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997" as Address;
 const DEXSCREENER_TOKEN_URL = "https://api.dexscreener.com/tokens/v1/monad";
 const DEXSCREENER_CACHE_TTL_MS = 60_000;
 const DEXPAPRIKA_CACHE_TTL_MS = 5 * 60_000;
@@ -227,28 +228,111 @@ function normalizeAssetAddress(value: unknown) {
 
 
 async function discoverDexPaprikaPools(cache?: LSTArbitrageCache) {
-  const key = "lst-arb:dexpaprika:pools";
+  const key = "lst-arb:dexpaprika:pools:v2";
   const now = Date.now();
   const cached = await readCache<any[]>(cache, key);
   if (cached && now - cached.fetchedAt < DEXPAPRIKA_CACHE_TTL_MS) {
-    return { pools: cached.data, provider: { name: "DexPaprika", requestsThisScan: 0, cached: true, fetchedAt: cached.fetchedAt } };
-  }
-  try {
-    const response = await fetch(DEXPAPRIKA_POOLS_URL, { headers: { accept: "application/json" } });
-    if (!response.ok) throw new Error(`DexPaprika HTTP ${response.status}`);
-    const json = await response.json() as any;
-    const pools = Array.isArray(json?.results) ? json.results : [];
-    await writeCache(cache, key, pools, now);
-    return { pools, provider: { name: "DexPaprika", requestsThisScan: 1, cached: false, fetchedAt: now } };
-  } catch (error) {
-    if (cached) return {
+    return {
       pools: cached.data,
-      provider: { name: "DexPaprika", requestsThisScan: 1, cached: true, stale: true, fetchedAt: cached.fetchedAt, error: error instanceof Error ? error.message : String(error) }
+      provider: {
+        name: "DexPaprika",
+        requestsThisScan: 0,
+        cached: true,
+        fetchedAt: cached.fetchedAt,
+        queryMode: "token_scoped"
+      }
     };
-    return { pools: [], provider: { name: "DexPaprika", requestsThisScan: 1, cached: false, error: error instanceof Error ? error.message : String(error) } };
   }
-}
 
+  // DexPaprika's Monad endpoint caps each request at 100 pools. More
+  // importantly, a global top-volume query can hide lower-volume LST pools
+  // behind unrelated pairs. Query every tracked asset instead, then dedupe.
+  const targets = ARBITRAGE_ASSETS.filter(asset => asset.symbol !== "WMON");
+  const results = await Promise.allSettled(
+    targets.map(async asset => {
+      const url = new URL(DEXPAPRIKA_POOLS_URL);
+      url.searchParams.set("token_address", asset.address);
+      url.searchParams.set("order_by", "volume_usd_24h");
+      url.searchParams.set("sort", "desc");
+      url.searchParams.set("limit", "100");
+
+      const response = await fetch(url.toString(), {
+        headers: { accept: "application/json" }
+      });
+      if (!response.ok) {
+        throw new Error(`DexPaprika HTTP ${response.status} for ${asset.symbol}`);
+      }
+
+      const json = await response.json() as any;
+      return Array.isArray(json?.results) ? json.results : [];
+    })
+  );
+
+  const deduped = new Map<string, any>();
+  const failedAssets: string[] = [];
+  let successfulRequests = 0;
+
+  results.forEach((result, index) => {
+    const asset = targets[index];
+    if (result.status !== "fulfilled") {
+      failedAssets.push(asset.symbol);
+      return;
+    }
+    successfulRequests++;
+    for (const pool of result.value) {
+      const id = addr(pool?.id);
+      if (id) deduped.set(id, pool);
+    }
+  });
+
+  const pools = [...deduped.values()];
+  if (pools.length > 0) {
+    await writeCache(cache, key, pools, now);
+    return {
+      pools,
+      provider: {
+        name: "DexPaprika",
+        requestsThisScan: targets.length,
+        successfulRequests,
+        failedAssets,
+        cached: false,
+        fetchedAt: now,
+        queryMode: "token_scoped",
+        requestedAssets: targets.map(asset => asset.symbol)
+      }
+    };
+  }
+
+  // Preserve the last good topology if the provider is temporarily
+  // unreachable. Exact prices are still validated on-chain.
+  if (cached) {
+    return {
+      pools: cached.data,
+      provider: {
+        name: "DexPaprika",
+        requestsThisScan: targets.length,
+        successfulRequests: 0,
+        failedAssets: targets.map(asset => asset.symbol),
+        cached: true,
+        stale: true,
+        fetchedAt: cached.fetchedAt,
+        queryMode: "token_scoped"
+      }
+    };
+  }
+
+  return {
+    pools: [],
+    provider: {
+      name: "DexPaprika",
+      requestsThisScan: targets.length,
+      successfulRequests: 0,
+      failedAssets: targets.map(asset => asset.symbol),
+      cached: false,
+      queryMode: "token_scoped"
+    }
+  };
+}
 function parseDexPaprikaPool(record: any, assets: Map<string, ArbitrageAsset>): PoolRecord | null {
   const tokens = Array.isArray(record?.tokens) ? record.tokens : [];
   if (tokens.length !== 2) return null;
@@ -267,7 +351,7 @@ function parseDexPaprikaPool(record: any, assets: Map<string, ArbitrageAsset>): 
   if (poolAddress === CURVE_LST_POOL.toLowerCase()) quoteKind = "curve-lst";
   else if (dexId === "uniswap_v3") quoteKind = "uniswap-v3";
   else if (dexId === "uniswap_v2") quoteKind = "uniswap-v2";
-  else if (dexId === "pancakeswap_v3" || dexId === "pancake_v3") quoteKind = "unsupported";
+  else if (dexId === "pancakeswap_v3" || dexId === "pancake_v3") quoteKind = "pancake-v3";
   else if (dexId === "pancakeswap_v2" || dexId === "pancake_v2") quoteKind = "pancake-v2";
   else if (dexId === "kuru" || dexName.toLowerCase().includes("kuru")) quoteKind = "kuru";
 
@@ -860,7 +944,7 @@ async function quoteExactEdge(
     return { amountOut };
   }
 
-  if (edge.quoteKind === "uniswap-v3") {
+  if (edge.quoteKind === "uniswap-v3" || edge.quoteKind === "pancake-v3") {
     let feeBps = Math.round(edge.feePct * 10_000);
     if (!(feeBps > 0)) {
       const cachedFee = uniswapFeeCache.get(edge.pool.toLowerCase());
@@ -874,7 +958,7 @@ async function quoteExactEdge(
     }
     if (!(feeBps > 0 && feeBps <= 1_000_000)) return null;
     const result = await client.readContract({
-      address: UNISWAP_V3_QUOTER_V2,
+      address: edge.quoteKind === "pancake-v3" ? PANCAKE_V3_QUOTER_V2 : UNISWAP_V3_QUOTER_V2,
       abi: QUOTER_V2_ABI,
       functionName: "quoteExactInputSingle",
       args: [{ tokenIn: edge.from as Address, tokenOut: edge.to as Address, amountIn, fee: feeBps, sqrtPriceLimitX96: 0n }]
@@ -1110,7 +1194,7 @@ export async function scanLSTArbitrage(
       externalMarketDataRequired: false,
       discoveredDexes: [...new Set(pools.map(p => p.dex))].sort(),
       supportedQuoteKinds: [...new Set(pools.filter(p => p.quoteKind !== "unsupported").map(p => p.quoteKind))].sort(),
-      note: "Discovery spans indexed Monad DEX pools; profitability is accepted only after exact sequential on-chain quotes."
+      note: "Discovery is token-scoped across the indexed Monad DEX venues; profitability is accepted only after exact sequential on-chain quotes."
     },
     execution: { live: false, transactionsSubmitted: 0, reason: "Arbitrage execution is disabled; this endpoint only discovers and simulates routes." }
   };

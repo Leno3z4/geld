@@ -108,9 +108,6 @@ const LST_ARBITRAGE_BUILD_REVISION = "b8382ab1c72c2ed37e1f5cd164e7abdc70754415";
 const DEXSCREENER_CACHE_TTL_MS = 15 * 60_000;
 const DEXSCREENER_ASSET_ROTATION_MS = 60_000;
 const DEXPAPRIKA_CACHE_TTL_MS = 5 * 60_000;
-const NADFUN_LENS =
-  "0x7e78A8DE94f21804F7a17F4E8BF9EC2c872187ea" as Address;
-
 const KURU_MARKET_ABI = parseAbi([
   "function getMarketParams() view returns (uint256 pricePrecision,uint256 sizePrecision,address baseAssetAddress,uint256 baseAssetDecimals,address quoteAssetAddress,uint256 quoteAssetDecimals,uint256 tickSize,uint256 minSize,uint256 maxSize,int256 takerFeeBps,int256 makerFeeBps)"
 ]);
@@ -138,10 +135,6 @@ const UNISWAP_V3_POOL_ABI = parseAbi([
 
 const CURVE_POOL_ABI = parseAbi([
   "function get_dy(int128 i,int128 j,uint256 dx) view returns (uint256)"
-]);
-
-const NADFUN_LENS_ABI = parseAbi([
-  "function getAmountOut(address token,uint256 amountIn,bool isBuy) view returns (address router,uint256 amountOut)"
 ]);
 
 export type LSTArbitrageCache = {
@@ -184,7 +177,7 @@ export const ARBITRAGE_ASSETS: ArbitrageAsset[] = [
   { symbol: "USDC", address: "0x754704bc059f8c67012fed69bc8a327a5aafb603", decimals: 6 }
 ];
 
-type QuoteKind = "uniswap-v4" | "uniswap-v3" | "uniswap-v2" | "pancake-v3" | "pancake-v2" | "curve-lst" | "nadfun-lens" | "kuru" | "unsupported";
+type QuoteKind = "uniswap-v4" | "uniswap-v3" | "uniswap-v2" | "pancake-v3" | "pancake-v2" | "curve-lst" | "kuru" | "unsupported";
 type KuruMarket = {
   symbol: string;
   status: string;
@@ -1124,7 +1117,7 @@ function parseDexScreenerPair(
     (base === wmon || quote === wmon)
   ) {
     dex = "nad-fun";
-    quoteKind = "nadfun-lens";
+    quoteKind = "unsupported";
   }
 
   return {
@@ -1495,7 +1488,6 @@ function classifyQuoteKind(address: string, dex: string) {
   ) {
     return "pancake-v2" as const;
   }
-  if (d === "nad-fun") return "nadfun-lens" as const;
   if (d === "kuru") return "kuru" as const;
   return "unsupported" as const;
 }
@@ -1507,8 +1499,7 @@ function isExactQuoteSupported(kind: QuoteKind) {
     kind === "uniswap-v3" ||
     kind === "uniswap-v2" ||
     kind === "pancake-v3" ||
-    kind === "pancake-v2" ||
-    kind === "nadfun-lens"
+    kind === "pancake-v2"
   );
 }
 
@@ -1910,44 +1901,6 @@ async function quoteExactEdge(
               : "uniswap_v2_default"
         }
       : null;
-  }
-
-  if (edge.quoteKind === "nadfun-lens") {
-    const wmon =
-      "0x3bd359c1119da7da1d913d1c4d2b7c461115433a";
-    const fromIsWmon =
-      edge.from.toLowerCase() === wmon;
-    const toIsWmon =
-      edge.to.toLowerCase() === wmon;
-
-    if (fromIsWmon === toIsWmon) return null;
-
-    const token = (
-      fromIsWmon ? edge.to : edge.from
-    ) as Address;
-    const isBuy = fromIsWmon;
-
-    const result = await client.readContract({
-      address: NADFUN_LENS,
-      abi: NADFUN_LENS_ABI,
-      functionName: "getAmountOut",
-      args: [token, amountIn, isBuy]
-    });
-
-    const values = result as readonly [
-      Address,
-      bigint
-    ];
-
-    if (values[1] <= 0n) return null;
-
-    return {
-      amountOut: values[1],
-      feeBps: null,
-      feePct: null,
-      feeSource:
-        `nadfun_lens:${String(values[0])}`
-    };
   }
 
   if (edge.quoteKind === "kuru") {

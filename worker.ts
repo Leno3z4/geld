@@ -265,7 +265,7 @@ async function runStandaloneLSTArbitrage(env: Env, force = false) {
         standaloneLSTCache.delete(key);
         standaloneLSTCache.set(key, value);
       }
-    });
+    }, env.DEXPAPRIKA_API_KEY);
     standaloneLSTLastResult = {
       ...scan,
       executionPolicy: {

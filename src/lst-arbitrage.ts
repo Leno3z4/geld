@@ -30,6 +30,28 @@ export const TRADE_SIZES_MON = [1, 5, 10];
 export const MAX_EXACT_TRIANGLES = 3;
 const EXECUTION_BUFFER_BPS = Math.round(EXECUTION_BUFFER_PCT * 100);
 
+export type LSTArbitrageCache = {
+  get(key: string): Promise<string | undefined>;
+  put(key: string, value: string): Promise<void>;
+};
+
+const POOL_CACHE_TTL_MS = 5 * 60_000;
+const PROVIDER_RETRY_FLOOR_MS = 60_000;
+const PROVIDER_ATTEMPT_COOLDOWN_MS = 60_000;
+const CACHE_KEY_PREFIX = "lst-arb:gecko";
+
+class GeckoHttpError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly retryAfterMs: number | null,
+    message: string
+  ) {
+    super(message);
+    this.name = "GeckoHttpError";
+  }
+}
+
+
 const QUOTER_V2_ABI = parseAbi([
   "function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96) params) returns (uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)"
 ]);
@@ -133,9 +155,31 @@ function assetMap() {
   return new Map(ARBITRAGE_ASSETS.map(a => [a.address.toLowerCase(), a]));
 }
 
+function retryAfterMs(value: string | null) {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+  const at = Date.parse(value);
+  if (Number.isFinite(at)) return Math.max(0, at - Date.now());
+  return null;
+}
+
 async function fetchJson(url: string) {
-  const r = await fetch(url, { headers: { accept: "application/json" } });
-  if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
+  const r = await fetch(url, {
+    headers: {
+      accept: "application/json;version=20230203"
+    }
+  });
+
+  if (!r.ok) {
+    const retry = retryAfterMs(r.headers.get("retry-after"));
+    throw new GeckoHttpError(
+      r.status,
+      retry,
+      `HTTP ${r.status} for ${url}`
+    );
+  }
+
   return r.json() as Promise<any>;
 }
 
@@ -146,12 +190,206 @@ async function fetchTokenPools(asset: ArbitrageAsset) {
   return Array.isArray(json?.data) ? json.data : [];
 }
 
-async function fetchTokenPrices() {
-  const ids = ARBITRAGE_ASSETS.map(a => a.address).join(",");
-  const json = await fetchJson(
-    `https://api.geckoterminal.com/api/v2/simple/networks/${MONAD_NETWORK}/token_price/${ids}`
+type CacheEntry<T> = {
+  fetchedAt: number;
+  data: T;
+};
+
+async function readCache<T>(
+  cache: LSTArbitrageCache | undefined,
+  key: string
+): Promise<CacheEntry<T> | null> {
+  if (!cache) return null;
+  try {
+    const raw = await cache.get(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (
+      parsed &&
+      typeof parsed.fetchedAt === "number" &&
+      "data" in parsed
+    ) {
+      return parsed as CacheEntry<T>;
+    }
+  } catch {
+    // A broken cache entry must never break the scanner.
+  }
+  return null;
+}
+
+async function writeCache<T>(
+  cache: LSTArbitrageCache | undefined,
+  key: string,
+  data: T,
+  fetchedAt = Date.now()
+) {
+  if (!cache) return;
+  try {
+    await cache.put(
+      key,
+      JSON.stringify({ fetchedAt, data })
+    );
+  } catch {
+    // Cache persistence is best-effort.
+  }
+}
+
+async function providerBlockedUntil(cache: LSTArbitrageCache | undefined) {
+  if (!cache) return 0;
+  try {
+    const raw = await cache.get(`${CACHE_KEY_PREFIX}:blocked-until`);
+    const value = Number(raw ?? 0);
+    return Number.isFinite(value) ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function setProviderBlockedUntil(
+  cache: LSTArbitrageCache | undefined,
+  until: number
+) {
+  if (!cache) return;
+  try {
+    await cache.put(
+      `${CACHE_KEY_PREFIX}:blocked-until`,
+      String(until)
+    );
+  } catch {
+    // Best-effort only.
+  }
+}
+
+async function collectPoolPayloads(cache?: LSTArbitrageCache) {
+  // WMON is deliberately excluded: every WMON/LST pool is discoverable
+  // from the LST side, which saves one provider call per refresh window.
+  const targets = ARBITRAGE_ASSETS.filter(a => a.symbol !== "WMON");
+  const entries = new Map<string, CacheEntry<any[]> | null>();
+
+  await Promise.all(
+    targets.map(async asset => {
+      entries.set(
+        asset.address.toLowerCase(),
+        await readCache<any[]>(
+          cache,
+          `${CACHE_KEY_PREFIX}:pools:${asset.address.toLowerCase()}`
+        )
+      );
+    })
   );
-  return (json?.data?.attributes?.token_prices ?? {}) as Record<string, string>;
+
+  const now = Date.now();
+  const stale = targets.filter(asset => {
+    const entry = entries.get(asset.address.toLowerCase());
+    return !entry || now - entry.fetchedAt >= POOL_CACHE_TTL_MS;
+  });
+
+  const blockedUntil = await providerBlockedUntil(cache);
+  let refreshedAsset: string | null = null;
+  let rateLimited = false;
+  let requestCount = 0;
+
+  if (stale.length > 0 && now >= blockedUntil) {
+    const candidates = [];
+    for (const asset of stale) {
+      const entry = entries.get(asset.address.toLowerCase());
+      let lastAttemptAt = 0;
+      if (cache) {
+        try {
+          lastAttemptAt = Number(
+            await cache.get(
+              `${CACHE_KEY_PREFIX}:attempt:${asset.address.toLowerCase()}`
+            ) ?? 0
+          );
+        } catch {
+          lastAttemptAt = 0;
+        }
+      }
+      candidates.push({
+        asset,
+        fetchedAt: entry?.fetchedAt ?? 0,
+        lastAttemptAt: Number.isFinite(lastAttemptAt) ? lastAttemptAt : 0
+      });
+    }
+
+    const eligible = candidates.filter(
+      x => now - x.lastAttemptAt >= PROVIDER_ATTEMPT_COOLDOWN_MS
+    );
+
+    if (eligible.length > 0) {
+      eligible.sort((a, b) =>
+        (a.fetchedAt - b.fetchedAt) ||
+        (a.lastAttemptAt - b.lastAttemptAt)
+      );
+
+      const target = eligible[0].asset;
+
+      if (cache) {
+        try {
+          await cache.put(
+            `${CACHE_KEY_PREFIX}:attempt:${target.address.toLowerCase()}`,
+            String(now)
+          );
+        } catch {
+          // Best-effort only.
+        }
+      }
+
+      try {
+        const pools = await fetchTokenPools(target);
+        await writeCache(
+          cache,
+          `${CACHE_KEY_PREFIX}:pools:${target.address.toLowerCase()}`,
+          pools,
+          now
+        );
+        entries.set(target.address.toLowerCase(), {
+          fetchedAt: now,
+          data: pools
+        });
+        refreshedAsset = target.symbol;
+        requestCount = 1;
+      } catch (error) {
+        requestCount = 1;
+
+        if (error instanceof GeckoHttpError && error.status === 429) {
+          rateLimited = true;
+          const delay = Math.max(
+            PROVIDER_RETRY_FLOOR_MS,
+            error.retryAfterMs ?? PROVIDER_RETRY_FLOOR_MS
+          );
+          await setProviderBlockedUntil(cache, now + delay);
+        }
+      }
+    }
+  }
+
+  const payloads = targets.map(asset =>
+    entries.get(asset.address.toLowerCase())?.data ?? []
+  );
+
+  const cachedAssets = targets.filter(asset =>
+    Boolean(entries.get(asset.address.toLowerCase()))
+  ).map(asset => asset.symbol);
+
+  const staleAssets = targets.filter(asset => {
+    const entry = entries.get(asset.address.toLowerCase());
+    return !entry || now - entry.fetchedAt >= POOL_CACHE_TTL_MS;
+  }).map(asset => asset.symbol);
+
+  return {
+    payloads,
+    provider: {
+      name: "GeckoTerminal",
+      requestsThisScan: requestCount,
+      refreshedAsset,
+      rateLimited,
+      blockedUntil: Math.max(blockedUntil, await providerBlockedUntil(cache)),
+      cachedAssets,
+      staleAssets,
+      poolCacheTtlMs: POOL_CACHE_TTL_MS
+    }
+  };
 }
 
 function inferV3FeePct(name: string, fallback: number) {
@@ -516,25 +754,34 @@ async function simulateTriangle(
   }
 }
 
-export async function scanLSTArbitrage(rpcUrl: string) {
+export async function scanLSTArbitrage(
+  rpcUrl: string,
+  cache?: LSTArbitrageCache
+) {
   const assets = assetMap();
-  const [tokenPrices, poolPayloads] = await Promise.all([
-    fetchTokenPrices(),
-    Promise.all(ARBITRAGE_ASSETS.map(fetchTokenPools))
-  ]);
+  const collection = await collectPoolPayloads(cache);
 
-  const pools: PoolRecord[] = poolPayloads
+  const pools: PoolRecord[] = collection.payloads
     .flat()
     .map((record: any) => parsePool(record, assets))
     .filter((pool: PoolRecord | null): pool is PoolRecord => Boolean(pool));
 
   const edges: PoolEdge[] = [];
   for (const pool of pools) addEdge(edges, pool);
-  addIndicativeCurveEdges(edges, tokenPrices);
+
+  // Keep the known multi-asset Curve pool available even while GeckoTerminal
+  // is rate-limited. It is quoted on-chain, so it is never used as a fake price.
+  addKnownCurveEdges(edges);
 
   const wmon = ARBITRAGE_ASSETS.find(a => a.symbol === "WMON")!;
+
+  // A useful triangular opportunity needs at least two distinct pools/venues.
+  // Routes that use one pool for every leg are not cross-venue arbitrage.
   const triangles = findTriangles(edges, wmon.address.toLowerCase())
-    .filter(t => t.exactQuoteSupported)
+    .filter(t =>
+      t.exactQuoteSupported &&
+      new Set(t.legs.map(leg => leg.pool.toLowerCase())).size >= 2
+    )
     .slice(0, MAX_EXACT_TRIANGLES);
 
   const client = createClient(rpcUrl);
@@ -584,6 +831,7 @@ export async function scanLSTArbitrage(rpcUrl: string) {
       });
     }
   }
+
   signals.sort((a, b) => b.netProfitMon - a.netProfitMon);
 
   return {
@@ -605,6 +853,7 @@ export async function scanLSTArbitrage(rpcUrl: string) {
       gasBufferMon: GAS_BUFFER_MON,
       tradeSizesMon: TRADE_SIZES_MON
     },
+    provider: collection.provider,
     execution: {
       live: false,
       transactionsSubmitted: 0,

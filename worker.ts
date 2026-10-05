@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { GeldHighCapLearning } from "./src/highcap-learning.js";
 import { GeldLeverUpPaper } from "./src/leverup-paper.js";
-import { preflightKyberRoundTrip, scanLSTArbitrage } from "./src/lst-arbitrage.js";
+import { ARBITRAGE_ASSETS, preflightKyberRoundTrip, scanLSTArbitrage } from "./src/lst-arbitrage.js";
 
 interface Env {
   GELD_BOT: DurableObjectNamespace<GeldBot>;

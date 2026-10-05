@@ -304,11 +304,19 @@ async function discoverDexPaprikaPools(cache?: LSTArbitrageCache) {
     for (const [name, value] of Object.entries(params)) {
       if (value) url.searchParams.set(name, value);
     }
+    // Avoid an HTTP-200 empty edge-cache response persisting as the market
+    // topology for the full provider cache window.
+    url.searchParams.set(
+      "_geld_cache_bust",
+      String(Math.floor(now / DEXPAPRIKA_CACHE_TTL_MS))
+    );
 
     const response = await fetch(url.toString(), {
       headers: {
         accept: "application/json",
-        "user-agent": "geld-lst-arbitrage/1.0"
+        "user-agent": "geld-lst-arbitrage/1.0",
+        "cache-control": "no-cache",
+        pragma: "no-cache"
       }
     });
     requestsThisScan++;

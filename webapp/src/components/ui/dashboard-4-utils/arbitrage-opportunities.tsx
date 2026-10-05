@@ -93,7 +93,11 @@ export function ArbitrageOpportunities() {
   const exactRoutes = Number(arb?.routeCount ?? 0);
   const discoveryRoutes = Number(arb?.discoveryRouteCount ?? 0);
   const poolCount = Number(arb?.poolCount ?? 0);
-  const tokenCount = Number(arb?.discoveredTokenCount ?? arb?.assets?.length ?? 0);
+  const tokenUniverse = new Set([
+    ...discovered.map((item: any) => String(item?.address ?? item?.token ?? "").toLowerCase()),
+    ...monitored.map((item: any) => String(item?.token ?? item?.address ?? "").toLowerCase())
+  ].filter(Boolean));
+  const tokenCount = tokenUniverse.size || Number(arb?.discoveredTokenCount ?? arb?.assets?.length ?? 0);
   const dexCount = Number(arb?.availableDexCount ?? 0);
 
   return (
@@ -119,10 +123,7 @@ export function ArbitrageOpportunities() {
               onClick={() => setView("all")}
               className={`rounded-md px-3 py-1.5 text-[10px] uppercase tracking-wider ${view === "all" ? "bg-zinc-800 text-zinc-100" : "text-zinc-500"}`}
             >
-              All available ({new Set([
-                ...discovered.map((item: any) => String(item?.address ?? "").toLowerCase()),
-                ...monitored.map((item: any) => String(item?.token ?? item?.address ?? "").toLowerCase())
-              ].filter(Boolean)).size})
+              All available ({tokenCount})
             </button>
           </div>
           <input

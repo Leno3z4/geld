@@ -53,6 +53,8 @@ import {
   formatUnits,
   parseUnits,
   encodeFunctionData,
+  encodeAbiParameters,
+  encodePacked,
   type Address
 } from "viem";
 
@@ -118,6 +120,23 @@ const KYBER_BASE_URL = "https://aggregator-api.kyberswap.com";
 const KYBER_NATIVE_TOKEN = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
 const KYBER_CLIENT_ID = "GELD";
 const KYBER_SIMULATION_SLIPPAGE_BPS = 30;
+const UNISWAP_UNIVERSAL_ROUTER = "0xfdf682f51fe81aa4898f0ae2163d8a55c127fbc7" as Address;
+const PANCAKE_UNIVERSAL_ROUTER = "0x23682a588cf2601aca977df200938634c9f7d552" as Address;
+const WMON_ADDRESS = "0x3bd359c1119da7da1d913d1c4d2b7c461115433a" as Address;
+const UNIVERSAL_ROUTER_ABI = parseAbi([
+  "function execute(bytes commands,bytes[] inputs,uint256 deadline) payable"
+]);
+const ERC20_TX_ABI = parseAbi([
+  "function transfer(address to,uint256 value) returns (bool)",
+  "function approve(address spender,uint256 value) returns (bool)"
+]);
+const WMON_WRAP_ABI = parseAbi([
+  "function deposit() payable",
+  "function withdraw(uint256)"
+]);
+const CURVE_SWAP_ABI = parseAbi([
+  "function exchange(int128 i,int128 j,uint256 dx,uint256 minDy,address receiver) returns (uint256)"
+]);
 const ERC20_ALLOWANCE_ABI = parseAbi([
   "function allowance(address owner,address spender) view returns (uint256)",
   "function approve(address spender,uint256 amount) returns (bool)"
@@ -1964,11 +1983,19 @@ async function simulateCycle(
   }
 }
 
+export type LSTArbitrageScanOptions = {
+  probeLimit?: number;
+  includeKyberScout?: boolean;
+};
+
 export async function scanLSTArbitrage(
   rpcUrl: string,
   cache?: LSTArbitrageCache,
-  apiKey?: string
+  apiKey?: string,
+  options: LSTArbitrageScanOptions = {}
 ) {
+  const probeLimit = Math.max(1, Math.min(6, Math.floor(options.probeLimit ?? MAX_EXACT_ROUTES)));
+  const includeKyberScout = options.includeKyberScout !== false;
   const discovery = await discoverDexPaprikaMonadPools(cache, apiKey);
   const kuruDiscovery = await discoverKuruMarkets(cache);
   const assets = new Map<string, ArbitrageAsset>(assetMap());
@@ -2101,7 +2128,7 @@ export async function scanLSTArbitrage(
   if (kuruIndex < 0) {
     kuruIndex = remainingRoutes.findIndex(isCrossVenueKuru);
   }
-  if (kuruIndex >= 0 && probeRoutes.length < MAX_EXACT_ROUTES) {
+  if (kuruIndex >= 0 && probeRoutes.length < probeLimit) {
     const [kuruRoute] = remainingRoutes.splice(kuruIndex, 1);
     probeRoutes.push(kuruRoute);
     for (const leg of kuruRoute.legs) {
@@ -2304,7 +2331,7 @@ export async function scanLSTArbitrage(
     (a, b) => b.netProfitMon - a.netProfitMon
   );
 
-  const kyberScout = await scoutKyberRoundTrips(
+  const kyberScout = includeKyberScout ? scoutKyberRoundTrips(
     (() => {
       const usdcQuote = exactResults
         .flatMap((route: any) => route.exactQuotes ?? [])
@@ -2313,7 +2340,14 @@ export async function scanLSTArbitrage(
         ? Number(usdcQuote.finalQuoteRaw) / 1e6 / Number(usdcQuote.sizeMon)
         : 0;
     })()
-  );
+  ); : {
+    enabled: false,
+    probeSizeMon: KYBER_PROBE_SIZE_MON,
+    requestsThisScan: 0,
+    targetCount: 0,
+    results: [],
+    topSignal: null
+  };
 
   return {
     mode: "PAPER_SIGNAL_ONLY" as const,

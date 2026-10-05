@@ -103,7 +103,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-multisource-discovery-v4-2026-10-05";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-broad-universe-edge-cache-v5-2026-10-05";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KURU_MARKET_ABI = parseAbi([
@@ -324,25 +324,117 @@ function normalizeAssetAddress(value: unknown) {
 }
 
 
+const EDGE_CACHE_TTL_MS = 5 * 60_000;
+const EDGE_CACHE_PREFIX = "geld-lst-arb-v5";
+
+const memoryProviderCache = new Map<string, CacheEntry<any>>();
+const memoryProviderInflight = new Map<string, Promise<any>>();
+
+function edgeCacheRequest(key: string) {
+  return new Request(
+    `https://geld-cache.invalid/${EDGE_CACHE_PREFIX}/${encodeURIComponent(key)}`
+  );
+}
+
+async function readEdgeCache<T>(key: string): Promise<CacheEntry<T> | null> {
+  try {
+    const response = await caches.default.match(edgeCacheRequest(key));
+    if (!response) return null;
+    const raw = await response.text();
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.fetchedAt === "number" && "data" in parsed) {
+      return parsed as CacheEntry<T>;
+    }
+  } catch {
+    // Edge cache is an optimization; never let it break the scanner.
+  }
+  return null;
+}
+
+async function writeEdgeCache<T>(key: string, data: T, fetchedAt = Date.now()) {
+  try {
+    const response = new Response(
+      JSON.stringify({ fetchedAt, data }),
+      {
+        headers: {
+          "content-type": "application/json",
+          "cache-control": `public, max-age=${Math.floor(EDGE_CACHE_TTL_MS / 1000)}`
+        }
+      }
+    );
+    await caches.default.put(edgeCacheRequest(key), response);
+  } catch {
+    // Edge cache is best-effort.
+  }
+}
+
+function dynamicAsset(address: string, known: Map<string, ArbitrageAsset>): ArbitrageAsset {
+  const normalized = address.toLowerCase();
+  const existing = known.get(normalized);
+  if (existing) return existing;
+  return {
+    symbol: `TKN_${normalized.slice(2, 8).toUpperCase()}`,
+    address: normalized,
+    decimals: 18
+  };
+}
+
+async function fetchProviderJson<T>(
+  key: string,
+  url: string,
+  headers: Record<string, string>,
+  ttlMs = EDGE_CACHE_TTL_MS
+): Promise<{ data: T; fetchedAt: number; fromCache: boolean }> {
+  const now = Date.now();
+  const memory = memoryProviderCache.get(key);
+  if (memory && now - memory.fetchedAt < ttlMs) {
+    return { data: memory.data as T, fetchedAt: memory.fetchedAt, fromCache: true };
+  }
+
+  const edge = await readEdgeCache<T>(key);
+  if (edge && now - edge.fetchedAt < ttlMs) {
+    memoryProviderCache.set(key, edge as CacheEntry<any>);
+    return { data: edge.data, fetchedAt: edge.fetchedAt, fromCache: true };
+  }
+
+  const existing = memoryProviderInflight.get(key);
+  if (existing) {
+    const result = await existing as { data: T; fetchedAt: number; fromCache: boolean };
+    return result;
+  }
+
+  const promise = (async () => {
+    const response = await fetch(url, { headers });
+    if (!response.ok) throw new Error(`Provider HTTP ${response.status}`);
+    const data = await response.json() as T;
+    const fetchedAt = Date.now();
+    const entry = { fetchedAt, data };
+    memoryProviderCache.set(key, entry);
+    await writeEdgeCache(key, data, fetchedAt);
+    return { data, fetchedAt, fromCache: false };
+  })();
+
+  memoryProviderInflight.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    memoryProviderInflight.delete(key);
+  }
+}
+
 async function discoverDexPaprikaMonadPools(
   cache?: LSTArbitrageCache,
   apiKey?: string
 ) {
   const now = Date.now();
-  const assets = assetMap();
+  const knownAssets = assetMap();
   const errors: string[] = [];
   const pools: any[] = [];
-  const refreshedAssets: string[] = [];
-  const cachedAssets: string[] = [];
+  const discoveredAssets = new Map<string, ArbitrageAsset>(knownAssets);
   let requestsThisScan = 0;
   let priceRequestsThisScan = 0;
-
-  const blockedEntry = await readCache<number>(cache, PROVIDER_BLOCK_KEY);
-  const persistedBlockedUntil = Number(blockedEntry?.data ?? 0);
-  let blockedUntil = Number.isFinite(persistedBlockedUntil) && persistedBlockedUntil > now
-    ? persistedBlockedUntil
-    : 0;
-  let providerBlocked = blockedUntil > now;
+  let providerBlocked = false;
+  let blockedUntil = 0;
 
   const headers: Record<string, string> = {
     accept: "application/json",
@@ -350,201 +442,234 @@ async function discoverDexPaprikaMonadPools(
   };
   if (apiKey) headers.authorization = apiKey;
 
-  const prices = new Map<string, number>();
-  const priceKey = `${DEXPAPRIKA_CACHE_PREFIX}:prices:v1`;
-  const cachedPrices = await readCache<Record<string, number>>(cache, priceKey);
+  const blockedEntry = await readCache<number>(cache, PROVIDER_BLOCK_KEY);
+  const persistedBlockedUntil = Number(blockedEntry?.data ?? 0);
+  if (Number.isFinite(persistedBlockedUntil) && persistedBlockedUntil > now) {
+    blockedUntil = persistedBlockedUntil;
+    providerBlocked = true;
+  }
 
-  if (cachedPrices && now - cachedPrices.fetchedAt < DEXPAPRIKA_CACHE_TTL_MS) {
-    for (const [key, value] of Object.entries(cachedPrices.data ?? {})) {
-      prices.set(key.toLowerCase(), num(value));
-    }
-  } else if (!providerBlocked) {
+  const poolCacheKey = `${DEXPAPRIKA_CACHE_PREFIX}:network-pools:v2`;
+  let networkRows: any[] = [];
+  let poolFromCache = false;
+
+  if (!providerBlocked) {
     try {
-      const tokenList = ARBITRAGE_ASSETS
-        .map(asset => asset.address.toLowerCase())
-        .slice(0, DEXPAPRIKA_PRICE_BATCH_LIMIT)
-        .join(",");
-      const response = await fetch(
-        `${DEXPAPRIKA_BASE_URL}/networks/${DEXPAPRIKA_NETWORK}/multi/prices?tokens=${tokenList}`,
-        { headers }
+      const result = await fetchProviderJson<any>(
+        poolCacheKey,
+        `${DEXPAPRIKA_BASE_URL}/networks/${DEXPAPRIKA_NETWORK}/pools/search?order_by=volume_usd_24h&sort=desc&limit=60`,
+        headers,
+        DEXPAPRIKA_CACHE_TTL_MS
       );
-      priceRequestsThisScan++;
-      requestsThisScan++;
-      if (!response.ok) throw new Error(`DexPaprika prices HTTP ${response.status}`);
-      const json = await response.json() as any;
-      const rows = Array.isArray(json) ? json : Array.isArray(json?.results) ? json.results : [];
-      for (const row of rows) {
-        const address = addr(row?.id ?? row?.address);
-        const price = num(row?.price_usd ?? row?.price);
-        if (address && price > 0) prices.set(address, price);
+      networkRows = Array.isArray(result.data?.results) ? result.data.results : [];
+      poolFromCache = result.fromCache;
+      if (!result.fromCache) requestsThisScan++;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      errors.push(message);
+      const status = Number(message.match(/HTTP (\\d+)/)?.[1] ?? 0);
+      if (status === 402 || status === 429) {
+        blockedUntil = now + PROVIDER_COOLDOWN_MS;
+        providerBlocked = true;
+        await writeCache(cache, PROVIDER_BLOCK_KEY, blockedUntil, now);
       }
-      if (prices.size > 0) {
-        await writeCache(cache, priceKey, Object.fromEntries(prices), now);
+    }
+  }
+
+  // If DexPaprika is temporarily unavailable, let the existing DEX Screener
+  // fallback discover the monitored universe without spending more than the
+  // remaining discovery budget.
+  if (providerBlocked || networkRows.length === 0) {
+    const fallback = await discoverDexScreenerMonadPools(
+      cache,
+      Math.max(0, PLANNED_DISCOVERY_REQUESTS - requestsThisScan)
+    );
+    const fallbackAssets = [...knownAssets.values()];
+    for (const pool of fallback.pools) {
+      const base = addr(pool?.relationships?.base_token?.data?.id);
+      const quote = addr(pool?.relationships?.quote_token?.data?.id);
+      if (base) discoveredAssets.set(base, dynamicAsset(base, knownAssets));
+      if (quote) discoveredAssets.set(quote, dynamicAsset(quote, knownAssets));
+    }
+    for (const pool of fallback.pools) {
+      const key = String(pool?.attributes?.address ?? pool?.id).toLowerCase();
+      if (!pools.some(existing => String(existing?.attributes?.address ?? existing?.id).toLowerCase() === key)) {
+        pools.push(pool);
+      }
+    }
+    return {
+      pools,
+      assets: [...discoveredAssets.values()],
+      provider: {
+        source: "dexpaprika",
+        network: DEXPAPRIKA_NETWORK,
+        requestsThisScan: requestsThisScan + fallback.provider.requestsThisScan,
+        priceRequestsThisScan,
+        assetQueries: 0,
+        assetLimit: 60,
+        refreshedAssets: [],
+        cachedAssets: poolFromCache ? ["NETWORK"] : [],
+        blockedUntil: blockedUntil > now ? blockedUntil : null,
+        cacheTtlMs: DEXPAPRIKA_CACHE_TTL_MS,
+        availableDexes: [...new Set(pools.map(pool => String(pool?.__dexMeta?.id ?? "").toLowerCase()).filter(Boolean))].sort(),
+        fallbackUsed: fallback.pools.length > 0,
+        fallbackSource: fallback.provider.source,
+        fallbackRequestsThisScan: fallback.provider.requestsThisScan,
+        fallbackRefreshedAssets: fallback.provider.refreshedAssets,
+        fallbackCachedAssets: fallback.provider.cachedAssets,
+        fallbackAvailableDexes: fallback.provider.availableDexes,
+        fallbackErrors: fallback.provider.errors,
+        errors: errors.length ? [...new Set(errors.concat(fallback.provider.errors ?? []))] : fallback.provider.errors,
+        note:
+          "Network-wide topology discovery is cached at the edge. Exact on-chain quotes remain the only profitability gate."
+      }
+    };
+  }
+
+  const supportedDexes = new Set([
+    "uniswap_v4",
+    "uniswap_v3",
+    "uniswap_v2",
+    "pancakeswap_v3",
+    "pancakeswap_v2"
+  ]);
+
+  const candidateRows = networkRows.filter(row => {
+    const dex = String(row?.dex_id ?? "").toLowerCase();
+    return supportedDexes.has(dex) && num(row?.liquidity_usd) >= MIN_LIQUIDITY_USD;
+  });
+
+  const tokenAddresses = new Set<string>();
+  for (const row of candidateRows) {
+    const tokens = Array.isArray(row?.tokens) ? row.tokens : [];
+    for (const token of tokens.slice(0, 2)) {
+      const normalized = normalizeAssetAddress(token?.id);
+      if (normalized) tokenAddresses.add(normalized);
+    }
+  }
+
+  // DexPaprika's batch endpoint accepts 10 tokens per request. Keep this
+  // bounded so discovery never crowds out exact RPC quoting on the Free plan.
+  const priceList = [...tokenAddresses].slice(0, 30);
+  const prices = new Map<string, number>();
+  for (let i = 0; i < priceList.length; i += DEXPAPRIKA_PRICE_BATCH_LIMIT) {
+    if (requestsThisScan >= PLANNED_DISCOVERY_REQUESTS) break;
+    const batch = priceList.slice(i, i + DEXPAPRIKA_PRICE_BATCH_LIMIT);
+    const key = `${DEXPAPRIKA_CACHE_PREFIX}:prices:${batch.join(",")}:v2`;
+    try {
+      const result = await fetchProviderJson<any>(
+        key,
+        `${DEXPAPRIKA_BASE_URL}/networks/${DEXPAPRIKA_NETWORK}/multi/prices?tokens=${batch.join(",")}`,
+        headers,
+        DEXPAPRIKA_CACHE_TTL_MS
+      );
+      if (!result.fromCache) {
+        requestsThisScan++;
+        priceRequestsThisScan++;
+      }
+      const rows = Array.isArray(result.data) ? result.data : Array.isArray(result.data?.results) ? result.data.results : [];
+      for (const row of rows) {
+        const token = normalizeAssetAddress(row?.id ?? row?.address);
+        const price = num(row?.price_usd ?? row?.price);
+        if (token && price > 0) prices.set(token, price);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       errors.push(message);
       const status = Number(message.match(/HTTP (\\d+)/)?.[1] ?? 0);
-      // DexPaprika currently returns 402 when the price endpoint requires
-      // paid access and 429 when the free endpoint is rate-limited. Neither
-      // condition should cause the Worker to fan out into more provider calls.
       if (status === 402 || status === 429) {
-        const retryUntil = now + PROVIDER_COOLDOWN_MS;
-        blockedUntil = retryUntil;
+        blockedUntil = now + PROVIDER_COOLDOWN_MS;
         providerBlocked = true;
-        await writeCache(cache, PROVIDER_BLOCK_KEY, retryUntil, now);
+        await writeCache(cache, PROVIDER_BLOCK_KEY, blockedUntil, now);
+        break;
       }
-    }
-  }
-
-  for (const asset of ARBITRAGE_ASSETS) {
-    const cacheKey = `${DEXPAPRIKA_CACHE_PREFIX}:pools:${asset.address.toLowerCase()}:v1`;
-    const cached = await readCache<any[]>(cache, cacheKey);
-    let rows: any[] = [];
-
-    if (cached && now - cached.fetchedAt < DEXPAPRIKA_CACHE_TTL_MS) {
-      rows = cached.data;
-      cachedAssets.push(asset.symbol);
-    } else if (!providerBlocked) {
-      try {
-        const url =
-          `${DEXPAPRIKA_BASE_URL}/networks/${DEXPAPRIKA_NETWORK}/pools/search?token_address=${asset.address}&order_by=liquidity_usd&sort=desc&limit=${DEXPAPRIKA_ASSET_LIMIT}`;
-        const response = await fetch(url, { headers });
-        requestsThisScan++;
-        if (!response.ok) {
-          if (response.status === 402 || response.status === 429) {
-            const retryAfter = retryAfterMs(response.headers.get("retry-after"));
-            const retryUntil = now + Math.max(PROVIDER_COOLDOWN_MS, retryAfter ?? 0);
-            blockedUntil = retryUntil;
-            providerBlocked = true;
-            await writeCache(cache, PROVIDER_BLOCK_KEY, retryUntil, now);
-          }
-          throw new Error(`DexPaprika pools HTTP ${response.status} for ${asset.symbol}`);
-        }
-        const json = await response.json() as any;
-        rows = Array.isArray(json?.results) ? json.results : [];
-        await writeCache(cache, cacheKey, rows, now);
-        refreshedAssets.push(asset.symbol);
-      } catch (error) {
-        errors.push(error instanceof Error ? error.message : String(error));
-        if (cached?.data?.length) rows = cached.data;
-      }
-    } else if (cached?.data?.length) {
-      rows = cached.data;
-      cachedAssets.push(asset.symbol);
-    }
-
-    for (const row of rows) {
-      const tokens = Array.isArray(row?.tokens) ? row.tokens : [];
-      if (tokens.length < 2) continue;
-
-      const token0 = addr(tokens[0]?.id);
-      const token1 = addr(tokens[1]?.id);
-      if (!token0 || !token1 || token0 === token1) continue;
-      if (!assets.has(token0) || !assets.has(token1)) continue;
-
-      const p0 = prices.get(token0);
-      const p1 = prices.get(token1);
-      if (p0 === undefined || p1 === undefined || p0 <= 0 || p1 <= 0) continue;
-
-      const baseToQuote = p0 / p1;
-      if (!(baseToQuote > 0)) continue;
-
-      const baseAsset = assets.get(token0)!;
-      const quoteAsset = assets.get(token1)!;
-      const poolAddress = poolIdentifier(row?.id);
-      if (!poolAddress) continue;
-
-      pools.push({
-        id: String(row?.id ?? poolAddress),
-        attributes: {
-          address: poolAddress,
-          name: `${baseAsset.symbol}/${quoteAsset.symbol} ${String(row?.dex_name ?? row?.dex_id ?? "dex")}`,
-          base_token_price_quote_token: String(baseToQuote),
-          pool_fee_percentage: num(row?.fee),
-          reserve_in_usd: num(row?.liquidity_usd),
-          volume_usd: { h24: num(row?.volume_usd_24h) }
-        },
-        relationships: {
-          base_token: { data: { id: token0 } },
-          quote_token: { data: { id: token1 } },
-          dex: { data: { id: String(row?.dex_id ?? row?.dex_name ?? "unknown").toLowerCase() } }
-        },
-        __baseTokenMeta: {
-          attributes: {
-            address: token0,
-            symbol: baseAsset.symbol,
-            decimals: baseAsset.decimals
-          }
-        },
-        __quoteTokenMeta: {
-          attributes: {
-            address: token1,
-            symbol: quoteAsset.symbol,
-            decimals: quoteAsset.decimals
-          }
-        },
-        __dexMeta: {
-          id: String(row?.dex_id ?? row?.dex_name ?? "unknown").toLowerCase()
-        },
-        __createdAtBlock: row?.created_at_block_number
-      });
     }
   }
 
   const deduped = new Map<string, any>();
-  for (const pool of pools) {
-    const key = String(pool?.attributes?.address ?? pool?.id).toLowerCase();
-    if (!deduped.has(key)) deduped.set(key, pool);
+  for (const row of candidateRows) {
+    const tokens = Array.isArray(row?.tokens) ? row.tokens : [];
+    if (tokens.length < 2) continue;
+
+    const token0 = normalizeAssetAddress(tokens[0]?.id);
+    const token1 = normalizeAssetAddress(tokens[1]?.id);
+    if (!token0 || !token1 || token0 === token1) continue;
+
+    const p0 = prices.get(token0);
+    const p1 = prices.get(token1);
+    if (!(p0 && p1 && p0 > 0 && p1 > 0)) continue;
+
+    const baseAsset = dynamicAsset(token0, knownAssets);
+    const quoteAsset = dynamicAsset(token1, knownAssets);
+    discoveredAssets.set(token0, baseAsset);
+    discoveredAssets.set(token1, quoteAsset);
+
+    const dexId = String(row?.dex_id ?? "").toLowerCase();
+    let quoteKind: QuoteKind = "unsupported";
+    if (dexId === "uniswap_v4") quoteKind = "uniswap-v4";
+    else if (dexId === "uniswap_v3") quoteKind = "uniswap-v3";
+    else if (dexId === "uniswap_v2") quoteKind = "uniswap-v2";
+    else if (dexId === "pancakeswap_v3") quoteKind = "pancake-v3";
+    else if (dexId === "pancakeswap_v2") quoteKind = "pancake-v2";
+
+    const poolAddress = poolIdentifier(row?.id);
+    if (!poolAddress || quoteKind === "unsupported") continue;
+
+    const baseToQuote = p0 / p1;
+    if (!(baseToQuote > 0)) continue;
+
+    const pool = {
+      id: String(row?.id ?? poolAddress),
+      attributes: {
+        address: poolAddress,
+        name: `${baseAsset.symbol}/${quoteAsset.symbol} ${String(row?.dex_name ?? row?.dex_id ?? "dex")}`,
+        base_token_price_quote_token: String(baseToQuote),
+        pool_fee_percentage: num(row?.fee),
+        reserve_in_usd: num(row?.liquidity_usd),
+        volume_usd: { h24: num(row?.volume_usd_24h) }
+      },
+      relationships: {
+        base_token: { data: { id: token0 } },
+        quote_token: { data: { id: token1 } },
+        dex: { data: { id: dexId } }
+      },
+      __baseTokenMeta: { attributes: { address: token0, symbol: baseAsset.symbol, decimals: baseAsset.decimals } },
+      __quoteTokenMeta: { attributes: { address: token1, symbol: quoteAsset.symbol, decimals: quoteAsset.decimals } },
+      __dexMeta: { id: dexId },
+      __quoteKind: quoteKind,
+      __createdAtBlock: row?.created_at_block_number
+    };
+
+    deduped.set(poolAddress.toLowerCase(), pool);
   }
 
-  const provider = {
-    source: "dexpaprika",
-    network: DEXPAPRIKA_NETWORK,
-    requestsThisScan,
-    priceRequestsThisScan,
-    assetQueries: ARBITRAGE_ASSETS.length,
-    assetLimit: DEXPAPRIKA_ASSET_LIMIT,
-    refreshedAssets,
-    cachedAssets,
-    blockedUntil: blockedUntil > now ? blockedUntil : null,
-    cacheTtlMs: DEXPAPRIKA_CACHE_TTL_MS,
-    availableDexes: [...new Set([...deduped.values()].map(pool =>
-      String(pool?.__dexMeta?.id ?? "").toLowerCase()
-    ).filter(Boolean))].sort(),
-    fallbackUsed: false,
-    fallbackSource: undefined as string | undefined,
-    fallbackRequestsThisScan: 0,
-    fallbackRefreshedAssets: [] as string[],
-    fallbackCachedAssets: [] as string[],
-    fallbackAvailableDexes: [] as string[],
-    fallbackErrors: undefined as string[] | undefined,
-    errors: errors.length ? [...new Set(errors)] : undefined,
-    note:
-      "DexPaprika is the discovery provider. Pool topology is used only to build candidate routes; " +
-      "profitability is determined exclusively by exact on-chain quotes."
-  };
-
-  if (providerBlocked) {
-    const fallback = await discoverDexScreenerMonadPools(
-      cache,
-      Math.max(0, PLANNED_DISCOVERY_REQUESTS - requestsThisScan)
-    );
-    for (const pool of fallback.pools) {
-      const key = String(pool?.attributes?.address ?? pool?.id).toLowerCase();
-      if (!deduped.has(key)) deduped.set(key, pool);
+  return {
+    pools: [...deduped.values()],
+    assets: [...discoveredAssets.values()],
+    provider: {
+      source: "dexpaprika",
+      network: DEXPAPRIKA_NETWORK,
+      requestsThisScan,
+      priceRequestsThisScan,
+      assetQueries: 0,
+      assetLimit: 60,
+      refreshedAssets: poolFromCache ? [] : ["NETWORK"],
+      cachedAssets: poolFromCache ? ["NETWORK"] : [],
+      blockedUntil: blockedUntil > now ? blockedUntil : null,
+      cacheTtlMs: DEXPAPRIKA_CACHE_TTL_MS,
+      availableDexes: [...new Set([...deduped.values()].map(pool => String(pool?.__dexMeta?.id ?? "").toLowerCase()).filter(Boolean))].sort(),
+      fallbackUsed: false,
+      fallbackSource: undefined as string | undefined,
+      fallbackRequestsThisScan: 0,
+      fallbackRefreshedAssets: [] as string[],
+      fallbackCachedAssets: [] as string[],
+      fallbackAvailableDexes: [] as string[],
+      fallbackErrors: undefined as string[] | undefined,
+      errors: errors.length ? [...new Set(errors)] : undefined,
+      note:
+        "Network-wide top pools are discovered once, cached for 5 minutes, and expanded beyond the original LST set. Discovery only generates candidates; exact on-chain quotes decide profitability."
     }
-    provider.fallbackUsed = fallback.pools.length > 0;
-    provider.fallbackSource = fallback.provider.source;
-    provider.fallbackRequestsThisScan = fallback.provider.requestsThisScan;
-    provider.fallbackRefreshedAssets = fallback.provider.refreshedAssets;
-    provider.fallbackCachedAssets = fallback.provider.cachedAssets;
-    provider.fallbackAvailableDexes = fallback.provider.availableDexes;
-    provider.fallbackErrors = fallback.provider.errors;
-    provider.requestsThisScan += fallback.provider.requestsThisScan;
-  }
-
-  return { pools: [...deduped.values()], provider };
+  };
 }
 async function discoverDexScreenerMonadPools(cache: LSTArbitrageCache | undefined, maxRequests: number) {
   const assets = assetMap();
@@ -1309,8 +1434,11 @@ export async function scanLSTArbitrage(
   cache?: LSTArbitrageCache,
   apiKey?: string
 ) {
-  const assets = assetMap();
   const discovery = await discoverDexPaprikaMonadPools(cache, apiKey);
+  const assets = new Map<string, ArbitrageAsset>(assetMap());
+  for (const asset of discovery.assets ?? []) {
+    assets.set(asset.address.toLowerCase(), asset);
+  }
 
   const parsedPools = discovery.pools
     .map((record: any) => parseDiscoveredPool(record, assets))

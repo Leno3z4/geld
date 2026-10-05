@@ -189,7 +189,8 @@ const PUBLIC_API_GET_PATHS = new Set([
   "/api/events",
   "/api/leverup/paper",
   "/api/leverup/preflight",
-  "/api/lst/arbitrage"
+  "/api/lst/arbitrage",
+  "/api/lst/arbitrage/preflight-all"
 ]);
 
 function isAuthorized(request: Request, env: Env) {
@@ -1093,6 +1094,33 @@ export default {
       return new Response("Unauthorized", { status: 401 });
     }
 
+    if (url.pathname === "/api/lst/arbitrage/preflight-all" && (request.method === "GET" || request.method === "POST")) {
+      try {
+        const runtime = await getRuntimeConfig(env);
+        const sender = (url.searchParams.get("sender") ?? "0x000000000000000000000000000000000000dEaD").toLowerCase();
+        if (!/^0x[0-9a-f]{40}$/.test(sender)) {
+          return Response.json({ ok: false, error: "sender must be a valid EVM address" }, { status: 400 });
+        }
+        const sizeMon = Number(url.searchParams.get("sizeMon") ?? "1");
+        if (!Number.isFinite(sizeMon) || sizeMon <= 0 || sizeMon > 10) {
+          return Response.json({ ok: false, error: "sizeMon must be > 0 and <= 10" }, { status: 400 });
+        }
+        const result = await preflightAllLSTArbitrage(
+          runtime.rpcUrl,
+          undefined,
+          env.DEXPAPRIKA_API_KEY,
+          sender,
+          sizeMon
+        );
+        return Response.json(result, { headers: { "Cache-Control": "no-store" } });
+      } catch (error) {
+        return Response.json(
+          { ok: false, error: error instanceof Error ? error.message : String(error) },
+          { status: 503, headers: { "Cache-Control": "no-store" } }
+        );
+      }
+    }
+
     if (request.method === "POST" && url.pathname === "/api/lst/arbitrage/preflight") {
       try {
         const runtime = await getRuntimeConfig(env);
@@ -1136,7 +1164,6 @@ export default {
         );
       }
     }
-
     if (url.pathname === "/api/lst/arbitrage") {
       const force = url.searchParams.get("refresh") === "1";
       try {

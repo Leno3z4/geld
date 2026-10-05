@@ -90,7 +90,7 @@ const DEXPAPRIKA_PRICE_BATCH_LIMIT = 10;
 const DEXSCREENER_BASE_URL = "https://api.dexscreener.com";
 const DEXSCREENER_CACHE_TTL_MS = 5 * 60_000;
 const FREE_EXTERNAL_SUBREQUEST_LIMIT = 50;
-const PLANNED_DISCOVERY_REQUESTS = 7;
+const PLANNED_DISCOVERY_REQUESTS = 8;
 // A route with six hops can consume one external RPC call per exact leg.
 // Keep enough headroom for provider/cache calls on the Free 50-subrequest plan.
 const PLANNED_CACHE_API_CALLS = 10;
@@ -108,7 +108,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-recovery-safe-probes-v8-2026-10-05";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-kuru-exact-routing-v9-2026-10-05";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KURU_MARKET_ABI = parseAbi([
@@ -211,6 +211,7 @@ export type PoolEdge = {
   volume24hUsd: number;
   quoteKind: QuoteKind;
   createdAtBlock?: string;
+  kuruMarket?: KuruMarket;
 };
 
 export type ArbitrageSignal = {
@@ -261,6 +262,7 @@ type PoolRecord = {
   dex: string;
   quoteKind: QuoteKind;
   createdAtBlock?: string;
+  kuruMarket?: KuruMarket;
 };
 
 function num(v: unknown) {
@@ -837,6 +839,133 @@ async function discoverDexScreenerMonadPools(cache: LSTArbitrageCache | undefine
   };
 }
 
+function kuruAssetBySymbol(symbol: string, assets: Map<string, ArbitrageAsset>) {
+  const upper = symbol.toUpperCase();
+  if (upper === "MON") {
+    return assets.get("0x3bd359c1119da7da1d913d1c4d2b7c461115433a") ?? null;
+  }
+  for (const asset of assets.values()) {
+    if (asset.symbol.toUpperCase() === upper) return asset;
+  }
+  return null;
+}
+
+async function discoverKuruMarkets(cache?: LSTArbitrageCache) {
+  const cacheKey = "geld-lst-arb-v6:kuru:exchange-info";
+  const errors: string[] = [];
+  try {
+    const result = await fetchProviderJson<any>(
+      cacheKey,
+      KURU_EXCHANGE_INFO_URL,
+      {
+        accept: "application/json",
+        "user-agent": "geld-lst-arbitrage/1.0"
+      },
+      DEXPAPRIKA_CACHE_TTL_MS
+    );
+
+    const rows = Array.isArray(result.data?.symbols) ? result.data.symbols : [];
+    const assets = assetMap();
+    const pools: any[] = [];
+
+    for (const market of rows) {
+      if (String(market?.status ?? "").toUpperCase() !== "TRADING") continue;
+
+      const baseAsset = kuruAssetBySymbol(String(market?.baseAsset ?? ""), assets);
+      const quoteAsset = kuruAssetBySymbol(String(market?.quoteAsset ?? ""), assets);
+      const marketAddress = addr(market?.marketAddress);
+
+      if (!baseAsset || !quoteAsset || !marketAddress || baseAsset.address.toLowerCase() === quoteAsset.address.toLowerCase()) {
+        continue;
+      }
+
+      const kuruMarket: KuruMarket = {
+        symbol: String(market.symbol),
+        status: String(market.status),
+        marketAddress,
+        baseAsset: String(market.baseAsset),
+        quoteAsset: String(market.quoteAsset),
+        baseAssetAddress: baseAsset.address.toLowerCase(),
+        quoteAssetAddress: quoteAsset.address.toLowerCase(),
+        baseAssetPrecision: Number(market.baseAssetDecimals ?? baseAsset.decimals),
+        quoteAssetPrecision: Number(market.quoteAssetDecimals ?? quoteAsset.decimals),
+        pricePrecision: Number(market.pricePrecision ?? 0),
+        sizePrecision: BigInt(String(market.sizePrecision ?? "0")),
+        tickSize: BigInt(String(market.tickSize ?? "0")),
+        minSize: BigInt(String(market.minSize ?? "0")),
+        maxSize: BigInt(String(market.maxSize ?? "0")),
+        takerFeeBps: Number(market.takerFeeBps ?? 0),
+        makerFeeBps: Number(market.makerFeeBps ?? 0)
+      };
+
+      if (!(kuruMarket.pricePrecision > 0 && kuruMarket.sizePrecision > 0)) continue;
+
+      pools.push({
+        id: marketAddress,
+        attributes: {
+          address: marketAddress,
+          name: `${baseAsset.symbol}/${quoteAsset.symbol} Kuru ${kuruMarket.symbol}`,
+          // Neutral theoretical rate. Kuru is explicitly reserved for an exact
+          // probe, so discovery data cannot cause us to trade on a fake edge.
+          base_token_price_quote_token: "1",
+          pool_fee_percentage: kuruMarket.takerFeeBps / 100,
+          reserve_in_usd: 1,
+          volume_usd: { h24: 0 }
+        },
+        relationships: {
+          base_token: { data: { id: baseAsset.address } },
+          quote_token: { data: { id: quoteAsset.address } },
+          dex: { data: { id: "kuru" } }
+        },
+        __baseTokenMeta: {
+          attributes: {
+            address: baseAsset.address,
+            symbol: baseAsset.symbol,
+            decimals: baseAsset.decimals
+          }
+        },
+        __quoteTokenMeta: {
+          attributes: {
+            address: quoteAsset.address,
+            symbol: quoteAsset.symbol,
+            decimals: quoteAsset.decimals
+          }
+        },
+        __dexMeta: { id: "kuru" },
+        __quoteKind: "kuru",
+        __kuruMarket: kuruMarket
+      });
+    }
+
+    return {
+      pools,
+      provider: {
+        source: "kuru",
+        network: "monad",
+        requestsThisScan: result.fromCache ? 0 : 1,
+        cached: result.fromCache,
+        marketCount: pools.length,
+        availableDexes: pools.length ? ["kuru"] : [],
+        errors: undefined
+      }
+    };
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
+    return {
+      pools: [],
+      provider: {
+        source: "kuru",
+        network: "monad",
+        requestsThisScan: 1,
+        cached: false,
+        marketCount: 0,
+        availableDexes: [],
+        errors
+      }
+    };
+  }
+}
+
 function parseDiscoveredPool(
   record: any,
   assets: Map<string, ArbitrageAsset>
@@ -888,7 +1017,8 @@ function parseDiscoveredPool(
     volume24hUsd: num(a.volume_usd?.h24),
     dex,
     quoteKind: record?.__quoteKind && record.__quoteKind !== "unsupported" ? record.__quoteKind : classifyQuoteKind(poolAddress, dex),
-    createdAtBlock: record?.__createdAtBlock ? String(record.__createdAtBlock) : undefined
+    createdAtBlock: record?.__createdAtBlock ? String(record.__createdAtBlock) : undefined,
+    kuruMarket: record?.__kuruMarket
   };
 }
 function assetMap() {
@@ -1002,6 +1132,7 @@ function classifyQuoteKind(address: string, dex: string) {
 
 function isExactQuoteSupported(kind: QuoteKind) {
   return (
+    kind === "kuru" ||
     kind === "curve-lst" ||
     kind === "uniswap-v4" ||
     kind === "uniswap-v3" ||
@@ -1030,7 +1161,8 @@ function addEdge(edges: PoolEdge[], pool: PoolRecord) {
     liquidityUsd: pool.liquidityUsd,
     volume24hUsd: pool.volume24hUsd,
     quoteKind: pool.quoteKind,
-    createdAtBlock: pool.createdAtBlock
+    createdAtBlock: pool.createdAtBlock,
+    kuruMarket: pool.kuruMarket
   });
 
   edges.push({
@@ -1046,7 +1178,8 @@ function addEdge(edges: PoolEdge[], pool: PoolRecord) {
     liquidityUsd: pool.liquidityUsd,
     volume24hUsd: pool.volume24hUsd,
     quoteKind: pool.quoteKind,
-    createdAtBlock: pool.createdAtBlock
+    createdAtBlock: pool.createdAtBlock,
+    kuruMarket: pool.kuruMarket
   });
 }
 
@@ -1366,9 +1499,64 @@ async function quoteExactEdge(
   }
 
   if (edge.quoteKind === "kuru") {
-    // Kuru requires live orderbook state for an exact market fill. Keep it
-    // discovery-visible but do not spend an RPC call on a discarded quote.
-    return null;
+    const market = edge.kuruMarket;
+    if (!market) return null;
+
+    const cacheKey = market.marketAddress.toLowerCase();
+    const cachedMarket = kuruParamsCache.get(cacheKey) ?? market;
+    kuruParamsCache.set(cacheKey, cachedMarket);
+
+    const fromIsBase =
+      edge.from.toLowerCase() === cachedMarket.baseAssetAddress.toLowerCase();
+    const fromIsQuote =
+      edge.from.toLowerCase() === cachedMarket.quoteAssetAddress.toLowerCase();
+
+    if (!fromIsBase && !fromIsQuote) return null;
+
+    const inputDecimals = fromIsBase
+      ? cachedMarket.baseAssetPrecision
+      : cachedMarket.quoteAssetPrecision;
+
+    const precision = fromIsBase
+      ? cachedMarket.sizePrecision
+      : BigInt(cachedMarket.pricePrecision);
+
+    if (!(precision > 0n) || inputDecimals < 0 || inputDecimals > 36) {
+      return null;
+    }
+
+    const scale = 10n ** BigInt(inputDecimals);
+    const marketSize = amountIn * precision / scale;
+    if (marketSize <= 0n || marketSize > ((1n << 96n) - 1n)) {
+      return null;
+    }
+
+    const nativeInput =
+      (fromIsBase && cachedMarket.baseAsset.toUpperCase() === "MON") ||
+      (fromIsQuote && cachedMarket.quoteAsset.toUpperCase() === "MON");
+
+    const amountOut = fromIsBase
+      ? await client.readContract({
+          address: cachedMarket.marketAddress as Address,
+          abi: KURU_MARKET_ABI,
+          functionName: "placeAndExecuteMarketSell",
+          args: [marketSize, 0n, false, true],
+          value: nativeInput ? amountIn : 0n
+        })
+      : await client.readContract({
+          address: cachedMarket.marketAddress as Address,
+          abi: KURU_MARKET_ABI,
+          functionName: "placeAndExecuteMarketBuy",
+          args: [marketSize, 0n, false, true],
+          value: nativeInput ? amountIn : 0n
+        });
+
+    return {
+      amountOut: BigInt(amountOut as bigint),
+      feeBps: cachedMarket.takerFeeBps,
+      feePct: cachedMarket.takerFeeBps / 100,
+      feeSource: "kuru_market_exact_simulation"
+    };
   }
   return null;
 }
@@ -1495,6 +1683,7 @@ export async function scanLSTArbitrage(
   apiKey?: string
 ) {
   const discovery = await discoverDexPaprikaMonadPools(cache, apiKey);
+  const kuruDiscovery = await discoverKuruMarkets(cache);
   const assets = new Map<string, ArbitrageAsset>(assetMap());
   for (const asset of discovery.assets ?? []) {
     assets.set(asset.address.toLowerCase(), asset);
@@ -1512,6 +1701,15 @@ export async function scanLSTArbitrage(
     poolByAddress.set(pool.address.toLowerCase(), pool);
   }
   for (const pool of parsedPools) {
+    poolByAddress.set(pool.address.toLowerCase(), pool);
+  }
+  const kuruParsedPools = kuruDiscovery.pools
+    .map((record: any) => parseDiscoveredPool(record, assets))
+    .filter(
+      (pool: PoolRecord | null): pool is PoolRecord =>
+        pool !== null
+    );
+  for (const pool of kuruParsedPools) {
     poolByAddress.set(pool.address.toLowerCase(), pool);
   }
 
@@ -1591,6 +1789,20 @@ export async function scanLSTArbitrage(
 
   const probeRoutes: any[] = [];
   const coveredProbeDexes = new Set<string>();
+
+  // Always spend one exact probe on Kuru when a complete Kuru cycle exists.
+  // This prevents a neutral discovery rate from starving Kuru routes from
+  // exact validation.
+  const kuruIndex = remainingRoutes.findIndex(route =>
+    route.legs.some((leg: PoolEdge) => leg.quoteKind === "kuru")
+  );
+  if (kuruIndex >= 0 && probeRoutes.length < MAX_EXACT_ROUTES) {
+    const [kuruRoute] = remainingRoutes.splice(kuruIndex, 1);
+    probeRoutes.push(kuruRoute);
+    for (const leg of kuruRoute.legs) {
+      coveredProbeDexes.add(leg.dex.toLowerCase());
+    }
+  }
 
   while (
     probeRoutes.length < MAX_EXACT_ROUTES &&
@@ -1800,7 +2012,10 @@ export async function scanLSTArbitrage(
     routeCount: allRoutes.length,
     probeRouteCount: probeRoutes.length,
     availableDexCount:
-      discovery.provider.availableDexes?.length ?? 0,
+      new Set([
+        ...(discovery.provider.availableDexes ?? []),
+        ...(kuruDiscovery.provider.availableDexes ?? [])
+      ]).size,
     exactSupportedDexCount: [
       ...new Set(
         pools
@@ -1829,7 +2044,14 @@ export async function scanLSTArbitrage(
     },
     provider: {
       ...discovery.provider,
-      parsedPoolCount: parsedPools.length,
+      requestsThisScan:
+        Number(discovery.provider.requestsThisScan ?? 0) +
+        Number(kuruDiscovery.provider.requestsThisScan ?? 0),
+      kuruRequestsThisScan: kuruDiscovery.provider.requestsThisScan,
+      kuruMarketCount: kuruDiscovery.provider.marketCount,
+      kuruAvailable: kuruDiscovery.provider.marketCount > 0,
+      kuruErrors: kuruDiscovery.provider.errors,
+      parsedPoolCount: parsedPools.length + kuruParsedPools.length,
       discoveredDexes: [
         ...new Set(pools.map(pool => pool.dex))
       ].sort(),

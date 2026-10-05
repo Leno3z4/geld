@@ -108,7 +108,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-subrequest-safe-probes-v7-2026-10-05";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-recovery-safe-probes-v8-2026-10-05";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KURU_MARKET_ABI = parseAbi([
@@ -145,10 +145,10 @@ export type LSTArbitrageCache = {
   put(key: string, value: string): Promise<void>;
 };
 
-const PROVIDER_COOLDOWN_MS = 15 * 60_000;
+const PROVIDER_COOLDOWN_MS = 2 * 60_000;
 const DEXPAPRIKA_CACHE_PREFIX = "lst-arb:dexpaprika";
 const PROVIDER_BLOCK_KEY = "lst-arb:dexpaprika:blocked-until";
-const DEXSCREENER_BLOCK_KEY = "lst-arb:dexscreener:blocked-until";
+const DEXSCREENER_BLOCK_KEY = "lst-arb:dexscreener:blocked-until:v2";
 export type ArbitrageAsset = {
   symbol: string;
   address: string;

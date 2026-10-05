@@ -98,7 +98,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-dexpaprika-exact-routing-v1-2026-10-05";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-dexpaprika-ratelimit-guard-v2-2026-10-05";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KURU_MARKET_ABI = parseAbi([
@@ -332,9 +332,12 @@ async function discoverDexPaprikaMonadPools(
   let requestsThisScan = 0;
   let priceRequestsThisScan = 0;
 
-  const blockedRaw = await readCache<string>(cache, PROVIDER_BLOCK_KEY);
-  const blockedUntil = Number(blockedRaw ?? 0);
-  const providerBlocked = Number.isFinite(blockedUntil) && blockedUntil > now;
+  const blockedEntry = await readCache<number>(cache, PROVIDER_BLOCK_KEY);
+  const persistedBlockedUntil = Number(blockedEntry?.data ?? 0);
+  let blockedUntil = Number.isFinite(persistedBlockedUntil) && persistedBlockedUntil > now
+    ? persistedBlockedUntil
+    : 0;
+  let providerBlocked = blockedUntil > now;
 
   const headers: Record<string, string> = {
     accept: "application/json",
@@ -374,7 +377,14 @@ async function discoverDexPaprikaMonadPools(
         await writeCache(cache, priceKey, Object.fromEntries(prices), now);
       }
     } catch (error) {
-      errors.push(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      errors.push(message);
+      if (message.includes("DexPaprika prices HTTP 429")) {
+        const retryUntil = now + PROVIDER_COOLDOWN_MS;
+        blockedUntil = retryUntil;
+        providerBlocked = true;
+        await writeCache(cache, PROVIDER_BLOCK_KEY, retryUntil, now);
+      }
     }
   }
 
@@ -394,8 +404,11 @@ async function discoverDexPaprikaMonadPools(
         requestsThisScan++;
         if (!response.ok) {
           if (response.status === 429) {
-            const retryUntil = now + PROVIDER_COOLDOWN_MS;
-            await writeCache(cache, PROVIDER_BLOCK_KEY, String(retryUntil), now);
+            const retryAfter = retryAfterMs(response.headers.get("retry-after"));
+            const retryUntil = now + Math.max(PROVIDER_COOLDOWN_MS, retryAfter ?? 0);
+            blockedUntil = retryUntil;
+            providerBlocked = true;
+            await writeCache(cache, PROVIDER_BLOCK_KEY, retryUntil, now);
           }
           throw new Error(`DexPaprika pools HTTP ${response.status} for ${asset.symbol}`);
         }

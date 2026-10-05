@@ -101,7 +101,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
 
     const refreshArbitrage = async () => {
       try {
-        const response = await fetch(CLOUDFLARE_API_BASE + "/api/arbitrage", {
+        const response = await fetch(CLOUDFLARE_API_BASE + "/api/arbitrage/discovery", {
           headers: { accept: "application/json" },
           cache: "no-store"
         });

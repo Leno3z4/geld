@@ -324,7 +324,7 @@ async function runStandaloneArbitrageDiscovery(env: Env, force = false) {
         }
       },
       env.DEXPAPRIKA_API_KEY,
-      { discoveryOnly: true, probeLimit: 1, includeKyberScout: false }
+      { discoveryOnly: true, probeLimit: 0, includeKyberScout: false }
     );
     standaloneArbDiscoveryLastResult = {
       ...scan,

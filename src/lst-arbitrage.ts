@@ -84,7 +84,7 @@ const GECKO_DEXES_URL =
   "https://api.geckoterminal.com/api/v2/networks/monad/dexes";
 const GECKO_DEX_CACHE_TTL_MS = 15 * 60_000;
 const GECKO_DEX_POOL_CACHE_TTL_MS = 5 * 60_000;
-const GECKO_DEXES_PER_SCAN = 6;
+const GECKO_DEXES_PER_SCAN = 1;
 const GECKO_POOL_PAGES_PER_DEX_REFRESH = 1;
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";

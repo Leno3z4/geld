@@ -1303,7 +1303,7 @@ async function simulateCycle(
     // worst-case fill. The real transaction will additionally enforce each
     // leg's minAmountOut and the final WMON threshold atomically.
     let protectedFinalRaw = finalQuoteRaw;
-    for (let i = 0; i < triangle.legs.length; i++) {
+    for (let i = 0; i < cycle.legs.length; i++) {
       protectedFinalRaw =
         protectedFinalRaw * safetyNumerator / safetyDenominator;
     }

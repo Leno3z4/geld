@@ -1454,8 +1454,8 @@ function curveIndexes(edge: any) {
     "0xa3227c5969757783154c60bf0bc1944180ed81b9": 2,
     "0x8498312a6b3cbd158bf0c93abdcf29e6e4f55081": 3
   };
-  const i = indexByAddress[String(edge.from).toLowerCase()];
-  const j = indexByAddress[String(edge.to).toLowerCase()];
+  const i = indexByAddress[String(edge.tokenIn ?? edge.from).toLowerCase()];
+  const j = indexByAddress[String(edge.tokenOut ?? edge.to).toLowerCase()];
   return i === undefined || j === undefined ? null : { i, j };
 }
 
@@ -1470,7 +1470,8 @@ function buildUniversalRouterExecute(
 ) {
   const commands: string[] = [];
   const inputs: string[] = [];
-  const tokenOut = edge.to as Address;
+  const tokenIn = String(edge.tokenIn ?? edge.from).toLowerCase() as Address;
+  const tokenOut = String(edge.tokenOut ?? edge.to).toLowerCase() as Address;
 
   if (nativeInput) {
     commands.push("0x0b");
@@ -1488,7 +1489,7 @@ function buildUniversalRouterExecute(
     }
     const path = encodePacked(
       ["address", "uint24", "address"],
-      [edge.from as Address, fee, edge.to as Address]
+      [tokenIn, fee, tokenOut]
     );
     commands.push("0x00");
     inputs.push(encodeAbiParameters(
@@ -1513,7 +1514,7 @@ function buildUniversalRouterExecute(
         { type: "bool" },
         { type: "uint256[]" }
       ],
-      [router, amountIn, minOut, [edge.from as Address, edge.to as Address], false, []]
+      [router, amountIn, minOut, [tokenIn, tokenOut], false, []]
     ));
   } else {
     throw new Error("Universal Router unsupported quote kind: " + edge.quoteKind);
@@ -1546,8 +1547,9 @@ function buildKuruCall(edge: any, amountIn: bigint, minOut: bigint) {
   const market = edge.kuruMarket;
   if (!market) throw new Error("Kuru market metadata unavailable");
 
-  const fromIsBase = String(edge.from).toLowerCase() === market.baseAssetAddress.toLowerCase();
-  const fromIsQuote = String(edge.from).toLowerCase() === market.quoteAssetAddress.toLowerCase();
+  const tokenIn = String(edge.tokenIn ?? edge.from).toLowerCase();
+  const fromIsBase = tokenIn === market.baseAssetAddress.toLowerCase();
+  const fromIsQuote = tokenIn === market.quoteAssetAddress.toLowerCase();
   if (!fromIsBase && !fromIsQuote) throw new Error("Kuru edge token mismatch");
 
   const inputDecimals = fromIsBase ? market.baseAssetPrecision : market.quoteAssetPrecision;

@@ -75,7 +75,7 @@ export const EXECUTION_BUFFER_PCT = 0.20;
 export const MIN_NET_PROFIT_MON = 0.005;
 export const GAS_BUFFER_MON = 0.001;
 export const TRADE_SIZES_MON = [1, 5, 10];
-export const MAX_EXACT_ROUTES = 4;
+export const MAX_EXACT_ROUTES = 2;
 export const MAX_REFINED_ROUTES = 0;
 // Search every simple closed route possible across the six configured assets.
 // A closed arbitrage path needs at least 2 hops; six is the maximum without revisiting an asset.
@@ -108,7 +108,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-kuru-mon-usdc-priority-v11-2026-10-05";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-kuru-subrequest-safe-v12-2026-10-05";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KURU_MARKET_ABI = parseAbi([

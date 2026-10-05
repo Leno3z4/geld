@@ -1102,6 +1102,10 @@ export default {
           return Response.json({ ok: false, error: "sender must be a valid EVM address" }, { status: 400 });
         }
         const sizeMon = Number(url.searchParams.get("sizeMon") ?? "1");
+        const routeLimit = Number(url.searchParams.get("routeLimit") ?? "2");
+        if (!Number.isFinite(routeLimit) || routeLimit < 1 || routeLimit > 2) {
+          return Response.json({ ok: false, error: "routeLimit must be between 1 and 2 on the Cloudflare Free budget" }, { status: 400 });
+        }
         if (!Number.isFinite(sizeMon) || sizeMon <= 0 || sizeMon > 10) {
           return Response.json({ ok: false, error: "sizeMon must be > 0 and <= 10" }, { status: 400 });
         }

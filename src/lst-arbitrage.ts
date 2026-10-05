@@ -1073,22 +1073,30 @@ function parseDexScreenerPair(
   const baseToQuote = num(pair?.priceNative);
   if (!(baseToQuote > 0)) return null;
 
-  const dex = String(pair?.dexId ?? "unknown");
+  const rawDex = String(pair?.dexId ?? "unknown").toLowerCase();
   const labels = Array.isArray(pair?.labels)
     ? pair.labels.map((x: unknown) => String(x).toLowerCase())
     : [];
   const pairAddress = addr(pair?.pairAddress);
-  const isV3 = dex.includes("uniswap") && labels.includes("v3");
-  const quoteKind: QuoteKind =
-    pairAddress === CURVE_LST_POOL.toLowerCase()
-      ? "curve-lst"
-      : isV3
-        ? "uniswap-v3"
-        : "unsupported";
+  const isV3 = labels.includes("v3");
+  const isV2 = labels.includes("v2");
+  let dex = rawDex;
+  let quoteKind: QuoteKind = "unsupported";
+
+  if (pairAddress === CURVE_LST_POOL.toLowerCase()) {
+    dex = "curve-monad";
+    quoteKind = "curve-lst";
+  } else if (rawDex === "uniswap") {
+    dex = isV3 ? "uniswap-v3-monad" : isV2 ? "uniswap-v2-monad" : "uniswap-v2-monad";
+    quoteKind = isV3 ? "uniswap-v3" : "uniswap-v2";
+  } else if (rawDex === "pancakeswap") {
+    dex = isV3 ? "pancakeswap-v3-monad" : "pancakeswap-v2-monad";
+    quoteKind = isV3 ? "pancake-v3" : "pancake-v2";
+  }
 
   return {
     id: String(pair?.pairAddress ?? ""),
-    name: `${baseAsset.symbol}/${quoteAsset.symbol} ${dex}${isV3 ? " v3" : ""}`,
+    name: `${baseAsset.symbol}/${quoteAsset.symbol} ${dex}${isV3 ? " v3" : isV2 ? " v2" : ""}`,
     address: pairAddress,
     base,
     quote,

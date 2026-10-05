@@ -1022,8 +1022,8 @@ export async function scanLSTArbitrage(
   const discovery = await discoverDexPaprikaPools(cache);
   const discoveredPools = discovery.pools
     .map((record: any) => parseDexPaprikaPool(record, assets))
-    .filter((pool): pool is PoolRecord => pool !== null)
-    .filter(pool => pool.liquidityUsd >= MIN_LIQUIDITY_USD);
+    .filter((pool: PoolRecord | null): pool is PoolRecord => pool !== null)
+    .filter((pool: PoolRecord) => pool.liquidityUsd >= MIN_LIQUIDITY_USD);
 
   const poolByAddress = new Map<string, PoolRecord>();
   for (const pool of KNOWN_UNISWAP_POOLS) poolByAddress.set(pool.address.toLowerCase(), pool);

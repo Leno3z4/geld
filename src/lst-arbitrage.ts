@@ -192,7 +192,9 @@ const DEXPAPRIKA_CACHE_PREFIX = "lst-arb:dexpaprika";
 const PROVIDER_BLOCK_KEY = "lst-arb:dexpaprika:blocked-until";
 const DEXSCREENER_BLOCK_KEY = "lst-arb:dexscreener:blocked-until:v2";
 const DEXSCREENER_BOOSTS_URL = DEXSCREENER_BASE_URL + "/token-boosts/latest/v1";
+const DEXSCREENER_SEARCH_URL = DEXSCREENER_BASE_URL + "/latest/dex/search";
 const DEXSCREENER_FRONTIER_CURSOR_KEY = "lst-arb:dexscreener:frontier-cursor:v1";
+const DEXSCREENER_SEARCH_CURSOR_KEY = "lst-arb:dexscreener:search-cursor:v1";
 export type ArbitrageAsset = {
   symbol: string;
   address: string;
@@ -802,6 +804,9 @@ async function discoverDexScreenerMonadPools(
   let latestBoostRequests = 0;
   let queriedTokenCount = 0;
   let frontierStartIndex = 0;
+  let searchCursor = 0;
+  let searchQueries: string[] = [];
+  let searchRequests = 0;
 
   const blockedEntry = await readCache<number>(cache, DEXSCREENER_BLOCK_KEY);
   const persistedBlockedUntil = Number(blockedEntry?.data ?? 0);
@@ -822,10 +827,199 @@ async function discoverDexScreenerMonadPools(
     };
   }
 
-  // Seed the frontier with multiple public DEX Screener indexes. Profiles catch
-  // newly surfaced Monad tokens; boosts add another independent high-activity
-  // frontier. Both are discovery inputs only and never bypass exact execution gates.
+  // Seed the frontier with network-focused DEX Screener search results.
+  // The public "latest profiles" feed is global and can contain zero Monad tokens,
+  // so it is not sufficient for network coverage. Rotating lexical queries lets
+  // us continuously discover new Monad pools/tokens while the token-address
+  // frontier below follows up with richer pair data.
   const discoveryBudget = Math.max(0, Math.floor(maxRequests));
+
+  const SEARCH_QUERIES = [
+    "MONAD",
+    "WMON",
+    "USDC",
+    "USDT",
+    "WETH",
+    "WBTC",
+    "cbBTC",
+    "AUSD",
+    "shMON",
+    "sMON",
+    "gMON",
+    "aprMON",
+    "Cake",
+    "nad",
+    "nad.fun",
+    "Kuru",
+    "PancakeSwap",
+    "Uniswap",
+    "meme",
+    "MON"
+  ];
+
+  const addDiscoveredToken = (rawToken: unknown, rawSymbol?: unknown, rawDecimals?: unknown) => {
+    const tokenAddress = normalizeAssetAddress(
+      typeof rawToken === "string"
+        ? rawToken
+        : String((rawToken as any)?.tokenAddress ?? (rawToken as any)?.address ?? "")
+    );
+    if (!tokenAddress) return;
+
+    const symbol = String(
+      rawSymbol ??
+      (typeof rawToken === "object" && rawToken
+        ? (rawToken as any).symbol ?? (rawToken as any).tokenSymbol
+        : "") ??
+      ("TKN_" + tokenAddress.slice(2, 8).toUpperCase())
+    ).trim() || ("TKN_" + tokenAddress.slice(2, 8).toUpperCase());
+
+    const decimals = Number(
+      rawDecimals ??
+      (typeof rawToken === "object" && rawToken ? (rawToken as any).decimals : 18)
+    );
+
+    if (!assets.has(tokenAddress)) {
+      assets.set(tokenAddress, {
+        symbol,
+        address: tokenAddress,
+        decimals: Number.isFinite(decimals) && decimals >= 0 && decimals <= 36 ? decimals : 18
+      });
+    } else {
+      const existing = assets.get(tokenAddress)!;
+      if ((!existing.symbol || existing.symbol.startsWith("TKN_")) && symbol) {
+        assets.set(tokenAddress, { ...existing, symbol });
+      }
+    }
+  };
+
+  // Rotate through search terms between scans. Two search queries per scan is
+  // enough to add real network breadth without sacrificing the Cloudflare
+  // subrequest headroom needed by the pair frontier.
+  if (discoveryBudget >= 1) {
+    const cursorEntry = await readEdgeCache<number>(DEXSCREENER_SEARCH_CURSOR_KEY);
+    const storedSearchCursor = Number(cursorEntry?.data ?? 0);
+    searchCursor =
+      Number.isFinite(storedSearchCursor) && storedSearchCursor >= 0
+        ? Math.floor(storedSearchCursor) % SEARCH_QUERIES.length
+        : 0;
+
+    const searchCount = Math.min(2, discoveryBudget);
+    for (let step = 0; step < searchCount; step++) {
+      const index = (searchCursor + step) % SEARCH_QUERIES.length;
+      const queryTerm = SEARCH_QUERIES[index];
+      const cacheKey = "lst-arb:dexscreener:search:monad:" + queryTerm.toLowerCase() + ":v1";
+
+      try {
+        const result = await fetchProviderJson<any>(
+          cacheKey,
+          DEXSCREENER_SEARCH_URL + "?q=" + encodeURIComponent(queryTerm),
+          { accept: "application/json", "user-agent": "geld-arbitrage/2.1" },
+          DEXSCREENER_CACHE_TTL_MS
+        );
+
+        if (!result.fromCache) {
+          requestsThisScan++;
+          searchRequests++;
+        }
+
+        searchQueries.push(queryTerm);
+
+        const pairs = Array.isArray(result.data?.pairs) ? result.data.pairs : [];
+        for (const pair of pairs) {
+          if (String(pair?.chainId ?? "").toLowerCase() !== "monad") continue;
+
+          addDiscoveredToken(
+            pair?.baseToken?.address,
+            pair?.baseToken?.symbol,
+            pair?.baseToken?.decimals
+          );
+          addDiscoveredToken(
+            pair?.quoteToken?.address,
+            pair?.quoteToken?.symbol,
+            pair?.quoteToken?.decimals
+          );
+
+          const base = normalizeAssetAddress(pair?.baseToken?.address);
+          const quote = normalizeAssetAddress(pair?.quoteToken?.address);
+          const pairAddress = addr(pair?.pairAddress);
+          if (!base || !quote || !pairAddress || base === quote) continue;
+
+          const baseAsset = assets.get(base) ?? dynamicAsset(base, assets);
+          const quoteAsset = assets.get(quote) ?? dynamicAsset(quote, assets);
+          const dex = String(pair?.dexId ?? "").toLowerCase();
+          const labels = Array.isArray(pair?.labels)
+            ? pair.labels.map((x: unknown) => String(x).toLowerCase())
+            : [];
+
+          let quoteKind: QuoteKind = "unsupported";
+          if (dex === "uniswap" && labels.includes("v3")) quoteKind = "uniswap-v3";
+          else if (dex === "uniswap" && labels.includes("v2")) quoteKind = "uniswap-v2";
+          else if (dex === "uniswap" && labels.includes("v4")) quoteKind = "uniswap-v4";
+          else if (dex === "pancakeswap" && labels.includes("v3")) quoteKind = "pancake-v3";
+          else if (dex === "pancakeswap" && labels.includes("v2")) quoteKind = "pancake-v2";
+
+          const priceNative = num(pair?.priceNative);
+          const baseUsd = num(pair?.priceUsd);
+
+          pools.push({
+            id: pairAddress,
+            attributes: {
+              address: pairAddress,
+              name:
+                String(pair?.baseToken?.symbol ?? baseAsset.symbol) + "/" +
+                String(pair?.quoteToken?.symbol ?? quoteAsset.symbol) + " " +
+                dex + (labels.length ? " " + labels.join("/") : ""),
+              base_token_price_quote_token: String(priceNative > 0 ? priceNative : 1),
+              pool_fee_percentage: 0,
+              reserve_in_usd: num(pair?.liquidity?.usd),
+              volume_usd: { h24: num(pair?.volume?.h24) },
+              price_usd: baseUsd
+            },
+            relationships: {
+              base_token: { data: { id: base } },
+              quote_token: { data: { id: quote } },
+              dex: { data: { id: dex } }
+            },
+            __baseTokenMeta: {
+              attributes: {
+                address: base,
+                symbol: String(pair?.baseToken?.symbol ?? baseAsset.symbol),
+                decimals: Number(pair?.baseToken?.decimals ?? baseAsset.decimals)
+              }
+            },
+            __quoteTokenMeta: {
+              attributes: {
+                address: quote,
+                symbol: String(pair?.quoteToken?.symbol ?? quoteAsset.symbol),
+                decimals: Number(pair?.quoteToken?.decimals ?? quoteAsset.decimals)
+              }
+            },
+            __dexMeta: { id: dex },
+            __quoteKind: quoteKind,
+            __priceUsd: baseUsd
+          });
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push("DexScreener search " + queryTerm + ": " + message);
+        const status = Number(message.match(/HTTP (\\d+)/)?.[1] ?? 0);
+        if (status === 402 || status === 429) {
+          await writeCache(cache, DEXSCREENER_BLOCK_KEY, now + PROVIDER_COOLDOWN_MS, now);
+          break;
+        }
+      }
+    }
+
+    await writeEdgeCache(
+      DEXSCREENER_SEARCH_CURSOR_KEY,
+      searchCursor + searchQueries.length,
+      now
+    );
+  }
+
+  // Rotate through the complete known/discovered token universe instead of
+  // repeatedly refreshing the first 180-240 addresses. The cursor lives in the
+  // edge cache so it survives Worker isolate churn without consuming DO storage.
 
   const addDiscoveredToken = (rawToken: unknown, rawSymbol?: unknown, rawDecimals?: unknown) => {
     const tokenAddress = normalizeAssetAddress(
@@ -1105,6 +1299,8 @@ async function discoverDexScreenerMonadPools(
       latestProfileRequests,
       latestBoostCount,
       latestBoostRequests,
+      searchQueries,
+      searchRequests,
       queriedTokenCount,
       frontierStartIndex,
       frontierUniverseSize: frontierAddresses.length,

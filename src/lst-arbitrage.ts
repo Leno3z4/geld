@@ -201,7 +201,7 @@ export type ArbitrageSignal = {
     venue: string;
     dex: string;
     quoteKind: QuoteKind;
-    feePct: number;
+    feePct: number | null;
     feeBps: number | null;
     feeSource?: string;
     curveI: number | null;

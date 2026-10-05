@@ -75,7 +75,7 @@ export const EXECUTION_BUFFER_PCT = 0.20;
 export const MIN_NET_PROFIT_MON = 0.005;
 export const GAS_BUFFER_MON = 0.001;
 export const TRADE_SIZES_MON = [1, 5, 10];
-export const MAX_EXACT_TRIANGLES = 4;
+export const MAX_EXACT_TRIANGLES = 2;
 const EXECUTION_BUFFER_BPS = Math.round(EXECUTION_BUFFER_PCT * 100);
 const DEXPAPRIKA_POOLS_URL = "https://api.dexpaprika.com/networks/monad/pools/search?order_by=volume_usd_24h&sort=desc&limit=250";
 const DEXSCREENER_TOKEN_URL = "https://api.dexscreener.com/tokens/v1/monad";
@@ -843,7 +843,8 @@ async function quoteExactEdge(
   client: ReturnType<typeof createClient>,
   edge: PoolEdge,
   amountIn: bigint,
-  kuruParamsCache: Map<string, any>
+  kuruParamsCache: Map<string, any>,
+  uniswapFeeCache: Map<string, number>
 ): Promise<{ amountOut: bigint; gasEstimate?: bigint } | null> {
   if (edge.quoteKind === "curve-lst") {
     const indexByAddress: Record<string, number> = {
@@ -862,8 +863,14 @@ async function quoteExactEdge(
   if (edge.quoteKind === "uniswap-v3") {
     let feeBps = Math.round(edge.feePct * 10_000);
     if (!(feeBps > 0)) {
-      const poolFee = await client.readContract({ address: edge.pool as Address, abi: UNISWAP_V3_POOL_ABI, functionName: "fee" });
-      feeBps = Number(poolFee);
+      const cachedFee = uniswapFeeCache.get(edge.pool.toLowerCase());
+      if (cachedFee !== undefined) {
+        feeBps = cachedFee;
+      } else {
+        const poolFee = await client.readContract({ address: edge.pool as Address, abi: UNISWAP_V3_POOL_ABI, functionName: "fee" });
+        feeBps = Number(poolFee);
+        uniswapFeeCache.set(edge.pool.toLowerCase(), feeBps);
+      }
     }
     if (!(feeBps > 0 && feeBps <= 1_000_000)) return null;
     const result = await client.readContract({
@@ -911,7 +918,8 @@ async function simulateTriangle(
   client: ReturnType<typeof createClient>,
   triangle: ReturnType<typeof findTriangles>[number],
   sizeMon: number,
-  kuruParamsCache: Map<string, any>
+  kuruParamsCache: Map<string, any>,
+  uniswapFeeCache: Map<string, number>
 ) {
   let amount = parseUnits(String(sizeMon), 18);
   const exactLegs = [];
@@ -920,7 +928,7 @@ async function simulateTriangle(
 
   try {
     for (const leg of triangle.legs) {
-      const quote = await quoteExactEdge(client, leg, amount, kuruParamsCache);
+      const quote = await quoteExactEdge(client, leg, amount, kuruParamsCache, uniswapFeeCache);
       if (!quote || quote.amountOut <= 0n) {
         return {
           sizeMon,
@@ -1047,12 +1055,22 @@ export async function scanLSTArbitrage(
     }))
     .sort((a, b) => (b.distinctDexes - a.distinctDexes) || (b.distinctPools - a.distinctPools) || (b.liquidityScore - a.liquidityScore) || (b.volumeScore - a.volumeScore));
 
-  const triangles = allRoutes.slice(0, MAX_EXACT_TRIANGLES);
+  // Do not spend exact-RPC calls on the two directions of the same pool set
+  // during one scan. Discovery still exposes both directions, but exact
+  // simulation prioritizes distinct liquidity configurations first.
+  const seenPoolSets = new Set<string>();
+  const triangles = allRoutes.filter(route => {
+    const key = route.legs.map(leg => leg.pool.toLowerCase()).sort().join("|");
+    if (seenPoolSets.has(key)) return false;
+    seenPoolSets.add(key);
+    return true;
+  }).slice(0, MAX_EXACT_TRIANGLES);
   const client = createClient(rpcUrl);
   const kuruParamsCache = new Map<string, any>();
+  const uniswapFeeCache = new Map<string, number>();
 
   const exactResults = await Promise.all(triangles.map(async route => {
-    const exactQuotes = await Promise.all(TRADE_SIZES_MON.map(size => simulateTriangle(client, route, size, kuruParamsCache)));
+    const exactQuotes = await Promise.all(TRADE_SIZES_MON.map(size => simulateTriangle(client, route, size, kuruParamsCache, uniswapFeeCache)));
     return { ...route, exactQuotes };
   }));
 

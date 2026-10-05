@@ -83,8 +83,8 @@ const GECKO_NETWORK = "monad";
 const GECKO_DEXES_URL =
   "https://api.geckoterminal.com/api/v2/networks/monad/dexes";
 const GECKO_DEX_CACHE_TTL_MS = 15 * 60_000;
-const GECKO_DEX_POOL_CACHE_TTL_MS = 5 * 60_000;
-const GECKO_DEXES_PER_SCAN = 1;
+const GECKO_DEX_POOL_CACHE_TTL_MS = 15 * 60_000;
+const GECKO_DEXES_PER_SCAN = 3;
 const GECKO_POOL_PAGES_PER_DEX_REFRESH = 1;
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
@@ -499,9 +499,9 @@ async function discoverGeckoMonadDexPools(
       );
 
     if (!isFresh) {
-      // No per-DEX attempt lock: six DEXes are deliberately refreshed
-      // every invocation. This guarantees the five-minute warm-up completes
-      // and keeps the worst-case external request budget at 46/50.
+      // Refresh a small sequential batch each invocation. Three DEXes per
+      // minute stays well below GeckoTerminal's public request rate while
+      // allowing the full inventory to warm in about nine minutes.
       try {
           const url =
             `https://api.geckoterminal.com/api/v2/networks/${GECKO_NETWORK}/dexes/${safeDexId}/pools?page=1&include=base_token,quote_token,dex`;
@@ -774,9 +774,9 @@ async function discoverGeckoMonadDexPools(
       : undefined,
     note:
       "The inventory is the complete Monad DEX set returned by GeckoTerminal. " +
-      "Six DEXes are refreshed sequentially per minute and their cached top pool " +
-      "snapshots are retained, giving a full 27-DEX rotation in about five minutes " +
-      "with one pool page per DEX. Exact on-chain quotes remain the profitability gate."
+"Three DEXes are refreshed sequentially per minute and their cached top pool " +
+      "snapshots are retained, giving the 27-DEX inventory a roughly nine-minute " +
+      "warm-up with one pool page per DEX. Exact on-chain quotes remain the profitability gate."
   };
 
   return { pools, provider };

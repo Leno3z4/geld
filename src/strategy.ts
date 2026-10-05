@@ -779,16 +779,16 @@ export function entryGateDiagnostics(
     (token.apiBuyMakers5m ?? 0) >= config.highCapMinBuyMakers5m &&
     metrics.trend4hPct >= config.highCapMinTrend4hPct;
 
-  if (!establishedQualityEntry && !dipReversalConfirmed && !momentumEntry && !dailyMeanEntry && !flowEntry) {
+  if (!establishedQualityEntry && dipInEntryBand && !dipReversalConfirmed) {
+    if (metrics.rebound1hPct < config.dipMinReboundPct) blockers.push(`rebound ${metrics.rebound1hPct.toFixed(1)}% < ${config.dipMinReboundPct}%`);
+    if ((token.buySellRatio5m ?? 0) < config.dipMinBuySellRatio5m) blockers.push(`5m buy/sell ${(token.buySellRatio5m ?? 0).toFixed(2)} < ${config.dipMinBuySellRatio5m}`);
+    if ((token.volume5mMon ?? 0) * (token.monUsdPrice ?? 0) < config.dipMinVolume5mUsd) blockers.push(`5m volume ${money((token.volume5mMon ?? 0) * (token.monUsdPrice ?? 0))} < ${money(config.dipMinVolume5mUsd)}`);
+    if (metrics.trend1hPct > config.dipMaxTrend1hPct) blockers.push(`dip trend ${metrics.trend1hPct.toFixed(1)}% > ${config.dipMaxTrend1hPct}%`);
+  } else if (!establishedQualityEntry && !dipReversalConfirmed && !momentumEntry && !dailyMeanEntry && !flowEntry) {
     if (metrics.dipPct < rules.dipMinPct) {
       blockers.push(`dip ${metrics.dipPct.toFixed(1)}% < ${rules.dipMinPct}% and momentum is not strong enough`);
     } else if (metrics.dipPct > rules.dipMaxPct) {
       blockers.push(`dip ${metrics.dipPct.toFixed(1)}% > ${rules.dipMaxPct}%`);
-    } else if (!dipReversalConfirmed) {
-      if (metrics.rebound1hPct < config.dipMinReboundPct) blockers.push(`rebound ${metrics.rebound1hPct.toFixed(1)}% < ${config.dipMinReboundPct}%`);
-      if ((token.buySellRatio5m ?? 0) < config.dipMinBuySellRatio5m) blockers.push(`5m buy/sell ${(token.buySellRatio5m ?? 0).toFixed(2)} < ${config.dipMinBuySellRatio5m}`);
-      if ((token.volume5mMon ?? 0) * (token.monUsdPrice ?? 0) < config.dipMinVolume5mUsd) blockers.push(`5m volume ${money((token.volume5mMon ?? 0) * (token.monUsdPrice ?? 0))} < ${money(config.dipMinVolume5mUsd)}`);
-      if (metrics.trend1hPct > config.dipMaxTrend1hPct) blockers.push(`dip trend ${metrics.trend1hPct.toFixed(1)}% > ${config.dipMaxTrend1hPct}%`);
     }
   }
 

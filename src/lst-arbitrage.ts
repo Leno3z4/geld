@@ -1397,15 +1397,16 @@ function buildArbitragePotentialTokens(
   ]);
 
   for (const pool of pools) {
+    const basePrice = Number(pool.priceUsd ?? 0);
     const derivedQuotePrice =
-      Number.isFinite(pool.priceUsd) &&
-      pool.priceUsd > 0 &&
+      Number.isFinite(basePrice) &&
+      basePrice > 0 &&
       pool.baseToQuote > 0
-        ? pool.priceUsd / pool.baseToQuote
+        ? basePrice / pool.baseToQuote
         : undefined;
 
     const tokenEntries = [
-      { address: pool.base, price: pool.priceUsd },
+      { address: pool.base, price: basePrice > 0 ? basePrice : undefined },
       { address: pool.quote, price: derivedQuotePrice }
     ];
 

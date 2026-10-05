@@ -1020,108 +1020,6 @@ async function discoverDexScreenerMonadPools(
   // Rotate through the complete known/discovered token universe instead of
   // repeatedly refreshing the first 180-240 addresses. The cursor lives in the
   // edge cache so it survives Worker isolate churn without consuming DO storage.
-
-  const addDiscoveredToken = (rawToken: unknown, rawSymbol?: unknown, rawDecimals?: unknown) => {
-    const tokenAddress = normalizeAssetAddress(
-      typeof rawToken === "string" ? rawToken : String((rawToken as any)?.tokenAddress ?? (rawToken as any)?.address ?? "")
-    );
-    if (!tokenAddress) return;
-
-    const symbol = String(
-      rawSymbol ??
-      (typeof rawToken === "object" && rawToken ? (rawToken as any).symbol ?? (rawToken as any).tokenSymbol : "") ??
-      ("TKN_" + tokenAddress.slice(2, 8).toUpperCase())
-    ).trim() || ("TKN_" + tokenAddress.slice(2, 8).toUpperCase());
-
-    const decimals = Number(
-      rawDecimals ??
-      (typeof rawToken === "object" && rawToken ? (rawToken as any).decimals : 18)
-    );
-
-    if (!assets.has(tokenAddress)) {
-      assets.set(tokenAddress, {
-        symbol,
-        address: tokenAddress,
-        decimals: Number.isFinite(decimals) && decimals >= 0 && decimals <= 36 ? decimals : 18
-      });
-    } else {
-      const existing = assets.get(tokenAddress)!;
-      if ((!existing.symbol || existing.symbol.startsWith("TKN_")) && symbol) {
-        assets.set(tokenAddress, { ...existing, symbol });
-      }
-    }
-  };
-
-  if (discoveryBudget >= 2) {
-    try {
-      const profileKey = "lst-arb:dexscreener:latest-profiles:monad:v2";
-      const result = await fetchProviderJson<any[]>(
-        profileKey,
-        DEXSCREENER_BASE_URL + "/token-profiles/latest/v1",
-        { accept: "application/json", "user-agent": "geld-arbitrage/2.1" },
-        DEXSCREENER_CACHE_TTL_MS
-      );
-
-      if (!result.fromCache) {
-        requestsThisScan++;
-        latestProfileRequests = 1;
-      }
-
-      const profiles = Array.isArray(result.data) ? result.data : [];
-      for (const profile of profiles) {
-        if (String(profile?.chainId ?? "").toLowerCase() !== "monad") continue;
-        const tokenAddress = normalizeAssetAddress(profile?.tokenAddress ?? profile?.address);
-        if (!tokenAddress) continue;
-        latestProfileCount++;
-        addDiscoveredToken(profile, profile?.symbol ?? profile?.tokenSymbol, profile?.decimals);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      errors.push("DexScreener latest profiles: " + message);
-      const status = Number(message.match(/HTTP (\\d+)/)?.[1] ?? 0);
-      if (status === 402 || status === 429) {
-        await writeCache(cache, DEXSCREENER_BLOCK_KEY, now + PROVIDER_COOLDOWN_MS, now);
-      }
-    }
-  }
-
-  if (discoveryBudget >= 3 && requestsThisScan < discoveryBudget) {
-    try {
-      const boostKey = "lst-arb:dexscreener:latest-boosts:monad:v1";
-      const result = await fetchProviderJson<any[]>(
-        boostKey,
-        DEXSCREENER_BOOSTS_URL,
-        { accept: "application/json", "user-agent": "geld-arbitrage/2.1" },
-        DEXSCREENER_CACHE_TTL_MS
-      );
-
-      if (!result.fromCache) {
-        requestsThisScan++;
-        latestBoostRequests = 1;
-      }
-
-      const boosts = Array.isArray(result.data) ? result.data : [];
-      for (const boost of boosts) {
-        const chainId = String(boost?.chainId ?? "").toLowerCase();
-        if (chainId && chainId !== "monad") continue;
-        const tokenAddress = normalizeAssetAddress(boost?.tokenAddress ?? boost?.address);
-        if (!tokenAddress) continue;
-        latestBoostCount++;
-        addDiscoveredToken(boost, boost?.symbol ?? boost?.tokenSymbol, boost?.decimals);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      errors.push("DexScreener latest boosts: " + message);
-      const status = Number(message.match(/HTTP (\\d+)/)?.[1] ?? 0);
-      if (status === 402 || status === 429) {
-        await writeCache(cache, DEXSCREENER_BLOCK_KEY, now + PROVIDER_COOLDOWN_MS, now);
-      }
-    }
-  }
-
-  // Rotate through the complete known/discovered token universe instead of
-  // repeatedly refreshing the first 180-240 addresses. The cursor lives in the
-  // edge cache so it survives Worker isolate churn without consuming DO storage.
   const frontierAddresses = [...new Set(
     [...assets.keys()].map(address => address.toLowerCase())
   )].sort();
@@ -1295,10 +1193,10 @@ async function discoverDexScreenerMonadPools(
       source: "dexscreener-frontier",
       network: "monad",
       requestsThisScan,
-      latestProfileCount,
-      latestProfileRequests,
-      latestBoostCount,
-      latestBoostRequests,
+      latestProfileCount: 0,
+      latestProfileRequests: 0,
+      latestBoostCount: 0,
+      latestBoostRequests: 0,
       searchQueries,
       searchRequests,
       queriedTokenCount,

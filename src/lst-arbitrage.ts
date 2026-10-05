@@ -1584,10 +1584,12 @@ export async function preflightAllLSTArbitrage(
   cache: LSTArbitrageCache | undefined,
   apiKey: string | undefined,
   sender: string,
-  sizeMon = 1
+  sizeMon = 1,
+  routeLimit = 2
 ) {
+  const safeRouteLimit = Math.max(1, Math.min(2, Math.floor(routeLimit)));
   const scan = await scanLSTArbitrage(rpcUrl, cache, apiKey, {
-    probeLimit: 4,
+    probeLimit: safeRouteLimit,
     includeKyberScout: false
   });
 
@@ -2343,7 +2345,8 @@ async function simulateCycle(
           quote.amountOut,
           ARBITRAGE_ASSETS.find(a => a.address.toLowerCase() === leg.to)?.decimals ?? 18
         ),
-        gasEstimate: quote.gasEstimate?.toString() ?? null
+        gasEstimate: quote.gasEstimate?.toString() ?? null,
+        kuruMarket: leg.kuruMarket ?? null
       });
 
       amount = quote.amountOut;

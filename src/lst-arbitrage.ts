@@ -423,7 +423,7 @@ async function discoverDexPaprikaMonadPools(
 
       const p0 = prices.get(token0);
       const p1 = prices.get(token1);
-      if (!(p0 > 0 && p1 > 0)) continue;
+      if (p0 === undefined || p1 === undefined || p0 <= 0 || p1 <= 0) continue;
 
       const baseToQuote = p0 / p1;
       if (!(baseToQuote > 0)) continue;

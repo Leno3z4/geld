@@ -1114,7 +1114,8 @@ export default {
           undefined,
           env.DEXPAPRIKA_API_KEY,
           sender,
-          sizeMon
+          sizeMon,
+          routeLimit
         );
         return Response.json(result, { headers: { "Cache-Control": "no-store" } });
       } catch (error) {

@@ -75,7 +75,7 @@ export const EXECUTION_BUFFER_PCT = 0.20;
 export const MIN_NET_PROFIT_MON = 0.005;
 export const GAS_BUFFER_MON = 0.001;
 export const TRADE_SIZES_MON = [1, 5, 10];
-export const MAX_EXACT_ROUTES = 8;
+export const MAX_EXACT_ROUTES = 3;
 export const MAX_REFINED_ROUTES = 1;
 export const PROBE_SIZE_MON = 1;
 const EXECUTION_BUFFER_BPS = Math.round(EXECUTION_BUFFER_PCT * 100);
@@ -1478,8 +1478,12 @@ export async function scanLSTArbitrage(
     hooks: string;
   } | null>();
 
-  const probes = await Promise.all(
-    probeRoutes.map(async route => ({
+  // Probe sequentially. Besides staying inside the Worker connection limit,
+  // this prevents concurrent routes from racing the shared fee/log caches and
+  // issuing duplicate RPC subrequests.
+  const probes = [];
+  for (const route of probeRoutes) {
+    probes.push({
       ...route,
       exactQuotes: [
         await simulateCycle(
@@ -1492,8 +1496,8 @@ export async function scanLSTArbitrage(
         )
       ],
       refined: false
-    }))
-  );
+    });
+  }
 
   const refinementRank = probes
     .map((route, index) => ({
@@ -1534,30 +1538,34 @@ export async function scanLSTArbitrage(
       .map(item => item.index)
   );
 
-  const exactResults = await Promise.all(
-    probes.map(async (route, index) => {
-      if (!refineIndexes.has(index)) return route;
+  const exactResults = [];
+  for (let index = 0; index < probes.length; index++) {
+    const route = probes[index];
+    if (!refineIndexes.has(index)) {
+      exactResults.push(route);
+      continue;
+    }
 
-      const exactQuotes = await Promise.all(
-        TRADE_SIZES_MON.map(size =>
-          simulateCycle(
-            client,
-            route,
-            size,
-            kuruParamsCache,
-            uniswapFeeCache,
-            v4KeyCache
-          )
+    const exactQuotes = [];
+    for (const size of TRADE_SIZES_MON) {
+      exactQuotes.push(
+        await simulateCycle(
+          client,
+          route,
+          size,
+          kuruParamsCache,
+          uniswapFeeCache,
+          v4KeyCache
         )
       );
+    }
 
-      return {
-        ...route,
-        exactQuotes,
-        refined: true
-      };
-    })
-  );
+    exactResults.push({
+      ...route,
+      exactQuotes,
+      refined: true
+    });
+  }
 
   const signals: ArbitrageSignal[] = [];
 

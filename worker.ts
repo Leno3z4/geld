@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { GeldHighCapLearning } from "./src/highcap-learning.js";
 import { GeldLeverUpPaper } from "./src/leverup-paper.js";
+import { scanLSTArbitrage } from "./src/lst-arbitrage.js";
 
 interface Env {
   GELD_BOT: DurableObjectNamespace<GeldBot>;
@@ -180,7 +181,8 @@ const PUBLIC_API_GET_PATHS = new Set([
   "/api/trades",
   "/api/events",
   "/api/leverup/paper",
-  "/api/leverup/preflight"
+  "/api/leverup/preflight",
+  "/api/lst/arbitrage"
 ]);
 
 function isAuthorized(request: Request, env: Env) {
@@ -819,6 +821,19 @@ export class GeldBot extends DurableObject<Env> {
         newEventPollMs: runtimeConfig.newEventPollMs,
         newEventCandidateLimit: runtimeConfig.newEventCandidateLimit
       });
+    }
+
+    if (path === "/api/lst/arbitrage") {
+      try {
+        const result = await scanLSTArbitrage();
+        return Response.json(result, { headers: { "Cache-Control": "no-store" } });
+      } catch (error) {
+        return Response.json({
+          mode: "PAPER_SIGNAL_ONLY",
+          error: error instanceof Error ? error.message : String(error),
+          generatedAt: new Date().toISOString()
+        }, { status: 502, headers: { "Cache-Control": "no-store" } });
+      }
     }
 
     if (path === "/api/leverup/paper") {

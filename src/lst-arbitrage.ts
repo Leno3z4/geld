@@ -1857,7 +1857,8 @@ export async function preflightAllLSTArbitrage(
   const safeRouteLimit = Math.max(1, Math.min(2, Math.floor(routeLimit)));
   const scan = await scanLSTArbitrage(rpcUrl, cache, apiKey, {
     probeLimit: safeRouteLimit,
-    includeKyberScout: false
+    includeKyberScout: false,
+    exactOnly: true
   });
 
   const results: any[] = [];
@@ -2725,6 +2726,7 @@ export type LSTArbitrageScanOptions = {
   probeLimit?: number;
   includeKyberScout?: boolean;
   discoveryOnly?: boolean;
+  exactOnly?: boolean;
 };
 
 export async function scanLSTArbitrage(
@@ -2864,6 +2866,8 @@ export async function scanLSTArbitrage(
 
   const seenRouteKeys = new Set<string>();
   const remainingRoutes = allRoutes.filter(route => {
+    if (options.exactOnly && !route.exactQuoteSupported) return false;
+
     const key = route.legs
       .map((leg: PoolEdge) => leg.pool.toLowerCase())
       .join("|");

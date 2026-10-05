@@ -267,7 +267,7 @@ function parseDexPaprikaPool(record: any, assets: Map<string, ArbitrageAsset>): 
   if (poolAddress === CURVE_LST_POOL.toLowerCase()) quoteKind = "curve-lst";
   else if (dexId === "uniswap_v3") quoteKind = "uniswap-v3";
   else if (dexId === "uniswap_v2") quoteKind = "uniswap-v2";
-  else if (dexId === "pancakeswap_v3" || dexId === "pancake_v3") quoteKind = "pancake-v3";
+  else if (dexId === "pancakeswap_v3" || dexId === "pancake_v3") quoteKind = "unsupported";
   else if (dexId === "pancakeswap_v2" || dexId === "pancake_v2") quoteKind = "pancake-v2";
   else if (dexId === "kuru" || dexName.toLowerCase().includes("kuru")) quoteKind = "kuru";
 
@@ -859,7 +859,7 @@ async function quoteExactEdge(
     return { amountOut };
   }
 
-  if (edge.quoteKind === "uniswap-v3" || edge.quoteKind === "pancake-v3") {
+  if (edge.quoteKind === "uniswap-v3") {
     let feeBps = Math.round(edge.feePct * 10_000);
     if (!(feeBps > 0)) {
       const poolFee = await client.readContract({ address: edge.pool as Address, abi: UNISWAP_V3_POOL_ABI, functionName: "fee" });

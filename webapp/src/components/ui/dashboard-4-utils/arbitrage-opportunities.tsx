@@ -5,7 +5,7 @@ import { useBot } from "./context";
 
 function pct(value: unknown) {
   const n = Number(value);
-  return Number.isFinite(n) ? \`\${n >= 0 ? "+" : ""}\${n.toFixed(2)}%\` : "—";
+  return Number.isFinite(n) ? `\${n >= 0 ? "+" : ""}\${n.toFixed(2)}%` : "—";
 }
 
 function usd(value: unknown) {

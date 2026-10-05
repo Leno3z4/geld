@@ -464,6 +464,11 @@ export class GeldBot extends DurableObject<Env> {
   private lastLSTArbitrageAt = 0;
   private lstArbitrageInFlight = false;
   private lastLSTArbitrageResult: any = null;
+  // LST quote/cache data is deliberately kept in-memory. Persisting every
+  // provider-cache read/write in Durable Object storage can exhaust the Free
+  // tier row-read budget during frequent arbitrage scans.
+  private lstArbitrageCache = new Map<string, string>();
+  private lstArbitrageCacheMaxEntries = 128;
 
   private async getEngine() {
     if (this.engine) return this.engine;
@@ -600,8 +605,18 @@ export class GeldBot extends DurableObject<Env> {
 
     try {
       const scan = await scanLSTArbitrage(runtime.rpcUrl, {
-        get: (key) => this.ctx.storage.get<string>(key),
-        put: (key, value) => this.ctx.storage.put(key, value)
+        get: async (key) => this.lstArbitrageCache.get(key),
+        put: async (key, value) => {
+          // Keep the hot cache in the Durable Object isolate instead of
+          // Durable Object storage. This avoids consuming the Free-tier
+          // storage row-read budget on every scan.
+          if (!this.lstArbitrageCache.has(key) && this.lstArbitrageCache.size >= this.lstArbitrageCacheMaxEntries) {
+            const oldest = this.lstArbitrageCache.keys().next().value;
+            if (oldest) this.lstArbitrageCache.delete(oldest);
+          }
+          this.lstArbitrageCache.delete(key);
+          this.lstArbitrageCache.set(key, value);
+        }
       });
       const result = {
         ...scan,
@@ -619,11 +634,9 @@ export class GeldBot extends DurableObject<Env> {
         scheduledAt: now
       };
 
-      // The arbitrage scanner is intentionally isolated from the normal
-      // memecoin position engine. Store the latest exact-quote snapshot so
-      // the dashboard/API can inspect opportunities without triggering
-      // another burst of GeckoTerminal/RPC requests.
-      await this.ctx.storage.put("lst-arbitrage:last", JSON.stringify(result));
+      // Keep the latest result in the DO isolate only. The API already
+      // returns this in-memory result and the scanner cache above prevents
+      // another provider burst while this isolate remains warm.
       this.lastLSTArbitrageResult = result;
       return result;
     } catch (error) {
@@ -643,7 +656,6 @@ export class GeldBot extends DurableObject<Env> {
         },
         error: error instanceof Error ? error.message : String(error)
       };
-      await this.ctx.storage.put("lst-arbitrage:last", JSON.stringify(failure));
       this.lastLSTArbitrageResult = failure;
       return failure;
     } finally {

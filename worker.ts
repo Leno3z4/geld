@@ -825,7 +825,7 @@ export class GeldBot extends DurableObject<Env> {
 
     if (path === "/api/lst/arbitrage") {
       try {
-        const result = await scanLSTArbitrage();
+        const result = await scanLSTArbitrage(env.MONAD_RPC_URL ?? "https://rpc.monad.xyz");
         return Response.json(result, { headers: { "Cache-Control": "no-store" } });
       } catch (error) {
         return Response.json({

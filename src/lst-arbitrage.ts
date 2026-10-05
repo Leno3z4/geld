@@ -156,7 +156,20 @@ export const ARBITRAGE_ASSETS: ArbitrageAsset[] = [
   { symbol: "sMON", address: "0xa3227c5969757783154c60bf0bc1944180ed81b9", decimals: 18 },
   { symbol: "gMON", address: "0x8498312a6b3cbd158bf0c93abdcf29e6e4f55081", decimals: 18 },
   { symbol: "aprMON", address: "0x0c65a0bc65a5d819235b71f554d210d3f80e0852", decimals: 18 },
-  { symbol: "USDC", address: "0x754704bc059f8c67012fed69bc8a327a5aafb603", decimals: 6 }
+  { symbol: "USDC", address: "0x754704bc059f8c67012fed69bc8a327a5aafb603", decimals: 6 },
+  // High-liquidity / frequently traded Monad assets used as an expanded
+  // arbitrage universe. Exact execution still requires a supported quote adapter.
+  { symbol: "FLING", address: "0xa9da3c77ec7cdc4dfaa1fe142af583543d1c540f", decimals: 18 },
+  { symbol: "ANAGO", address: "0x99ae2dc76c43979e3bcc0ae8d69f1fca077c8888", decimals: 18 },
+  { symbol: "UNIT", address: "0x788571e0e5067adea87e6ba22a2b738ffd f48888".replace(/ /g, ""), decimals: 18 },
+  { symbol: "DUST", address: "0xad96c3dffcd6374294e2573a7fbba96097cc8d7c", decimals: 18 },
+  { symbol: "ALLOCA", address: "0x1ad7052bb331a0529c1981c3ec2bc4663498a110", decimals: 18 },
+  { symbol: "WBTC", address: "0x0555e30da8f98308edb960aa94c0db47230d2b9c", decimals: 8 },
+  { symbol: "cbBTC", address: "0xd18b7ec58cdf4876f6afeb3d ed1730e4ce10414b".replace(/ /g, ""), decimals: 8 },
+  { symbol: "WETH", address: "0xee8c0e9f1bffb4eb878d8f15f368a02a35481242", decimals: 18 },
+  { symbol: "USDT0", address: "0xe7cd86e13ac4309349f30b3435a9d337750fc82d", decimals: 6 },
+  { symbol: "AUSD", address: "0x00000000efe302beaa2b3e6e1b18d08d69a9012a", decimals: 6 },
+  { symbol: "Cake", address: "0x01bff41798a0bcf287b996046ca68b395dbc1071", decimals: 18 }
 ];
 
 type QuoteKind = "uniswap-v4" | "uniswap-v3" | "uniswap-v2" | "pancake-v3" | "pancake-v2" | "curve-lst" | "kuru" | "unsupported";

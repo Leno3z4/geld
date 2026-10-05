@@ -190,7 +190,8 @@ const PUBLIC_API_GET_PATHS = new Set([
   "/api/leverup/paper",
   "/api/leverup/preflight",
   "/api/lst/arbitrage",
-  "/api/lst/arbitrage/preflight-all"
+  "/api/lst/arbitrage/preflight-all",
+  "/api/arbitrage/discovery"
 ]);
 
 function isAuthorized(request: Request, env: Env) {

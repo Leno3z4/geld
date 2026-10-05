@@ -338,7 +338,8 @@ function edgeCacheRequest(key: string) {
 
 async function readEdgeCache<T>(key: string): Promise<CacheEntry<T> | null> {
   try {
-    const response = await caches.default.match(edgeCacheRequest(key));
+    const edgeCache = await caches.open(EDGE_CACHE_PREFIX);
+    const response = await edgeCache.match(edgeCacheRequest(key));
     if (!response) return null;
     const raw = await response.text();
     const parsed = JSON.parse(raw);
@@ -362,7 +363,8 @@ async function writeEdgeCache<T>(key: string, data: T, fetchedAt = Date.now()) {
         }
       }
     );
-    await caches.default.put(edgeCacheRequest(key), response);
+    const edgeCache = await caches.open(EDGE_CACHE_PREFIX);
+    await edgeCache.put(edgeCacheRequest(key), response);
   } catch {
     // Edge cache is best-effort.
   }

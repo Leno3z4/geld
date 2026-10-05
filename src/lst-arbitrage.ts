@@ -1,5 +1,4 @@
 const MONAD_NETWORK = "monad";
-const SHMON = "0x1b6a..."; // replaced by discovery below
 const POOLS = {
   curveLst: "0x74d80ee400d3026fdd2520265cc98300710b25d4",
   uniswapV4MonShmon: "0x0a2eb246aac042fed4eeaf8bce78df3568cbe21701c969812702633085b8f771"
@@ -9,6 +8,9 @@ type PoolSnapshot = {
   address: string;
   name?: string;
   priceUsd: number;
+  priceInQuote: number;
+  baseSymbol: string;
+  quoteSymbol: string;
   volume24hUsd: number;
   liquidityUsd: number;
   feePct: number;
@@ -32,6 +34,9 @@ async function pool(address: string): Promise<PoolSnapshot> {
     address,
     name: String(a.name ?? address),
     priceUsd: num(a.base_token_price_usd),
+    priceInQuote: num(a.base_token_price_quote_token),
+    baseSymbol: String(a.name ?? "").split("/")[0]?.trim() ?? "",
+    quoteSymbol: String(a.name ?? "").split("/")[1]?.split(" ")[0]?.trim() ?? "",
     volume24hUsd: num(a.volume_usd?.h24),
     liquidityUsd: num(a.reserve_in_usd),
     feePct: fee > 0 ? fee : 0,
@@ -52,12 +57,13 @@ export async function scanLSTArbitrage() {
   // conversion is read from GeckoTerminal's current pool price.
   // Uniswap V4 is a direct MON/shMON venue. We use the quoted pool prices
   // only as a signal; execution is deliberately NOT wired here.
-  const curveShmonPerMon = curve.priceUsd > 0 ? 1 / curve.priceUsd : 0;
-  const uniShmonPerMon = uni.priceUsd > 0 ? 1 / uni.priceUsd : 0;
-
-  const ratio = curveShmonPerMon > 0 && uniShmonPerMon > 0
-    ? Math.max(curveShmonPerMon, uniShmonPerMon) /
-      Math.min(curveShmonPerMon, uniShmonPerMon) - 1
+  // Both venues are normalized to MON/shMON using the pool's native-currency
+  // quote when available. GeckoTerminal documents base_token_price_quote_token
+  // and base_token_price_native_currency as canonical pool ratios.
+  const curveMonPerShmon = curve.priceInQuote > 0 ? curve.priceInQuote : 0;
+  const uniMonPerShmon = uni.priceInQuote > 0 ? curveMonPerShmon : 0;
+  const ratio = curveMonPerShmon > 0 && uniMonPerShmon > 0
+    ? Math.max(curveMonPerShmon, uniMonPerShmon) / Math.min(curveMonPerShmon, uniMonPerShmon) - 1
     : 0;
 
   for (const sizeMon of tradeSizesMon) {

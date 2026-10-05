@@ -191,10 +191,10 @@ type KuruMarket = {
   baseAssetPrecision: number;
   quoteAssetPrecision: number;
   pricePrecision: number;
-  sizePrecision: bigint;
-  tickSize: bigint;
-  minSize: bigint;
-  maxSize: bigint;
+  sizePrecision: string;
+  tickSize: string;
+  minSize: string;
+  maxSize: string;
   takerFeeBps: number;
   makerFeeBps: number;
 };
@@ -892,15 +892,15 @@ async function discoverKuruMarkets(cache?: LSTArbitrageCache) {
         baseAssetPrecision: Number(market.baseAssetDecimals ?? baseAsset.decimals),
         quoteAssetPrecision: Number(market.quoteAssetDecimals ?? quoteAsset.decimals),
         pricePrecision: Number(market.pricePrecision ?? 0),
-        sizePrecision: BigInt(String(market.sizePrecision ?? "0")),
-        tickSize: BigInt(String(market.tickSize ?? "0")),
-        minSize: BigInt(String(market.minSize ?? "0")),
-        maxSize: BigInt(String(market.maxSize ?? "0")),
+        sizePrecision: String(market.sizePrecision ?? "0"),
+        tickSize: String(market.tickSize ?? "0"),
+        minSize: String(market.minSize ?? "0"),
+        maxSize: String(market.maxSize ?? "0"),
         takerFeeBps: Number(market.takerFeeBps ?? 0),
         makerFeeBps: Number(market.makerFeeBps ?? 0)
       };
 
-      if (!(kuruMarket.pricePrecision > 0 && kuruMarket.sizePrecision > 0)) continue;
+      if (!(kuruMarket.pricePrecision > 0 && BigInt(kuruMarket.sizePrecision) > 0n)) continue;
 
       pools.push({
         id: marketAddress,
@@ -1520,7 +1520,7 @@ async function quoteExactEdge(
       : cachedMarket.quoteAssetPrecision;
 
     const precision = fromIsBase
-      ? cachedMarket.sizePrecision
+      ? BigInt(String(cachedMarket.sizePrecision))
       : BigInt(cachedMarket.pricePrecision);
 
     if (!(precision > 0n) || inputDecimals < 0 || inputDecimals > 36) {

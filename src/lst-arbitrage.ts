@@ -2744,16 +2744,18 @@ export async function scanLSTArbitrage(
     (a, b) => b.netProfitMon - a.netProfitMon
   );
 
-  const kyberScout = includeKyberScout ? scoutKyberRoundTrips(
-    (() => {
-      const usdcQuote = exactResults
-        .flatMap((route: any) => route.exactQuotes ?? [])
-        .find((q: any) => q.ok === true && q.finalQuoteRaw && q.sizeMon > 0);
-      return usdcQuote && usdcQuote.finalQuoteRaw
-        ? Number(usdcQuote.finalQuoteRaw) / 1e6 / Number(usdcQuote.sizeMon)
-        : 0;
-    })()
-  ); : {
+  const kyberScout = includeKyberScout
+    ? await scoutKyberRoundTrips(
+        (() => {
+          const usdcQuote = exactResults
+            .flatMap((route: any) => route.exactQuotes ?? [])
+            .find((q: any) => q.ok === true && q.finalQuoteRaw && q.sizeMon > 0);
+          return usdcQuote && usdcQuote.finalQuoteRaw
+            ? Number(usdcQuote.finalQuoteRaw) / 1e6 / Number(usdcQuote.sizeMon)
+            : 0;
+        })()
+      )
+    : {
     enabled: false,
     probeSizeMon: KYBER_PROBE_SIZE_MON,
     requestsThisScan: 0,

@@ -630,8 +630,6 @@ async function discoverDexPaprikaMonadPools(
   const deduped = new Map<string, any>();
 
   for (const row of pageRows) {
-    if (num(row?.liquidity_usd) < MIN_LIQUIDITY_USD) continue;
-
     const tokens = Array.isArray(row?.tokens) ? row.tokens.slice(0, 2) : [];
     if (tokens.length < 2) continue;
 
@@ -749,9 +747,9 @@ async function discoverDexPaprikaMonadPools(
       fallbackErrors: undefined as string[] | undefined,
       errors: errors.length ? [...new Set(errors)] : undefined,
       note:
-        "All indexed Monad pool pages are scanned across all DEXes. Token metadata comes from " +
-        "the detailed pool records so new tokens enter the universe automatically. Discovery " +
-        "rates are ranking hints only; exact on-chain quotes decide profitability."
+        "All indexed Monad pool pages are scanned across all DEXes. Every token found in those " +
+        "pools enters the discovery universe, including thin pools. Exact route probes additionally " +
+        "require the configured minimum liquidity, and exact on-chain quotes decide profitability."
     }
   };
 }
@@ -2722,6 +2720,12 @@ export async function scanLSTArbitrage(
         new Set(
           route.legs.map((leg: PoolEdge) => leg.pool.toLowerCase())
         ).size >= 2
+    )
+    .filter(
+      route =>
+        route.legs.every(
+          (leg: PoolEdge) => leg.liquidityUsd >= MIN_LIQUIDITY_USD
+        )
     )
     .map(route => ({
       ...route,

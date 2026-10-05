@@ -331,7 +331,7 @@ test("blocks established dip entries until price rebounds with positive flow", (
     monUsdPrice: 0.033, dayLowPriceMon: 0.089, dayAvgPriceMon: 0.10,
     distanceFromDayLowPct: 1, distanceFromDayAvgPct: -10, daySamples: 60,
     priceHistory: [
-      { ts: now - 4 * 60 * 60 * 1000, priceMon: 0.11 },
+      { ts: now - (4 * 60 * 60 * 1000 - 60 * 1000), priceMon: 0.11 },
       { ts: now - 30 * 60 * 1000, priceMon: 0.0895 },
       { ts: now, priceMon: 0.09 }
     ]

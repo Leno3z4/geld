@@ -1106,7 +1106,7 @@ async function quoteExactEdge(
 
     if (poolKey === undefined) {
       try {
-        const logQuery: Parameters<typeof client.getLogs>[0] = {
+        const logQuery: any = {
           address: UNISWAP_V4_POOL_MANAGER,
           event: V4_INITIALIZE_EVENT_ABI[0],
           args: { id: edge.pool as `0x${string}` }

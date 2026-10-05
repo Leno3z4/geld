@@ -87,6 +87,8 @@ const GECKO_DEX_POOL_CACHE_TTL_MS = 5 * 60_000;
 const GECKO_DEXES_PER_SCAN = 6;
 const GECKO_POOL_PAGES_PER_DEX_REFRESH = 1;
 const GECKO_DEX_ATTEMPT_COOLDOWN_MS = 60_000;
+const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
+const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const FREE_EXTERNAL_SUBREQUEST_LIMIT = 50;
 const PLANNED_DISCOVERY_REQUESTS =
   1 + GECKO_DEXES_PER_SCAN * GECKO_POOL_PAGES_PER_DEX_REFRESH;
@@ -168,6 +170,24 @@ export const ARBITRAGE_ASSETS: ArbitrageAsset[] = [
 ];
 
 type QuoteKind = "uniswap-v4" | "uniswap-v3" | "uniswap-v2" | "pancake-v3" | "pancake-v2" | "curve-lst" | "kuru" | "unsupported";
+type KuruMarket = {
+  symbol: string;
+  status: string;
+  marketAddress: string;
+  baseAsset: string;
+  quoteAsset: string;
+  baseAssetAddress: string;
+  quoteAssetAddress: string;
+  baseAssetPrecision: number;
+  quoteAssetPrecision: number;
+  pricePrecision: number;
+  sizePrecision: bigint;
+  tickSize: bigint;
+  minSize: bigint;
+  maxSize: bigint;
+  takerFeeBps: number;
+  makerFeeBps: number;
+};
 
 export type PoolEdge = {
   pool: string;
@@ -1346,7 +1366,8 @@ function isExactQuoteSupported(kind: QuoteKind) {
     kind === "uniswap-v3" ||
     kind === "uniswap-v2" ||
     kind === "pancake-v3" ||
-    kind === "pancake-v2"
+    kind === "pancake-v2" ||
+    kind === "kuru"
   );
 }
 

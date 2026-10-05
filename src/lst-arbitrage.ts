@@ -45,7 +45,7 @@ const KNOWN_UNISWAP_POOLS: PoolRecord[] = [
     quoteKind: "uniswap-v3"
   }
 ];
-// LST arbitrage scanner: DexPaprika DEX-catalog discovery with exact on-chain quotes.
+// LST arbitrage scanner: DexPaprika network-wide discovery with exact on-chain quotes.
 import {
   createPublicClient,
   http,
@@ -272,10 +272,9 @@ function normalizeAssetAddress(value: unknown) {
 
 
 async function discoverDexPaprikaPools(cache?: LSTArbitrageCache) {
-  // Enumerate the DEX catalog first. The network-wide pool endpoint can
-  // return an incomplete slice behind some edge/CDN paths, while the DEX
-  // catalog exposes the indexed Monad venues deterministically.
-  const key = "lst-arb:dexpaprika:pools:v5";
+  // Use the network-wide index as the Worker-safe discovery path. It is
+  // paginated and does not require one subrequest per DEX.
+  const key = "lst-arb:dexpaprika:pools:v6";
   const now = Date.now();
   const cached = await readCache<any[]>(cache, key);
 
@@ -283,11 +282,11 @@ async function discoverDexPaprikaPools(cache?: LSTArbitrageCache) {
     return {
       pools: cached.data,
       provider: {
-        name: "DexPaprika DEX-catalog discovery",
+        name: "DexPaprika network-wide paginated discovery",
         requestsThisScan: 0,
         cached: true,
         fetchedAt: cached.fetchedAt,
-        queryMode: "per_dex_catalog",
+        queryMode: "network_wide_paginated",
         poolCount: cached.data.length
       }
     };
@@ -298,7 +297,12 @@ async function discoverDexPaprikaPools(cache?: LSTArbitrageCache) {
   let requestsThisScan = 0;
   let truncated = false;
 
-  async function fetchJsonUrl(url: URL) {
+  async function fetchPoolPage(params: Record<string, string>) {
+    const url = new URL(DEXPAPRIKA_POOLS_URL);
+    for (const [name, value] of Object.entries(params)) {
+      if (value) url.searchParams.set(name, value);
+    }
+
     const response = await fetch(url.toString(), {
       headers: {
         accept: "application/json",
@@ -315,59 +319,29 @@ async function discoverDexPaprikaPools(cache?: LSTArbitrageCache) {
   }
 
   try {
-    const dexUrl = new URL("https://api.dexpaprika.com/networks/monad/dexes");
-    const dexJson = await fetchJsonUrl(dexUrl);
-    const dexes = Array.isArray(dexJson?.dexes)
-      ? dexJson.dexes
-      : Array.isArray(dexJson?.results)
-        ? dexJson.results
-        : [];
+    let cursor = "";
+    for (let page = 1; page <= 4; page++) {
+      const json = await fetchPoolPage({
+        order_by: "volume_usd_24h",
+        sort: "desc",
+        limit: "100",
+        ...(cursor ? { cursor } : {})
+      });
 
-    if (dexes.length === 0) {
-      throw new Error("DexPaprika returned no Monad DEX entries");
-    }
-
-    // Current Monad coverage fits one 100-row page per DEX. If a venue
-    // grows beyond 100 pools, fetch one additional cursor page and mark
-    // the scan truncated rather than using unbounded Worker subrequests.
-    for (const dex of dexes) {
-      const dexId = String(dex?.dex_id ?? dex?.id ?? "").trim();
-      if (!dexId) continue;
-
-      try {
-        let cursor = "";
-        for (let page = 1; page <= 2; page++) {
-          const url = new URL(DEXPAPRIKA_POOLS_URL);
-          url.searchParams.set("dex_name", dexId);
-          url.searchParams.set("order_by", "volume_usd_24h");
-          url.searchParams.set("sort", "desc");
-          url.searchParams.set("limit", "100");
-          if (cursor) url.searchParams.set("cursor", cursor);
-
-          const json = await fetchJsonUrl(url);
-          const rows = Array.isArray(json?.results) ? json.results : [];
-
-          for (const pool of rows) {
-            const id = String(pool?.id ?? "");
-            if (id) deduped.set(id.toLowerCase(), pool);
-          }
-
-          if (!json?.has_next_page) break;
-
-          const nextCursor = String(json?.next_cursor ?? "");
-          if (!nextCursor || nextCursor === cursor) {
-            truncated = true;
-            break;
-          }
-
-          cursor = nextCursor;
-          if (page === 2) truncated = true;
-        }
-      } catch (error) {
-        errors.push(
-          dexId + ": " + (error instanceof Error ? error.message : String(error))
-        );
+      const rows = Array.isArray(json?.results) ? json.results : [];
+      for (const pool of rows) {
+        const id = String(pool?.id ?? "");
+        if (id) deduped.set(id.toLowerCase(), pool);
       }
+
+      if (!json?.has_next_page) break;
+      const nextCursor = String(json?.next_cursor ?? "");
+      if (!nextCursor || nextCursor === cursor) {
+        truncated = true;
+        break;
+      }
+      cursor = nextCursor;
+      if (page === 4) truncated = true;
     }
   } catch (error) {
     errors.push(error instanceof Error ? error.message : String(error));
@@ -379,22 +353,20 @@ async function discoverDexPaprikaPools(cache?: LSTArbitrageCache) {
   }
 
   const provider: Record<string, unknown> = {
-    name: "DexPaprika DEX-catalog discovery",
+    name: "DexPaprika network-wide paginated discovery",
     requestsThisScan,
     cached: false,
     fetchedAt: now,
-    queryMode: "per_dex_catalog",
+    queryMode: "network_wide_paginated",
     poolCount: pools.length,
-    dexCount: new Set(
-      pools.map(pool => String(pool?.dex_id ?? "").toLowerCase()).filter(Boolean)
-    ).size,
     truncated,
     pageSize: 100,
     externalMarketDataRequired: false
   };
 
-  if (errors.length > 0) {
-    provider.errors = errors;
+  if (errors.length > 0) provider.errors = errors;
+  if (pools.length === 0) {
+    provider.note = "DexPaprika returned no pools; scanner will retain only configured known pools.";
   }
 
   return { pools, provider };
@@ -404,14 +376,20 @@ function parseDexPaprikaPool(record: any, assets: Map<string, ArbitrageAsset>): 
   const firstRaw = tokens[0];
   const secondRaw = tokens[1];
 
+  // Keep native MON as address(0). It is not interchangeable with WMON.
+  // Native V4 pools need an explicit wrap/unwrap leg before they can be
+  // connected to the WMON arbitrage graph, so they are excluded here.
   const base =
-    normalizeAssetAddress(tokenIdentifier(firstRaw)) ||
-    normalizeAssetAddress(record?.base_token_id);
+    addr(tokenIdentifier(firstRaw)) ||
+    addr(record?.base_token_id);
   const quote =
-    normalizeAssetAddress(tokenIdentifier(secondRaw)) ||
-    normalizeAssetAddress(record?.quote_token_id);
+    addr(tokenIdentifier(secondRaw)) ||
+    addr(record?.quote_token_id);
 
   if (!base || !quote || base === quote) return null;
+
+  const nativeZero = "0x0000000000000000000000000000000000000000";
+  if (base === nativeZero || quote === nativeZero) return null;
 
   const existingBase = assets.get(base);
   const existingQuote = assets.get(quote);
@@ -495,7 +473,6 @@ function parseDexPaprikaPool(record: any, assets: Map<string, ArbitrageAsset>): 
         : undefined
   };
 }
-
 function assetMap() {
   return new Map(ARBITRAGE_ASSETS.map(a => [a.address.toLowerCase(), a]));
 }
@@ -1630,7 +1607,7 @@ export async function scanLSTArbitrage(
     },
     provider: {
       name:
-        "DexPaprika DEX-catalog discovery",
+        "DexPaprika network-wide paginated discovery",
       requestsThisScan:
         discovery.provider.requestsThisScan,
       cached: discovery.provider.cached ?? false,
@@ -1643,7 +1620,7 @@ export async function scanLSTArbitrage(
         discovery.provider.truncated ?? false,
       queryMode:
         discovery.provider.queryMode ??
-        "per_dex_catalog",
+        "network_wide_paginated",
       externalMarketDataRequired: false,
       discoveredDexes: [
         ...new Set(pools.map(pool => pool.dex))

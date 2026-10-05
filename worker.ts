@@ -420,7 +420,24 @@ export class GeldState extends DurableObject<Env> {
 
     if (request.method === "GET") {
       const value = await this.ctx.storage.get<string>("snapshot");
-      return Response.json(value ? JSON.parse(value) : null);
+      if (!value) return Response.json(null);
+
+      try {
+        return Response.json(JSON.parse(value));
+      } catch (error) {
+        // Never let corrupt legacy state turn the internal state endpoint into
+        // a Worker 1101. Keep the raw snapshot isolated and report a recoverable
+        // state error so callers can continue operating from local/default state.
+        console.error("Invalid GELD_STATE snapshot:", error);
+        return Response.json(
+          {
+            ok: false,
+            error: "Stored state snapshot is invalid JSON",
+            recoverable: true
+          },
+          { status: 503 }
+        );
+      }
     }
 
     if (request.method === "POST") {
@@ -743,6 +760,29 @@ export class GeldBot extends DurableObject<Env> {
       return new Response("Unauthorized", { status: 401 });
     }
 
+    // LST arbitrage is deliberately independent from the TradingEngine.
+    // Do not initialize the memecoin engine/state-sync path just to read or
+    // refresh arbitrage quotes; a corrupt/unavailable remote snapshot must not
+    // take down this paper-only scanner.
+    if (path === "/api/lst/arbitrage") {
+      const force = url.searchParams.get("refresh") === "1";
+      try {
+        const result = await this.runLSTArbitrageCycle({ force, allowExecution: false });
+        return Response.json(result, { headers: { "Cache-Control": "no-store" } });
+      } catch (error) {
+        console.error("LST arbitrage API failed:", error);
+        return Response.json(
+          {
+            mode: "PAPER_SIGNAL_ONLY",
+            generatedAt: new Date().toISOString(),
+            execution: { attempted: false, submitted: false },
+            error: error instanceof Error ? error.message : String(error)
+          },
+          { status: 503, headers: { "Cache-Control": "no-store" } }
+        );
+      }
+    }
+
     const engine = await this.getEngine();
 
     if (path === "/api/health" || path === "/api/state") {
@@ -911,12 +951,6 @@ export class GeldBot extends DurableObject<Env> {
         lstArbitrageExecutorConfigured: Boolean(runtimeConfig.lstArbitrageExecutorAddress),
         lstArbitrageIntervalMs: runtimeConfig.lstArbitrageIntervalMs
       });
-    }
-
-    if (path === "/api/lst/arbitrage") {
-      const force = url.searchParams.get("refresh") === "1";
-      const result = await this.runLSTArbitrageCycle({ force, allowExecution: false });
-      return Response.json(result, { headers: { "Cache-Control": "no-store" } });
     }
 
     if (path === "/api/leverup/paper") {

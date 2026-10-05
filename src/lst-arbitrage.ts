@@ -1756,27 +1756,71 @@ export async function preflightAllLSTArbitrage(
         continue;
       }
 
-      const blockNumber = await rpcJson(rpcUrl, "eth_blockNumber");
-      const callMany = await rpcJson(rpcUrl, "eth_callMany", [
-        [{ transactions }],
-        { blockNumber, transactionIndex: 0 },
-        { [sender]: { balance: hexValue(1000n * 10n ** 18n) } },
-        9000
-      ]);
-      const simulated = Array.isArray(callMany?.[0]) ? callMany[0].map(decodeCallManyResult) : [];
-      const successful = simulated.length === transactions.length && simulated.every((x: any) => x.ok === true);
+      let simulationMethod = "eth_callMany";
+      let blockNumber: string | null = null;
+      let simulated: any[] = [];
+      let successful = false;
+      let simulationError: string | null = null;
+      let gasUnits = 0n;
+
+      try {
+        blockNumber = await rpcJson(rpcUrl, "eth_blockNumber");
+        const callMany = await rpcJson(rpcUrl, "eth_callMany", [
+          [{ transactions }],
+          { blockNumber, transactionIndex: 0 },
+          { [sender]: { balance: hexValue(1000n * 10n ** 18n) } },
+          9000
+        ]);
+        simulated = Array.isArray(callMany?.[0]) ? callMany[0].map((item: any) => ({
+          ...decodeCallManyResult(item),
+          gasUsed: item?.gasUsed ? String(item.gasUsed) : null
+        })) : [];
+        successful = simulated.length === transactions.length && simulated.every((x: any) => x.ok === true);
+        for (const item of simulated) {
+          if (item?.gasUsed) gasUnits += BigInt(item.gasUsed);
+        }
+      } catch (firstError) {
+        const firstMessage = firstError instanceof Error ? firstError.message : String(firstError);
+        if (!/method not found|not supported|unsupported/i.test(firstMessage)) {
+          simulationError = firstMessage;
+        } else {
+          simulationMethod = "eth_simulateV1";
+          try {
+            const simulatedBlocks = await rpcJson(rpcUrl, "eth_simulateV1", [{
+              blockStateCalls: [{
+                stateOverrides: {
+                  [sender]: { balance: hexValue(1000n * 10n ** 18n) }
+                },
+                calls: transactions.map((tx: any) => ({
+                  from: tx.from,
+                  to: tx.to,
+                  value: tx.value,
+                  data: tx.input
+                }))
+              }],
+              traceTransfers: true,
+              validation: true
+            }, "latest"]);
+            const calls = Array.isArray(simulatedBlocks?.[0]?.calls) ? simulatedBlocks[0].calls : [];
+            simulated = calls.map((call: any) => ({
+              ok: String(call?.status ?? "0x0") === "0x1",
+              status: String(call?.status ?? ""),
+              gasUsed: call?.gasUsed ? String(call.gasUsed) : null,
+              returnData: String(call?.returnData ?? ""),
+              error: call?.error ?? null
+            }));
+            successful = simulated.length === transactions.length && simulated.every((x: any) => x.ok === true);
+            for (const item of simulated) {
+              if (item?.gasUsed) gasUnits += BigInt(item.gasUsed);
+            }
+          } catch (fallbackError) {
+            simulationError = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+          }
+        }
+      }
 
       const gasPriceRaw = await rpcJson(rpcUrl, "eth_gasPrice").catch(() => "0x0");
       const gasPrice = BigInt(String(gasPriceRaw));
-      let gasUnits = 0n;
-      let gasEstimateError: string | null = null;
-      try {
-        const last = transactions[transactions.length - 1];
-        const gasRaw = await rpcJson(rpcUrl, "eth_estimateGas", [last]);
-        gasUnits = BigInt(String(gasRaw));
-      } catch (error) {
-        gasEstimateError = error instanceof Error ? error.message : String(error);
-      }
       const gasCostMon = gasUnits > 0n ? Number(gasUnits * gasPrice) / 1e18 : null;
 
       results.push({
@@ -1794,13 +1838,12 @@ export async function preflightAllLSTArbitrage(
         transactionCount: transactions.length,
         transactions,
         simulation: {
-          method: "eth_callMany",
+          method: simulationMethod,
           blockNumber,
           successful,
           results: simulated,
-          error: null
+          error: simulationError
         },
-        gasEstimateError,
         legResults
       });
     } catch (error) {

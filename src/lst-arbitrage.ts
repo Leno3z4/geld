@@ -1636,14 +1636,14 @@ export async function scanLSTArbitrage(
 
     for (let index = 0; index < remainingRoutes.length; index++) {
       const route = remainingRoutes[index];
-      const routeDexes = new Set(
+      const routeDexes = new Set<string>(
         route.legs.map((leg: PoolEdge) =>
-          leg.dex.toLowerCase()
+          String(leg.dex).toLowerCase()
         )
       );
       const newDexCount = [
         ...routeDexes
-      ].filter(dex => !coveredProbeDexes.has(dex)).length;
+      ].filter((dex: string) => !coveredProbeDexes.has(dex)).length;
 
       const score =
         newDexCount * 1_000_000 +

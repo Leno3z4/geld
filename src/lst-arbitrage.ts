@@ -113,7 +113,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-universal-token-discovery-v19-monad-search-frontier-2026-10-05";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-universal-token-discovery-v20-full-monad-index-2026-10-05";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KYBER_BASE_URL = "https://aggregator-api.kyberswap.com";
@@ -506,11 +506,14 @@ async function discoverDexPaprikaMonadPools(
   let pagesFetched = 0;
   let cachedPages = 0;
 
+  // DexPaprika's Monad network index is currently public. Do not send a
+  // possibly stale/invalid API key to the public endpoint: a bad credential can
+  // turn a normally-available index into HTTP 402 and unnecessarily force the
+  // much smaller fallback frontier.
   const headers: Record<string, string> = {
     accept: "application/json",
     "user-agent": "geld-arbitrage/2.1"
   };
-  if (apiKey) headers.authorization = apiKey;
 
   const blockedEntry = await readCache<number>(cache, PROVIDER_BLOCK_KEY);
   const persistedBlockedUntil = Number(blockedEntry?.data ?? 0);

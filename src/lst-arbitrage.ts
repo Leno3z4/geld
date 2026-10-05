@@ -90,6 +90,8 @@ const DEXPAPRIKA_BASE_URL = "https://api.dexpaprika.com";
 const DEXPAPRIKA_CACHE_TTL_MS = 5 * 60_000;
 const DEXPAPRIKA_ASSET_LIMIT = 100;
 const DEXPAPRIKA_PRICE_BATCH_LIMIT = 10;
+const NADFUN_BASE_URL = "https://api.nad.fun";
+const NADFUN_CACHE_TTL_MS = 60_000;
 const DEXSCREENER_BASE_URL = "https://api.dexscreener.com";
 const DEXSCREENER_CACHE_TTL_MS = 5 * 60_000;
 const FREE_EXTERNAL_SUBREQUEST_LIMIT = 50;
@@ -113,7 +115,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-universal-token-discovery-v20-full-monad-index-2026-10-05";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-universal-token-discovery-v21-nadfun-network-universe-2026-10-05";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KYBER_BASE_URL = "https://aggregator-api.kyberswap.com";
@@ -492,6 +494,142 @@ async function fetchProviderJson<T>(
   }
 }
 
+async function discoverNadfunMonadTokens(
+  cache?: LSTArbitrageCache,
+  maxRequests = 2
+) {
+  const assets = new Map<string, ArbitrageAsset>(assetMap());
+  const pools: any[] = [];
+  const errors: string[] = [];
+  let requestsThisScan = 0;
+  const endpoints = [
+    { key: "market-cap", path: "/order/market_cap?page=1&limit=50&is_nsfw=false" },
+    { key: "newest", path: "/order/creation_time?page=1&limit=50&is_nsfw=false&direction=DESC" }
+  ];
+
+  for (const endpoint of endpoints.slice(0, Math.max(0, Math.min(2, Math.floor(maxRequests))))) {
+    const cacheKey = "geld:arb:nadfun:" + endpoint.key + ":v1";
+    try {
+      const result = await fetchProviderJson<any>(
+        cacheKey,
+        NADFUN_BASE_URL + endpoint.path,
+        { accept: "application/json", "user-agent": "geld-arbitrage/2.1" },
+        NADFUN_CACHE_TTL_MS
+      );
+
+      if (!result.fromCache) requestsThisScan++;
+
+      const rows = Array.isArray(result.data?.tokens) ? result.data.tokens : [];
+      for (const row of rows) {
+        const info = row?.token_info ?? {};
+        const market = row?.market_info ?? {};
+        const tokenAddress = normalizeAssetAddress(
+          info?.token_id ?? market?.token_id ?? row?.address
+        );
+        const quoteAddress = normalizeAssetAddress(
+          market?.quote_info?.quote_id
+        );
+        if (!tokenAddress || !quoteAddress || tokenAddress === quoteAddress) continue;
+
+        const symbol = String(info?.symbol ?? ("TKN_" + tokenAddress.slice(2, 8).toUpperCase()));
+        const decimals = Number(market?.quote_info?.decimals ?? 18);
+        if (!assets.has(tokenAddress)) {
+          assets.set(tokenAddress, {
+            symbol,
+            address: tokenAddress,
+            decimals: 18
+          });
+        }
+
+        const quoteSymbol = String(market?.quote_info?.symbol ?? "MON");
+        if (!assets.has(quoteAddress)) {
+          assets.set(quoteAddress, {
+            symbol: quoteSymbol,
+            address: quoteAddress,
+            decimals: Number.isFinite(decimals) && decimals >= 0 && decimals <= 36 ? decimals : 18
+          });
+        }
+
+        const reserveNative = Number(market?.reserve_native ?? 0) / 1e18;
+        const nativePriceUsd = Number(market?.native_price ?? market?.quote_price ?? 0);
+        const liquidityUsd =
+          Number.isFinite(reserveNative) && reserveNative > 0 && nativePriceUsd > 0
+            ? reserveNative * nativePriceUsd
+            : 0;
+
+        const volumeRaw = Number(market?.volume ?? 0) / 1e18;
+        const volumeUsd =
+          Number.isFinite(volumeRaw) && volumeRaw > 0 && nativePriceUsd > 0
+            ? volumeRaw * nativePriceUsd
+            : 0;
+
+        const poolAddress = addr(market?.market_id);
+        if (!poolAddress) continue;
+
+        const priceUsd = Number(market?.price_usd ?? market?.token_price ?? 0);
+        const priceNative = Number(market?.price_native ?? market?.price_quote ?? 0);
+
+        pools.push({
+          id: poolAddress,
+          attributes: {
+            address: poolAddress,
+            name: symbol + "/" + quoteSymbol + " nad.fun",
+            base_token_price_quote_token: String(priceNative > 0 ? priceNative : 1),
+            pool_fee_percentage: 0,
+            reserve_in_usd: liquidityUsd,
+            volume_usd: { h24: volumeUsd },
+            price_usd: priceUsd
+          },
+          relationships: {
+            base_token: { data: { id: tokenAddress } },
+            quote_token: { data: { id: quoteAddress } },
+            dex: { data: { id: "nad-fun" } }
+          },
+          __baseTokenMeta: {
+            attributes: {
+              address: tokenAddress,
+              symbol,
+              decimals: 18
+            }
+          },
+          __quoteTokenMeta: {
+            attributes: {
+              address: quoteAddress,
+              symbol: quoteSymbol,
+              decimals: assets.get(quoteAddress)?.decimals ?? 18
+            }
+          },
+          __dexMeta: { id: "nad-fun" },
+          __dexName: "nad.fun",
+          __quoteKind: "unsupported",
+          __priceUsd: priceUsd,
+          __createdAtBlock: undefined
+        });
+      }
+    } catch (error) {
+      errors.push(
+        "NadFun " +
+        endpoint.key +
+        ": " +
+        (error instanceof Error ? error.message : String(error))
+      );
+    }
+  }
+
+  return {
+    pools: dedupePoolRecords(pools),
+    assets: [...assets.values()],
+    provider: {
+      source: "nad.fun",
+      network: "monad",
+      requestsThisScan,
+      poolCount: pools.length,
+      discoveredTokenCount: Math.max(0, assets.size - assetMap().size),
+      errors: errors.length ? errors : undefined
+    }
+  };
+}
+
 async function discoverDexPaprikaMonadPools(
   cache?: LSTArbitrageCache,
   apiKey?: string
@@ -610,10 +748,35 @@ async function discoverDexPaprikaMonadPools(
     }
   }
 
-  // Always augment the primary index with a dynamic token-address frontier.
+  // NadFun is a first-class Monad token source rather than an LST-only
+  // special case. Pull both the highest-cap and newest token pages so meme
+  // tokens enter the same arbitrage universe before DEX enrichment.
+  const nadfunBudget = Math.min(2, Math.max(0, 8 - requestsThisScan));
+  const nadfun = nadfunBudget > 0
+    ? await discoverNadfunMonadTokens(cache, nadfunBudget)
+    : {
+        pools: [] as any[],
+        assets: [] as ArbitrageAsset[],
+        provider: {
+          source: "nad.fun",
+          network: "monad",
+          requestsThisScan: 0,
+          poolCount: 0,
+          errors: undefined as string[] | undefined
+        }
+      };
+
+  for (const asset of nadfun.assets ?? []) {
+    discoveredAssets.set(asset.address.toLowerCase(), asset);
+  }
+
+  // Always augment the primary index with dynamic token-address frontiers.
   // Newly discovered addresses are queued and can be batched (up to 30/request)
   // so the dashboard is not limited to the static seed list.
-  const remainingDiscoveryBudget = Math.max(0, 8 - requestsThisScan);
+  const remainingDiscoveryBudget = Math.max(
+    0,
+    8 - requestsThisScan - Number(nadfun.provider?.requestsThisScan ?? 0)
+  );
   const frontier = remainingDiscoveryBudget > 0
     ? await discoverDexScreenerMonadPools(cache, remainingDiscoveryBudget, discoveredAssets)
     : {
@@ -722,6 +885,7 @@ async function discoverDexPaprikaMonadPools(
 
   const combinedPools = dedupePoolRecords([
     ...parsedDexPaprika.values(),
+    ...(nadfun.pools ?? []),
     ...(frontier.pools ?? [])
   ]);
   const combinedDexes = [...new Set(
@@ -737,11 +901,14 @@ async function discoverDexPaprikaMonadPools(
       source: "dexpaprika+dexscreener",
       network: DEXPAPRIKA_NETWORK,
       requestsThisScan:
-        requestsThisScan + Number(frontier.provider?.requestsThisScan ?? 0),
+        requestsThisScan +
+        Number(nadfun.provider?.requestsThisScan ?? 0) +
+        Number(frontier.provider?.requestsThisScan ?? 0),
       assetQueries: 0,
       assetLimit: Number(discoveredAssets.size),
       refreshedAssets: [
         ...(pagesFetched > 0 ? ["NETWORK"] : []),
+        ...(nadfun.provider?.requestsThisScan ? ["NADFUN"] : []),
         ...(frontier.provider?.refreshedAssets ?? [])
       ],
       cachedAssets: [
@@ -762,13 +929,31 @@ async function discoverDexPaprikaMonadPools(
       fallbackRefreshedAssets: frontier.provider?.refreshedAssets ?? [],
       fallbackCachedAssets: frontier.provider?.cachedAssets ?? [],
       fallbackAvailableDexes: frontier.provider?.availableDexes ?? [],
-      fallbackErrors: frontier.provider?.errors,
+      fallbackErrors: [
+        ...(nadfun.provider?.errors ?? []),
+        ...(frontier.provider?.errors ?? [])
+      ].length
+        ? [...new Set([
+            ...(nadfun.provider?.errors ?? []),
+            ...(frontier.provider?.errors ?? [])
+          ])]
+        : undefined,
+      nadfunRequestsThisScan: Number(nadfun.provider?.requestsThisScan ?? 0),
+      nadfunPoolCount: Number(nadfun.provider?.poolCount ?? 0),
       errors: errors.length
-        ? [...new Set(errors.concat(frontier.provider?.errors ?? []))]
-        : frontier.provider?.errors,
+        ? [...new Set(errors.concat(nadfun.provider?.errors ?? [], frontier.provider?.errors ?? []))]
+        : [
+            ...(nadfun.provider?.errors ?? []),
+            ...(frontier.provider?.errors ?? [])
+          ].length
+          ? [...new Set([
+              ...(nadfun.provider?.errors ?? []),
+              ...(frontier.provider?.errors ?? [])
+            ])]
+          : frontier.provider?.errors,
       note:
-        "Network discovery combines the indexed Monad pool universe with a batched DexScreener token frontier. " +
-        "Every token found in either source enters the dynamic universe; exact on-chain quotes remain the profitability gate."
+        "Network discovery combines the indexed Monad pool universe, NadFun's meme-token universe, and a batched DexScreener token frontier. " +
+        "Every token found in any source enters the dynamic universe; exact on-chain quotes remain the profitability gate."
     }
   };
 }

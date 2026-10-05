@@ -21,6 +21,7 @@ interface Env {
   STATE_SYNC_SECRET?: string;
   STATE_SYNC_URL?: string;
   MONAD_RPC_URL?: string;
+  ALCHEMY_RPC_URL?: string;
   MONAD_WS_URL?: string;
 
   LST_ARBITRAGE_ENABLED?: string;
@@ -304,6 +305,7 @@ function hydrateProcessEnv(env: Env) {
     STATE_SYNC_URL: valueFor("STATE_SYNC_URL", env.STATE_SYNC_URL),
     NADFUN_API_URL: valueFor("NADFUN_API_URL", env.NADFUN_API_URL),
     NADFUN_SITE_URL: valueFor("NADFUN_SITE_URL", env.NADFUN_SITE_URL),
+    ALCHEMY_RPC_URL: env.ALCHEMY_RPC_URL,
     MONAD_RPC_URL: valueFor("MONAD_RPC_URL", env.MONAD_RPC_URL),
     MONAD_WS_URL: valueFor("MONAD_WS_URL", env.MONAD_WS_URL),
     LST_ARBITRAGE_ENABLED: valueFor("LST_ARBITRAGE_ENABLED", env.LST_ARBITRAGE_ENABLED),

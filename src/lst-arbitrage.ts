@@ -45,7 +45,7 @@ const KNOWN_UNISWAP_POOLS: PoolRecord[] = [
     quoteKind: "uniswap-v3"
   }
 ];
-// LST arbitrage scanner: GeckoTerminal + DEX Screener topology discovery with exact on-chain quotes.
+// LST arbitrage scanner: DexPaprika + DEX Screener topology discovery with exact on-chain quotes.
 import {
   createPublicClient,
   http,
@@ -79,35 +79,28 @@ export const MAX_EXACT_ROUTES = 6;
 export const MAX_REFINED_ROUTES = 1;
 export const PROBE_SIZE_MON = 1;
 const EXECUTION_BUFFER_BPS = Math.round(EXECUTION_BUFFER_PCT * 100);
-const GECKO_NETWORK = "monad";
-const GECKO_DEXES_URL =
-  "https://api.geckoterminal.com/api/v2/networks/monad/dexes";
-const GECKO_DEX_CACHE_TTL_MS = 15 * 60_000;
-const GECKO_DEX_POOL_CACHE_TTL_MS = 15 * 60_000;
-const GECKO_DEXES_PER_SCAN = 3;
-const GECKO_POOL_PAGES_PER_DEX_REFRESH = 1;
-const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
-const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
+const DEXPAPRIKA_NETWORK = "monad";
+const DEXPAPRIKA_BASE_URL = "https://api.dexpaprika.com";
+const DEXPAPRIKA_CACHE_TTL_MS = 5 * 60_000;
+const DEXPAPRIKA_ASSET_LIMIT = 100;
+const DEXPAPRIKA_PRICE_BATCH_LIMIT = 10;
 const FREE_EXTERNAL_SUBREQUEST_LIMIT = 50;
-const PLANNED_DISCOVERY_REQUESTS =
-  1 + GECKO_DEXES_PER_SCAN * GECKO_POOL_PAGES_PER_DEX_REFRESH;
+const PLANNED_DISCOVERY_REQUESTS = ARBITRAGE_ASSETS.length + 1;
 const PLANNED_EXACT_REQUESTS =
   MAX_EXACT_ROUTES * 3 * 2 + TRADE_SIZES_MON.length;
-const PLANNED_DISCOVERY_FALLBACK_REQUESTS = 1;
+const PLANNED_DISCOVERY_FALLBACK_REQUESTS = 0;
 const PLANNED_WORST_CASE_EXTERNAL_REQUESTS =
   PLANNED_DISCOVERY_REQUESTS +
-  PLANNED_DISCOVERY_FALLBACK_REQUESTS +
-  PLANNED_EXACT_REQUESTS;
+  PLANNED_EXACT_REQUESTS +
+  PLANNED_DISCOVERY_FALLBACK_REQUESTS;
 const PANCAKE_V3_QUOTER_V2 = "0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997" as Address;
 const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const DEXSCREENER_TOKEN_PAIRS_URL = "https://api.dexscreener.com/token-pairs/v1/monad";
-const LST_ARBITRAGE_BUILD_REVISION = "arb-exact-routing-no-nadfun-v2-2026-10-05";
-const DEXSCREENER_CACHE_TTL_MS = 15 * 60_000;
-const DEXSCREENER_ASSET_ROTATION_MS = 60_000;
-const DEXPAPRIKA_CACHE_TTL_MS = 5 * 60_000;
+const LST_ARBITRAGE_BUILD_REVISION = "arb-dexpaprika-exact-routing-v1-2026-10-05";
+const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
+const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KURU_MARKET_ABI = parseAbi([
   "function getMarketParams() view returns (uint256 pricePrecision,uint256 sizePrecision,address baseAssetAddress,uint256 baseAssetDecimals,address quoteAssetAddress,uint256 quoteAssetDecimals,uint256 tickSize,uint256 minSize,uint256 maxSize,int256 takerFeeBps,int256 makerFeeBps)"
 ]);
@@ -142,26 +135,9 @@ export type LSTArbitrageCache = {
   put(key: string, value: string): Promise<void>;
 };
 
-const POOL_CACHE_TTL_MS = 5 * 60_000;
-const PROVIDER_RETRY_FLOOR_MS = 60_000;
-const PROVIDER_ATTEMPT_COOLDOWN_MS = 60_000;
-const CACHE_KEY_PREFIX = "lst-arb:gecko";
-
-class GeckoHttpError extends Error {
-  constructor(
-    public readonly status: number,
-    public readonly retryAfterMs: number | null,
-    message: string
-  ) {
-    super(message);
-    this.name = "GeckoHttpError";
-  }
-}
-
-
-
-
-
+const PROVIDER_COOLDOWN_MS = 60_000;
+const DEXPAPRIKA_CACHE_PREFIX = "lst-arb:dexpaprika";
+const PROVIDER_BLOCK_KEY = "lst-arb:dexpaprika:blocked-until";
 export type ArbitrageAsset = {
   symbol: string;
   address: string;
@@ -343,689 +319,240 @@ function normalizeAssetAddress(value: unknown) {
 }
 
 
-async function discoverGeckoMonadDexPools(
-  cache?: LSTArbitrageCache
+async function discoverDexPaprikaMonadPools(
+  cache?: LSTArbitrageCache,
+  apiKey?: string
 ) {
-  const inventoryKey = "lst-arb:gecko:dexes:v2";
-  const lastGoodInventoryKey = "lst-arb:gecko:dexes:last-good:v2";
   const now = Date.now();
-  const knownAssets = assetMap();
-
-  const [cachedInventory, lastGoodInventory] =
-    await Promise.all([
-      readCache<any[]>(cache, inventoryKey),
-      readCache<any[]>(cache, lastGoodInventoryKey)
-    ]);
-
-  let inventory: any[] = [];
-  let inventoryCached = false;
-  let inventoryStale = false;
-  let inventoryStaleFrom: number | null = null;
-  let inventoryRequestsThisScan = 0;
+  const assets = assetMap();
   const errors: string[] = [];
+  const pools: any[] = [];
+  const refreshedAssets: string[] = [];
+  const cachedAssets: string[] = [];
+  let requestsThisScan = 0;
+  let priceRequestsThisScan = 0;
 
-  if (
-    cachedInventory &&
-    now - cachedInventory.fetchedAt < GECKO_DEX_CACHE_TTL_MS
-  ) {
-    inventory = cachedInventory.data;
-    inventoryCached = true;
-  } else {
+  const blockedRaw = await readCache<string>(cache, PROVIDER_BLOCK_KEY);
+  const blockedUntil = Number(blockedRaw ?? 0);
+  const providerBlocked = Number.isFinite(blockedUntil) && blockedUntil > now;
+
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    "user-agent": "geld-lst-arbitrage/1.0"
+  };
+  if (apiKey) headers.authorization = apiKey;
+
+  const prices = new Map<string, number>();
+  const priceKey = `${DEXPAPRIKA_CACHE_PREFIX}:prices:v1`;
+  const cachedPrices = await readCache<Record<string, number>>(cache, priceKey);
+
+  if (cachedPrices && now - cachedPrices.fetchedAt < DEXPAPRIKA_CACHE_TTL_MS) {
+    for (const [key, value] of Object.entries(cachedPrices.data ?? {})) {
+      prices.set(key.toLowerCase(), num(value));
+    }
+  } else if (!providerBlocked) {
     try {
+      const tokenList = ARBITRAGE_ASSETS
+        .map(asset => asset.address.toLowerCase())
+        .slice(0, DEXPAPRIKA_PRICE_BATCH_LIMIT)
+        .join(",");
       const response = await fetch(
-        `${GECKO_DEXES_URL}?page=1`,
-        {
-          headers: {
-            accept: "application/json;version=20230203",
-            "user-agent": "geld-lst-arbitrage/1.0"
-          }
-        }
+        `${DEXPAPRIKA_BASE_URL}/networks/${DEXPAPRIKA_NETWORK}/multi/prices?tokens=${tokenList}`,
+        { headers }
       );
-      inventoryRequestsThisScan++;
-
-      if (!response.ok) {
-        const retry = retryAfterMs(
-          response.headers.get("retry-after")
-        );
-        throw new GeckoHttpError(
-          response.status,
-          retry,
-          "GeckoTerminal DEX inventory HTTP " +
-            response.status
-        );
-      }
-
+      priceRequestsThisScan++;
+      requestsThisScan++;
+      if (!response.ok) throw new Error(`DexPaprika prices HTTP ${response.status}`);
       const json = await response.json() as any;
-      inventory = Array.isArray(json?.data)
-        ? json.data
-        : [];
-
-      if (inventory.length === 0) {
-        throw new Error(
-          "GeckoTerminal returned an empty Monad DEX inventory"
-        );
+      const rows = Array.isArray(json) ? json : Array.isArray(json?.results) ? json.results : [];
+      for (const row of rows) {
+        const address = addr(row?.id ?? row?.address);
+        const price = num(row?.price_usd ?? row?.price);
+        if (address && price > 0) prices.set(address, price);
       }
-
-      await writeCache(
-        cache,
-        inventoryKey,
-        inventory,
-        now
-      );
-      await writeCache(
-        cache,
-        lastGoodInventoryKey,
-        inventory,
-        now
-      );
+      if (prices.size > 0) {
+        await writeCache(cache, priceKey, Object.fromEntries(prices), now);
+      }
     } catch (error) {
-      errors.push(
-        error instanceof Error
-          ? error.message
-          : String(error)
-      );
-
-      const fallback =
-        lastGoodInventory?.data?.length
-          ? lastGoodInventory
-          : cachedInventory;
-
-      if (fallback?.data?.length) {
-        inventory = fallback.data;
-        inventoryStale = true;
-        inventoryStaleFrom = fallback.fetchedAt;
-      }
+      errors.push(error instanceof Error ? error.message : String(error));
     }
   }
 
-  const normalizedInventory = inventory
-    .map(item => ({
-      dexId: String(
-        item?.id ??
-          item?.attributes?.id ??
-          ""
-      ).toLowerCase(),
-      dexName: String(
-        item?.attributes?.name ??
-          item?.name ??
-          item?.id ??
-          "unknown"
-      ),
-      protocol: String(
-        item?.attributes?.protocol ??
-          item?.protocol ??
-          ""
-      )
-    }))
-    .filter((dex: any) => Boolean(dex.dexId));
+  for (const asset of ARBITRAGE_ASSETS) {
+    const cacheKey = `${DEXPAPRIKA_CACHE_PREFIX}:pools:${asset.address.toLowerCase()}:v1`;
+    const cached = await readCache<any[]>(cache, cacheKey);
+    let rows: any[] = [];
 
-  const refreshedDexes: string[] = [];
-  const freshDexes: string[] = [];
-  const staleDexes: string[] = [];
-  const missingDexSnapshots: string[] = [];
-  const allPoolRecords: any[] = [];
-  let poolRequestsThisScan = 0;
-  let geckoBlockedUntil = await providerBlockedUntil(cache);
-
-  const rotationBase =
-    Math.floor(now / 60_000) *
-    GECKO_DEXES_PER_SCAN;
-
-  const selectedDexes: any[] = [];
-  if (normalizedInventory.length > 0) {
-    const count = Math.min(
-      GECKO_DEXES_PER_SCAN,
-      normalizedInventory.length
-    );
-    const start =
-      rotationBase % normalizedInventory.length;
-
-    for (let offset = 0; offset < count; offset++) {
-      selectedDexes.push(
-        normalizedInventory[
-          (start + offset) % normalizedInventory.length
-        ]
-      );
-    }
-  }
-
-  for (const dex of selectedDexes) {
-    const safeDexId = encodeURIComponent(dex.dexId);
-    const cacheKey =
-      `lst-arb:gecko:dex:${dex.dexId}:pools:v2`;
-    const lastGoodKey =
-      `lst-arb:gecko:dex:${dex.dexId}:last-good:v2`;
-    const [cachedPools, lastGoodPools] =
-      await Promise.all([
-        readCache<any[]>(cache, cacheKey),
-        readCache<any[]>(cache, lastGoodKey)
-      ]);
-
-    let snapshot = cachedPools;
-    const isFresh =
-      Boolean(
-        cachedPools &&
-        now - cachedPools.fetchedAt <
-          GECKO_DEX_POOL_CACHE_TTL_MS
-      );
-
-    if (!isFresh && now >= geckoBlockedUntil) {
-      // Refresh a small sequential batch each invocation. Three DEXes per
-      // minute stays well below GeckoTerminal's public request rate while
-      // allowing the full inventory to warm in about nine minutes.
+    if (cached && now - cached.fetchedAt < DEXPAPRIKA_CACHE_TTL_MS) {
+      rows = cached.data;
+      cachedAssets.push(asset.symbol);
+    } else if (!providerBlocked) {
       try {
-          const url =
-            `https://api.geckoterminal.com/api/v2/networks/${GECKO_NETWORK}/dexes/${safeDexId}/pools?page=1&include=base_token,quote_token,dex`;
-
-          const response = await fetch(url, {
-            headers: {
-              accept:
-                "application/json;version=20230203",
-              "user-agent":
-                "geld-lst-arbitrage/1.0"
-            }
-          });
-          poolRequestsThisScan++;
-
-          if (!response.ok) {
-            const retry = retryAfterMs(
-              response.headers.get("retry-after")
-            );
-            if (response.status === 429) {
-              geckoBlockedUntil = now + Math.max(
-                PROVIDER_RETRY_FLOOR_MS,
-                retry ?? PROVIDER_RETRY_FLOOR_MS
-              );
-              await setProviderBlockedUntil(
-                cache,
-                geckoBlockedUntil
-              );
-            }
-            throw new GeckoHttpError(
-              response.status,
-              retry,
-              `GeckoTerminal ${dex.dexId} pool HTTP ${response.status}`
-            );
+        const url =
+          `${DEXPAPRIKA_BASE_URL}/networks/${DEXPAPRIKA_NETWORK}/pools/search?token_address=${asset.address}&order_by=liquidity_usd&sort=desc&limit=${DEXPAPRIKA_ASSET_LIMIT}`;
+        const response = await fetch(url, { headers });
+        requestsThisScan++;
+        if (!response.ok) {
+          if (response.status === 429) {
+            const retryUntil = now + PROVIDER_COOLDOWN_MS;
+            await writeCache(cache, PROVIDER_BLOCK_KEY, String(retryUntil), now);
           }
-
-          const json = await response.json() as any;
-          const rows = Array.isArray(json?.data)
-            ? json.data
-            : [];
-
-          if (rows.length === 0) {
-            throw new Error(
-              `GeckoTerminal returned no pools for ${dex.dexId}`
-            );
-          }
-
-          const includedById = new Map<string, any>(
-            (Array.isArray(json?.included)
-              ? json.included
-              : []
-            ).map((item: any) => [
-              String(item?.id ?? ""),
-              item
-            ])
-          );
-
-          const enriched = rows.map((record: any) => {
-            const baseId = String(
-              record?.relationships?.base_token?.data?.id ??
-                ""
-            );
-            const quoteId = String(
-              record?.relationships?.quote_token?.data?.id ??
-                ""
-            );
-            const dexId =
-              String(
-                record?.relationships?.dex?.data?.id ??
-                  dex.dexId
-              );
-
-            return {
-              ...record,
-              __baseTokenMeta:
-                includedById.get(baseId),
-              __quoteTokenMeta:
-                includedById.get(quoteId),
-              __dexMeta:
-                includedById.get(dexId)
-            };
-          });
-
-          snapshot = {
-            fetchedAt: now,
-            data: enriched
-          };
-
-          await writeCache(
-            cache,
-            cacheKey,
-            enriched,
-            now
-          );
-          await writeCache(
-            cache,
-            lastGoodKey,
-            enriched,
-            now
-          );
-
-          refreshedDexes.push(dex.dexId);
-      } catch (error) {
-        errors.push(
-          error instanceof Error
-            ? error.message
-            : String(error)
-        );
-
-        if (lastGoodPools?.data?.length) {
-          snapshot = lastGoodPools;
+          throw new Error(`DexPaprika pools HTTP ${response.status} for ${asset.symbol}`);
         }
+        const json = await response.json() as any;
+        rows = Array.isArray(json?.results) ? json.results : [];
+        await writeCache(cache, cacheKey, rows, now);
+        refreshedAssets.push(asset.symbol);
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : String(error));
+        if (cached?.data?.length) rows = cached.data;
       }
+    } else if (cached?.data?.length) {
+      rows = cached.data;
+      cachedAssets.push(asset.symbol);
     }
 
-    if (snapshot?.data?.length) {
-      allPoolRecords.push(...snapshot.data);
+    for (const row of rows) {
+      const tokens = Array.isArray(row?.tokens) ? row.tokens : [];
+      if (tokens.length < 2) continue;
 
-      if (
-        now - snapshot.fetchedAt <
-        GECKO_DEX_POOL_CACHE_TTL_MS
-      ) {
-        freshDexes.push(dex.dexId);
-      } else {
-        staleDexes.push(dex.dexId);
-      }
-    } else {
-      missingDexSnapshots.push(dex.dexId);
-    }
-  }
+      const token0 = addr(tokens[0]?.id);
+      const token1 = addr(tokens[1]?.id);
+      if (!token0 || !token1 || token0 === token1) continue;
+      if (!assets.has(token0) || !assets.has(token1)) continue;
 
-  // Use every cached DEX snapshot, not only the six refreshed this minute.
-  // After five rotation minutes, all inventory DEXes have had a refresh slot.
-  for (const dex of normalizedInventory) {
-    if (
-      selectedDexes.some(
-        selected => selected.dexId === dex.dexId
-      )
-    ) {
-      continue;
-    }
+      const p0 = prices.get(token0);
+      const p1 = prices.get(token1);
+      if (!(p0 > 0 && p1 > 0)) continue;
 
-    const snapshot = await readCache<any[]>(
-      cache,
-      `lst-arb:gecko:dex:${dex.dexId}:pools:v2`
-    );
+      const baseToQuote = p0 / p1;
+      if (!(baseToQuote > 0)) continue;
 
-    if (snapshot?.data?.length) {
-      allPoolRecords.push(...snapshot.data);
+      const baseAsset = assets.get(token0)!;
+      const quoteAsset = assets.get(token1)!;
+      const poolAddress = poolIdentifier(row?.id);
+      if (!poolAddress) continue;
 
-      if (
-        now - snapshot.fetchedAt <
-        GECKO_DEX_POOL_CACHE_TTL_MS
-      ) {
-        freshDexes.push(dex.dexId);
-      } else {
-        staleDexes.push(dex.dexId);
-      }
-    } else {
-      missingDexSnapshots.push(dex.dexId);
-    }
-  }
-
-  let fallbackRequestsThisScan = 0;
-  let fallbackPairs: any[] = [];
-  try {
-    const fallback = await getDexScreenerSnapshot(cache);
-    fallbackRequestsThisScan =
-      Number(fallback.provider?.requestsThisScan ?? 0);
-    fallbackPairs = Array.isArray(fallback.pairs)
-      ? fallback.pairs
-      : [];
-    for (const pair of fallbackPairs) {
-      const parsed = parseDexScreenerPair(
-        pair,
-        assetMap()
-      );
-      if (parsed) {
-        allPoolRecords.push({
-          id: parsed.id,
+      pools.push({
+        id: String(row?.id ?? poolAddress),
+        attributes: {
+          address: poolAddress,
+          name: `${baseAsset.symbol}/${quoteAsset.symbol} ${String(row?.dex_name ?? row?.dex_id ?? "dex")}`,
+          base_token_price_quote_token: String(baseToQuote),
+          pool_fee_percentage: num(row?.fee),
+          reserve_in_usd: num(row?.liquidity_usd),
+          volume_usd: { h24: num(row?.volume_usd_24h) }
+        },
+        relationships: {
+          base_token: { data: { id: token0 } },
+          quote_token: { data: { id: token1 } },
+          dex: { data: { id: String(row?.dex_id ?? row?.dex_name ?? "unknown").toLowerCase() } }
+        },
+        __baseTokenMeta: {
           attributes: {
-            address: parsed.address,
-            name: parsed.name,
-            base_token_price_quote_token:
-              String(parsed.baseToQuote),
-            pool_fee_percentage:
-              parsed.feePct,
-            reserve_in_usd:
-              parsed.liquidityUsd,
-            volume_usd: {
-              h24: parsed.volume24hUsd
-            }
-          },
-          relationships: {
-            base_token: {
-              data: {
-                id: `monad_${parsed.base}`
-              }
-            },
-            quote_token: {
-              data: {
-                id: `monad_${parsed.quote}`
-              }
-            },
-            dex: {
-              data: {
-                id: parsed.dex
-              }
-            }
-          },
-          __baseTokenMeta: {
-            attributes: {
-              address: parsed.base,
-              symbol: parsed.baseSymbol,
-              decimals:
-                knownAssets.get(parsed.base)?.decimals ?? 18
-            }
-          },
-          __quoteTokenMeta: {
-            attributes: {
-              address: parsed.quote,
-              symbol: parsed.quoteSymbol,
-              decimals:
-                knownAssets.get(parsed.quote)?.decimals ?? 18
-            }
+            address: token0,
+            symbol: baseAsset.symbol,
+            decimals: baseAsset.decimals
           }
-        });
-      }
-    }
-  } catch (error) {
-    errors.push(
-      error instanceof Error
-        ? error.message
-        : String(error)
-    );
-  }
-
-  const dedupedPools = new Map<string, any>();
-  for (const record of allPoolRecords) {
-    const poolAddress = poolIdentifier(
-      record?.attributes?.address ??
-        record?.id
-    );
-    const id = poolAddress ||
-      String(record?.id ?? "").toLowerCase();
-    if (id) {
-      dedupedPools.set(id, record);
+        },
+        __quoteTokenMeta: {
+          attributes: {
+            address: token1,
+            symbol: quoteAsset.symbol,
+            decimals: quoteAsset.decimals
+          }
+        },
+        __dexMeta: {
+          id: String(row?.dex_id ?? row?.dex_name ?? "unknown").toLowerCase()
+        },
+        __createdAtBlock: row?.created_at_block_number
+      });
     }
   }
 
-  const pools = [...dedupedPools.values()];
-  const rawObservedDexes = [
-    ...new Set(
-      pools
-        .map(record =>
-          String(
-            record?.relationships?.dex?.data?.id ??
-              ""
-          ).toLowerCase()
-        )
-        .filter(Boolean)
-    )
-  ].sort();
-
-  const inventoryDexIds = normalizedInventory.map(
-    dex => dex.dexId
-  );
-  const missingDexes = inventoryDexIds.filter(
-    dexId => !rawObservedDexes.includes(dexId)
-  );
-  const warmupComplete =
-    normalizedInventory.length > 0 &&
-    missingDexSnapshots.length === 0 &&
-    staleDexes.every(
-      dexId => inventoryDexIds.includes(dexId)
-    );
-  const dexCoverageComplete =
-    warmupComplete &&
-    missingDexes.length === 0;
-
-  const uniqueFreshDexes = [
-    ...new Set(freshDexes)
-  ];
-  const uniqueStaleDexes = [
-    ...new Set(staleDexes)
-  ];
-  const uniqueMissingSnapshots = [
-    ...new Set(missingDexSnapshots)
-  ];
-
-  const stale =
-    inventoryStale ||
-    uniqueStaleDexes.length > 0 ||
-    uniqueMissingSnapshots.length > 0;
+  const deduped = new Map<string, any>();
+  for (const pool of pools) {
+    const key = String(pool?.attributes?.address ?? pool?.id).toLowerCase();
+    if (!deduped.has(key)) deduped.set(key, pool);
+  }
 
   const provider = {
-    name: "GeckoTerminal Monad DEX rotation",
-    requestsThisScan:
-      inventoryRequestsThisScan +
-      poolRequestsThisScan +
-      fallbackRequestsThisScan,
-    inventoryRequestsThisScan,
-    poolRequestsThisScan,
-    fallbackRequestsThisScan,
-    cached:
-      inventoryRequestsThisScan === 0 &&
-      poolRequestsThisScan === 0 &&
-      fallbackRequestsThisScan === 0,
-    stale,
-    staleFrom:
-      inventoryStaleFrom ??
-      (uniqueStaleDexes.length > 0
-        ? now
-        : null),
-    staleAgeMs:
-      inventoryStaleFrom
-        ? Math.max(
-            0,
-            now - inventoryStaleFrom
-          )
-        : 0,
-    queryMode: "dex_inventory_rotation_with_token_fallback",
-    fallbackProvider: "DEX Screener token-pair snapshot",
-    fallbackPairCount: fallbackPairs.length,
-    inventoryDexCount:
-      normalizedInventory.length,
-    poolSnapshotCount:
-      pools.length,
-    availableDexes: normalizedInventory,
-    refreshedDexes: [
-      ...new Set(refreshedDexes)
-    ],
-    freshDexes: uniqueFreshDexes,
-    staleDexes: uniqueStaleDexes,
-    missingDexSnapshots: uniqueMissingSnapshots,
-    rawObservedDexes,
-    missingDexes,
-    warmupComplete,
-    dexCoverageComplete,
-    inventoryCached,
-    inventoryStale,
-    inventoryStaleFrom,
-    rotationMinutes: Math.ceil(
-      normalizedInventory.length /
-        Math.max(
-          1,
-          GECKO_DEXES_PER_SCAN
-        )
-    ),
-    dexesPerScan: GECKO_DEXES_PER_SCAN,
-    poolPagesPerDexRefresh:
-      GECKO_POOL_PAGES_PER_DEX_REFRESH,
-    poolSnapshotTtlMs:
-      GECKO_DEX_POOL_CACHE_TTL_MS,
-    blockedUntil: geckoBlockedUntil,
-    inventoryTtlMs:
-      GECKO_DEX_CACHE_TTL_MS,
-    externalMarketDataRequired: false,
-    fallbackUsed: fallbackPairs.length > 0,
-    errors: errors.length
-      ? [...new Set(errors)]
-      : undefined,
+    source: "dexpaprika",
+    network: DEXPAPRIKA_NETWORK,
+    requestsThisScan,
+    priceRequestsThisScan,
+    assetQueries: ARBITRAGE_ASSETS.length,
+    assetLimit: DEXPAPRIKA_ASSET_LIMIT,
+    refreshedAssets,
+    cachedAssets,
+    blockedUntil: blockedUntil > now ? blockedUntil : null,
+    cacheTtlMs: DEXPAPRIKA_CACHE_TTL_MS,
+    availableDexes: [...new Set([...deduped.values()].map(pool =>
+      String(pool?.__dexMeta?.id ?? "").toLowerCase()
+    ).filter(Boolean))].sort(),
+    fallbackUsed: false,
+    errors: errors.length ? [...new Set(errors)] : undefined,
     note:
-      "GeckoTerminal provides the Monad DEX inventory; public pool endpoints are " +
-      "cached and throttled after rate limits. DEX Screener token-pair snapshots rotate " +
-      "across every tracked arbitrage asset. Exact on-chain quotes remain the profitability gate."
+      "DexPaprika is the discovery provider. Pool topology is used only to build candidate routes; " +
+      "profitability is determined exclusively by exact on-chain quotes."
   };
 
-  return { pools, provider };
+  return { pools: [...deduped.values()], provider };
 }
-
-function parseGeckoPool(
+function parseDiscoveredPool(
   record: any,
   assets: Map<string, ArbitrageAsset>
 ): PoolRecord | null {
   const a = record?.attributes ?? {};
   const relationships = record?.relationships ?? {};
-  const baseMeta =
-    record?.__baseTokenMeta?.attributes ??
-    {};
-  const quoteMeta =
-    record?.__quoteTokenMeta?.attributes ??
-    {};
+  const baseMeta = record?.__baseTokenMeta?.attributes ?? {};
+  const quoteMeta = record?.__quoteTokenMeta?.attributes ?? {};
 
   const base =
     addr(baseMeta?.address) ||
-    addr(
-      relationships?.base_token?.data?.id
-    ) ||
+    addr(relationships?.base_token?.data?.id) ||
     addr(a?.base_token_address);
-
   const quote =
     addr(quoteMeta?.address) ||
-    addr(
-      relationships?.quote_token?.data?.id
-    ) ||
+    addr(relationships?.quote_token?.data?.id) ||
     addr(a?.quote_token_address);
 
-  const nativeZero =
-    "0x0000000000000000000000000000000000000000";
+  const nativeZero = "0x0000000000000000000000000000000000000000";
+  if (!base || !quote || base === quote || base === nativeZero || quote === nativeZero) return null;
 
-  // Never silently turn native MON into WMON. Native V4 pools require
-  // an explicit wrap/unwrap leg, so they remain discovery-visible but are
-  // excluded from the ERC20 arbitrage graph.
-  if (
-    !base ||
-    !quote ||
-    base === quote ||
-    base === nativeZero ||
-    quote === nativeZero
-  ) {
-    return null;
-  }
+  const baseAsset = assets.get(base);
+  const quoteAsset = assets.get(quote);
+  if (!baseAsset || !quoteAsset) return null;
 
-  const existingBase = assets.get(base);
-  const existingQuote = assets.get(quote);
-
-  const baseAsset =
-    existingBase ??
-    {
-      symbol: tokenSymbol(
-        record?.__baseTokenMeta ??
-          baseMeta,
-        shortAddress(base)
-      ),
-      address: base,
-      decimals: tokenDecimals(
-        record?.__baseTokenMeta ??
-          baseMeta
-      )
-    };
-
-  const quoteAsset =
-    existingQuote ??
-    {
-      symbol: tokenSymbol(
-        record?.__quoteTokenMeta ??
-          quoteMeta,
-        shortAddress(quote)
-      ),
-      address: quote,
-      decimals: tokenDecimals(
-        record?.__quoteTokenMeta ??
-          quoteMeta
-      )
-    };
-
-  if (!existingBase) {
-    assets.set(base, baseAsset);
-  }
-  if (!existingQuote) {
-    assets.set(quote, quoteAsset);
-  }
-
-  const baseToQuote = num(
-    a.base_token_price_quote_token
-  );
+  const baseToQuote = num(a.base_token_price_quote_token);
   if (!(baseToQuote > 0)) return null;
 
   const dex = String(
     relationships?.dex?.data?.id ??
-      record?.__dexMeta?.id ??
-      ""
+    record?.__dexMeta?.id ??
+    ""
   ).toLowerCase();
 
-  const quoteKind =
-    classifyQuoteKind(
-      String(
-        a.address ??
-          record?.id ??
-          ""
-      ),
-      dex
-    );
-
-  const poolAddress = poolIdentifier(
-    a.address ??
-      record?.id
-  );
-
+  const poolAddress = poolIdentifier(a.address ?? record?.id);
   if (!poolAddress) return null;
 
   return {
-    id: String(
-      record?.id ??
-        poolAddress
-    ),
-    name: String(
-      a.name ??
-        `${baseAsset.symbol}/${quoteAsset.symbol} ${dex}`
-    ),
+    id: String(record?.id ?? poolAddress),
+    name: String(a.name ?? `${baseAsset.symbol}/${quoteAsset.symbol} ${dex}`),
     address: poolAddress,
     base,
     quote,
     baseSymbol: baseAsset.symbol,
     quoteSymbol: quoteAsset.symbol,
     baseToQuote,
-    feePct: inferV3FeePct(
-      String(a.name ?? ""),
-      num(
-        a.pool_fee_percentage ??
-          a.fee_percentage ??
-          a.pool_fee
-      )
-    ),
+    feePct: inferV3FeePct(String(a.name ?? ""), num(a.pool_fee_percentage)),
     liquidityUsd: num(a.reserve_in_usd),
-    volume24hUsd: num(
-      a.volume_usd?.h24
-    ),
+    volume24hUsd: num(a.volume_usd?.h24),
     dex,
-    quoteKind
+    quoteKind: classifyQuoteKind(poolAddress, dex),
+    createdAtBlock: record?.__createdAtBlock ? String(record.__createdAtBlock) : undefined
   };
 }
-
 function assetMap() {
   return new Map(ARBITRAGE_ASSETS.map(a => [a.address.toLowerCase(), a]));
 }
@@ -1060,7 +587,7 @@ async function fetchJson(url: string) {
 
 async function fetchTokenPools(asset: ArbitrageAsset) {
   const url =
-    `https://api.geckoterminal.com/api/v2/networks/${MONAD_NETWORK}/tokens/${asset.address}/pools?page=1&include=base_token,quote_token,dex`;
+    `https://api.dexpaprikaterminal.com/api/v2/networks/${MONAD_NETWORK}/tokens/${asset.address}/pools?page=1&include=base_token,quote_token,dex`;
   const json = await fetchJson(url);
   return Array.isArray(json?.data) ? json.data : [];
 }
@@ -1430,7 +957,7 @@ async function collectPoolPayloads(cache?: LSTArbitrageCache) {
   return {
     payloads,
     provider: {
-      name: "GeckoTerminal",
+      name: "DexPaprika",
       requestsThisScan: requestCount,
       refreshedAsset,
       rateLimited,
@@ -2029,13 +1556,14 @@ async function simulateCycle(
 
 export async function scanLSTArbitrage(
   rpcUrl: string,
-  cache?: LSTArbitrageCache
+  cache?: LSTArbitrageCache,
+  apiKey?: string
 ) {
   const assets = assetMap();
-  const discovery = await discoverGeckoMonadDexPools(cache);
+  const discovery = await discoverDexPaprikaMonadPools(cache, apiKey);
 
   const parsedPools = discovery.pools
-    .map((record: any) => parseGeckoPool(record, assets))
+    .map((record: any) => parseDiscoveredPool(record, assets))
     .filter(
       (pool: PoolRecord | null): pool is PoolRecord =>
         pool !== null

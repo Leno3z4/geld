@@ -1,3 +1,50 @@
+const KNOWN_UNISWAP_POOLS: PoolRecord[] = [
+  {
+    id: "0x1f86a9f2441cac9b942cfb5445530cdbb28717ed",
+    name: "shMON/WMON Uniswap v3",
+    address: "0x1f86a9f2441cac9b942cfb5445530cdbb28717ed",
+    base: "0x1b68626dca36c7fe922fd2d55e4f631d962de19c",
+    quote: "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
+    baseSymbol: "shMON",
+    quoteSymbol: "WMON",
+    baseToQuote: 1.6293,
+    feePct: 0,
+    liquidityUsd: 215263.28,
+    volume24hUsd: 1579.06,
+    dex: "uniswap",
+    quoteKind: "uniswap-v3"
+  },
+  {
+    id: "0x36a81ebd73b86b485a14911ea16f3d7c96cc00b0",
+    name: "sMON/WMON Uniswap v3",
+    address: "0x36a81ebd73b86b485a14911ea16f3d7c96cc00b0",
+    base: "0xa3227c5969757783154c60bf0bc1944180ed81b9",
+    quote: "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
+    baseSymbol: "sMON",
+    quoteSymbol: "WMON",
+    baseToQuote: 1.1126,
+    feePct: 0,
+    liquidityUsd: 7685.69,
+    volume24hUsd: 209.26,
+    dex: "uniswap",
+    quoteKind: "uniswap-v3"
+  },
+  {
+    id: "0xb80d7a8f5331a907e34cd73f575c784b43e5acb5",
+    name: "gMON/WMON Uniswap v3",
+    address: "0xb80d7a8f5331a907e34cd73f575c784b43e5acb5",
+    base: "0x8498312a6b3cbd158bf0c93abdcf29e6e4f55081",
+    quote: "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
+    baseSymbol: "gMON",
+    quoteSymbol: "WMON",
+    baseToQuote: 1.1006,
+    feePct: 0,
+    liquidityUsd: 90344.63,
+    volume24hUsd: 850.15,
+    dex: "uniswap",
+    quoteKind: "uniswap-v3"
+  }
+];
 // LST arbitrage scanner: primary market discovery via DEX Screener, GeckoTerminal fallback.
 import {
   createPublicClient,
@@ -879,42 +926,20 @@ export async function scanLSTArbitrage(
   rpcUrl: string,
   cache?: LSTArbitrageCache
 ) {
-  const assets = assetMap();
-
-  let pools: PoolRecord[] = [];
-  let provider: any = null;
-
-  try {
-    const dexSnapshot = await getDexScreenerSnapshot(cache);
-    pools = dexSnapshot.pairs
-      .map((pair: any) => parseDexScreenerPair(pair, assets))
-      .filter((pool: PoolRecord | null): pool is PoolRecord => Boolean(pool));
-    provider = dexSnapshot.provider;
-  } catch (error) {
-    // GeckoTerminal remains as a degraded fallback. Its requests are still
-    // persisted and rate-limited by the Durable Object cache.
-    const collection = await collectPoolPayloads(cache);
-    pools = collection.payloads
-      .flat()
-      .map((record: any) => parsePool(record, assets))
-      .filter((pool: PoolRecord | null): pool is PoolRecord => Boolean(pool));
-    provider = {
-      ...collection.provider,
-      fallbackFrom: "DEX Screener",
-      error: error instanceof Error ? error.message : String(error)
-    };
-  }
+  // Use known on-chain pools as the critical path. This avoids depending on
+  // third-party market-data egress from the Worker, which can be rate-limited.
+  // Market statistics are informational; profitability is decided only by
+  // exact on-chain quotes below.
+  const pools = KNOWN_UNISWAP_POOLS.filter(
+    pool => pool.liquidityUsd >= MIN_LIQUIDITY_USD
+  );
 
   const edges: PoolEdge[] = [];
   for (const pool of pools) addEdge(edges, pool);
-
-  // Keep the known multi-asset Curve pool available even when external market
-  // data is degraded. It is always quoted on-chain before being considered.
   addKnownCurveEdges(edges);
 
   const wmon = ARBITRAGE_ASSETS.find(a => a.symbol === "WMON")!;
 
-  // A useful triangular opportunity needs at least two distinct pools/venues.
   const triangles = findTriangles(edges, wmon.address.toLowerCase())
     .filter(t =>
       t.exactQuoteSupported &&
@@ -991,7 +1016,12 @@ export async function scanLSTArbitrage(
       gasBufferMon: GAS_BUFFER_MON,
       tradeSizesMon: TRADE_SIZES_MON
     },
-    provider,
+    provider: {
+      name: "on-chain-known-pools",
+      requestsThisScan: 0,
+      externalMarketDataRequired: false,
+      note: "Route discovery uses known Monad LST pools; profitability requires exact Monad RPC quotes."
+    },
     execution: {
       live: false,
       transactionsSubmitted: 0,

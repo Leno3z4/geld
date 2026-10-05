@@ -1094,7 +1094,7 @@ export default {
       return new Response("Unauthorized", { status: 401 });
     }
 
-    if (url.pathname === "/api/lst/arbitrage/preflight-all" && (request.method === "GET" || request.method === "POST")) {
+    if ((url.pathname === "/api/lst/arbitrage/preflight-all" || url.pathname === "/api/arbitrage/preflight-all") && (request.method === "GET" || request.method === "POST")) {
       try {
         const runtime = await getRuntimeConfig(env);
         const sender = (url.searchParams.get("sender") ?? "0x000000000000000000000000000000000000dEaD").toLowerCase();
@@ -1126,18 +1126,38 @@ export default {
       }
     }
 
-    if (request.method === "POST" && url.pathname === "/api/lst/arbitrage/preflight") {
+    if (request.method === "POST" && (url.pathname === "/api/lst/arbitrage/preflight" || url.pathname === "/api/arbitrage/preflight")) {
       try {
         const runtime = await getRuntimeConfig(env);
-        const targetParam = url.searchParams.get("target") ?? url.searchParams.get("token") ?? "";
-        const targetAsset = ARBITRAGE_ASSETS.find(
-          (asset) =>
+        const targetParam = (url.searchParams.get("target") ?? url.searchParams.get("token") ?? "").trim();
+        if (!targetParam) {
+          return Response.json(
+            { ok: false, error: "target/token is required", example: "/api/arbitrage/preflight?target=0x..." },
+            { status: 400 }
+          );
+        }
+
+        // Arbitrage discovery is dynamic. Do not reject a token merely because
+        // it is absent from the static seed list. Accept any Monad ERC-20
+        // address and let the provider/on-chain route preflight decide whether
+        // there is an actual route.
+        let targetAddress = "";
+        const seeded = ARBITRAGE_ASSETS.find(
+          asset =>
             asset.symbol.toLowerCase() === targetParam.toLowerCase() ||
             asset.address.toLowerCase() === targetParam.toLowerCase()
         );
-        if (!targetAsset) {
+        if (seeded) {
+          targetAddress = seeded.address;
+        } else if (/^0x[0-9a-fA-F]{40}$/.test(targetParam)) {
+          targetAddress = targetParam.toLowerCase();
+        } else {
           return Response.json(
-            { ok: false, error: "Unknown target token", supported: ARBITRAGE_ASSETS.map((asset) => asset.symbol) },
+            {
+              ok: false,
+              error: "target must be a known symbol or a valid Monad ERC-20 address",
+              hint: "Use the dynamic token address returned by /api/arbitrage or /api/lst/arbitrage."
+            },
             { status: 400 }
           );
         }
@@ -1155,7 +1175,7 @@ export default {
 
         const result = await preflightKyberRoundTrip(
           runtime.rpcUrl,
-          targetAsset.address,
+          targetAddress,
           sizeMon,
           sender,
           runtime.privateKey,
@@ -1169,7 +1189,7 @@ export default {
         );
       }
     }
-    if (url.pathname === "/api/lst/arbitrage") {
+    if (url.pathname === "/api/lst/arbitrage" || url.pathname === "/api/arbitrage") {
       const force = url.searchParams.get("refresh") === "1";
       try {
         const result = await runStandaloneLSTArbitrage(env, force);

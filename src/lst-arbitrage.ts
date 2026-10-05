@@ -21,13 +21,14 @@ const UNISWAP_V3_QUOTER_V2 =
 const CURVE_LST_POOL =
   "0x74d80ee400d3026fdd2520265cc98300710b25d4" as Address;
 
-const MIN_LIQUIDITY_USD = 5_000;
-const MIN_GROSS_EDGE_PCT = 0.15;
-const EXECUTION_BUFFER_PCT = 0.20;
-const MIN_NET_PROFIT_MON = 0.005;
-const GAS_BUFFER_MON = 0.001;
-const TRADE_SIZES_MON = [1, 5, 10];
-const MAX_EXACT_TRIANGLES = 3;
+export const MIN_LIQUIDITY_USD = 5_000;
+export const MIN_GROSS_EDGE_PCT = 0.15;
+export const EXECUTION_BUFFER_PCT = 0.20;
+export const MIN_NET_PROFIT_MON = 0.005;
+export const GAS_BUFFER_MON = 0.001;
+export const TRADE_SIZES_MON = [1, 5, 10];
+export const MAX_EXACT_TRIANGLES = 3;
+const EXECUTION_BUFFER_BPS = Math.round(EXECUTION_BUFFER_PCT * 100);
 
 const QUOTER_V2_ABI = parseAbi([
   "function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96) params) returns (uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)"
@@ -54,7 +55,7 @@ export const ARBITRAGE_ASSETS: ArbitrageAsset[] = [
 
 type QuoteKind = "uniswap-v3" | "curve-lst" | "unsupported";
 
-type PoolEdge = {
+export type PoolEdge = {
   pool: string;
   venue: string;
   dex: string;
@@ -67,6 +68,38 @@ type PoolEdge = {
   liquidityUsd: number;
   volume24hUsd: number;
   quoteKind: QuoteKind;
+};
+
+export type ArbitrageSignal = {
+  path: string[];
+  sizeMon: number;
+  amountInRaw: string;
+  finalMon: number;
+  finalQuoteRaw: string;
+  protectedFinalMon: number;
+  protectedFinalRaw: string;
+  minFinalWmonRaw: string;
+  grossProfitMon: number;
+  executionBufferMon: number;
+  netProfitMon: number;
+  legs: Array<{
+    pool: string;
+    tokenIn: string;
+    tokenOut: string;
+    from: string;
+    to: string;
+    venue: string;
+    dex: string;
+    quoteKind: QuoteKind;
+    feePct: number;
+    feeBps: number;
+    curveI: number | null;
+    curveJ: number | null;
+    amountInRaw: string;
+    quoteAmountOutRaw: string;
+    minAmountOutRaw: string;
+  }>;
+  liveExecutable: false;
 };
 
 type PoolRecord = {
@@ -384,6 +417,8 @@ async function simulateTriangle(
 ) {
   let amount = parseUnits(String(sizeMon), 18);
   const exactLegs = [];
+  const safetyNumerator = 10_000n - BigInt(EXECUTION_BUFFER_BPS);
+  const safetyDenominator = 10_000n;
 
   try {
     for (const leg of triangle.legs) {
@@ -396,13 +431,32 @@ async function simulateTriangle(
         };
       }
 
+      const minAmountOut =
+        quote.amountOut * safetyNumerator / safetyDenominator;
+
+      const curveIndex: Record<string, number> = {
+        "0x3bd359c1119da7da1d913d1c4d2b7c461115433a": 0,
+        "0x1b68626dca36c7fe922fd2d55e4f631d962de19c": 1,
+        "0xa3227c5969757783154c60bf0bc1944180ed81b9": 2,
+        "0x8498312a6b3cbd158bf0c93abdcf29e6e4f55081": 3
+      };
+
       exactLegs.push({
+        pool: leg.pool,
+        tokenIn: leg.from,
+        tokenOut: leg.to,
         from: leg.fromSymbol,
         to: leg.toSymbol,
         venue: leg.venue,
+        dex: leg.dex,
         quoteKind: leg.quoteKind,
+        feePct: leg.feePct,
+        feeBps: Math.round(leg.feePct * 10_000),
+        curveI: curveIndex[leg.from] ?? null,
+        curveJ: curveIndex[leg.to] ?? null,
         amountInRaw: amount.toString(),
-        amountOutRaw: quote.amountOut.toString(),
+        quoteAmountOutRaw: quote.amountOut.toString(),
+        minAmountOutRaw: minAmountOut.toString(),
         amountOutHuman: formatUnits(
           quote.amountOut,
           ARBITRAGE_ASSETS.find(a => a.address.toLowerCase() === leg.to)?.decimals ?? 18
@@ -413,21 +467,44 @@ async function simulateTriangle(
       amount = quote.amountOut;
     }
 
-    const finalMon = Number(formatUnits(amount, 18));
+    const finalQuoteRaw = amount;
+    const finalMon = Number(formatUnits(finalQuoteRaw, 18));
     const grossProfitMon = finalMon - sizeMon;
-    const executionBufferMon = sizeMon * (EXECUTION_BUFFER_PCT / 100);
+
+    // This is an execution-risk haircut, not a claim about the AMM's exact
+    // worst-case fill. The real transaction will additionally enforce each
+    // leg's minAmountOut and the final WMON threshold atomically.
+    let protectedFinalRaw = finalQuoteRaw;
+    for (let i = 0; i < triangle.legs.length; i++) {
+      protectedFinalRaw =
+        protectedFinalRaw * safetyNumerator / safetyDenominator;
+    }
+
+    const protectedFinalMon = Number(formatUnits(protectedFinalRaw, 18));
+    const executionBufferMon = Math.max(0, finalMon - protectedFinalMon);
     const netProfitMon =
-      grossProfitMon - executionBufferMon - GAS_BUFFER_MON;
+      protectedFinalMon - sizeMon - GAS_BUFFER_MON;
+
+    const minFinalWmonRaw = parseUnits(
+      (sizeMon + MIN_NET_PROFIT_MON + GAS_BUFFER_MON).toFixed(18),
+      18
+    );
 
     return {
       sizeMon,
       ok: true,
       finalMon,
+      finalQuoteRaw: finalQuoteRaw.toString(),
+      protectedFinalMon,
+      protectedFinalRaw: protectedFinalRaw.toString(),
       grossProfitMon,
       executionBufferMon,
       gasBufferMon: GAS_BUFFER_MON,
       netProfitMon,
-      candidate: netProfitMon >= MIN_NET_PROFIT_MON,
+      minFinalWmonRaw: minFinalWmonRaw.toString(),
+      candidate:
+        protectedFinalRaw >= minFinalWmonRaw &&
+        netProfitMon >= MIN_NET_PROFIT_MON,
       exactLegs
     };
   } catch (error) {
@@ -438,99 +515,38 @@ async function simulateTriangle(
     };
   }
 }
-
-export async function scanLSTArbitrage(rpcUrl = "https://rpc.monad.xyz") {
-  const assets = assetMap();
-
-  const poolResponses = await Promise.all(
-    ARBITRAGE_ASSETS.map(async asset => ({
-      asset,
-      pools: await fetchTokenPools(asset)
-    }))
-  );
-
-  const poolMap = new Map<string, PoolRecord>();
-  for (const response of poolResponses) {
-    for (const raw of response.pools) {
-      const parsed = parsePool(raw, assets);
-      if (!parsed) continue;
-      if (!poolMap.has(parsed.address)) poolMap.set(parsed.address, parsed);
-    }
-  }
-
-  const edges: PoolEdge[] = [];
-  for (const pool of poolMap.values()) addEdge(edges, pool);
-
-  let tokenPrices: Record<string, string> = {};
-  try {
-    tokenPrices = await fetchTokenPrices();
-    addIndicativeCurveEdges(edges, tokenPrices);
-  } catch (error) {
-    console.error("LST token-price enrichment failed:", error);
-  }
-
-  const wmon = ARBITRAGE_ASSETS.find(a => a.symbol === "WMON")!;
-  const triangles = findTriangles(edges, wmon.address);
-
-  const exactCandidates = triangles
-    .filter(t => t.exactQuoteSupported)
-    .filter(t => t.grossEdgePct >= MIN_GROSS_EDGE_PCT)
-    .slice(0, MAX_EXACT_TRIANGLES);
-
-  const client = createClient(rpcUrl);
-  const exactResults = [];
-  for (const triangle of exactCandidates) {
-    const sizes = [];
-    for (const sizeMon of TRADE_SIZES_MON) {
-      sizes.push(await simulateTriangle(client, triangle, sizeMon));
-    }
-    exactResults.push({
-      ...triangle,
-      exactQuotes: sizes,
-      exactSignal: sizes.some(s => s.ok && s.candidate)
-    });
-  }
-
-  const signals = exactResults.flatMap(route =>
+  const signals: ArbitrageSignal[] = exactResults.flatMap(route =>
     route.exactQuotes
       .filter(q => q.ok && q.candidate)
       .map(q => ({
         path: route.path,
         sizeMon: q.sizeMon,
+        amountInRaw: parseUnits(String(q.sizeMon), 18).toString(),
         finalMon: q.finalMon,
+        finalQuoteRaw: q.finalQuoteRaw,
+        protectedFinalMon: q.protectedFinalMon,
+        protectedFinalRaw: q.protectedFinalRaw,
+        minFinalWmonRaw: q.minFinalWmonRaw,
+        grossProfitMon: q.grossProfitMon,
+        executionBufferMon: q.executionBufferMon,
         netProfitMon: q.netProfitMon,
-        legs: route.legs.map(leg => ({
-          from: leg.fromSymbol,
-          to: leg.toSymbol,
+        legs: q.exactLegs.map(leg => ({
+          pool: leg.pool,
+          tokenIn: leg.tokenIn,
+          tokenOut: leg.tokenOut,
+          from: leg.from,
+          to: leg.to,
           venue: leg.venue,
-          quoteKind: leg.quoteKind
+          dex: leg.dex,
+          quoteKind: leg.quoteKind,
+          feePct: leg.feePct,
+          feeBps: leg.feeBps,
+          curveI: leg.curveI,
+          curveJ: leg.curveJ,
+          amountInRaw: leg.amountInRaw,
+          quoteAmountOutRaw: leg.quoteAmountOutRaw,
+          minAmountOutRaw: leg.minAmountOutRaw
         })),
-        liveExecutable: false
+        liveExecutable: false as const
       }))
-  );
-
-  return {
-    generatedAt: new Date().toISOString(),
-    mode: "PAPER_EXACT_QUOTE",
-    startAsset: "WMON (1:1 with native MON)",
-    assets: ARBITRAGE_ASSETS,
-    discoveredPools: poolMap.size,
-    edges: edges.length,
-    trianglesChecked: triangles.length,
-    exactTrianglesChecked: exactResults.length,
-    opportunities: exactResults,
-    signals,
-    rules: {
-      liveExecution: false,
-      minimumLiquidityUsd: MIN_LIQUIDITY_USD,
-      minimumGrossEdgePct: MIN_GROSS_EDGE_PCT,
-      executionBufferPct: EXECUTION_BUFFER_PCT,
-      minimumNetProfitMon: MIN_NET_PROFIT_MON,
-      gasBufferMon: GAS_BUFFER_MON,
-      tradeSizesMon: TRADE_SIZES_MON,
-      maxExactTriangles: MAX_EXACT_TRIANGLES,
-      note:
-        "This detects cyclic MON/LST/stablecoin routes. Spot data ranks routes; exact on-chain quotes then simulate each leg using the previous leg's actual output. Live execution still requires an atomic executor, approvals, pre-trade balance checks, and final min-output protection."
-    }
-  };
-}
+  ).sort((a, b) => b.netProfitMon - a.netProfitMon);

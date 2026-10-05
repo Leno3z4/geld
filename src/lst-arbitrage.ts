@@ -113,7 +113,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-kuru-kyber-preflight-v14-2026-10-05";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-universal-token-discovery-v15-2026-10-05";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KYBER_BASE_URL = "https://aggregator-api.kyberswap.com";

@@ -143,6 +143,7 @@ export type LSTArbitrageCache = {
 const PROVIDER_COOLDOWN_MS = 15 * 60_000;
 const DEXPAPRIKA_CACHE_PREFIX = "lst-arb:dexpaprika";
 const PROVIDER_BLOCK_KEY = "lst-arb:dexpaprika:blocked-until";
+const DEXSCREENER_BLOCK_KEY = "lst-arb:dexscreener:blocked-until";
 export type ArbitrageAsset = {
   symbol: string;
   address: string;
@@ -679,31 +680,64 @@ async function discoverDexScreenerMonadPools(cache: LSTArbitrageCache | undefine
   const refreshedAssets: string[] = [];
   const cachedAssets: string[] = [];
   const errors: string[] = [];
+  const now = Date.now();
+
+  const blockedEntry = await readCache<number>(cache, DEXSCREENER_BLOCK_KEY);
+  const persistedBlockedUntil = Number(blockedEntry?.data ?? 0);
+  if (Number.isFinite(persistedBlockedUntil) && persistedBlockedUntil > now) {
+    return {
+      pools: [],
+      provider: {
+        source: "dexscreener-fallback",
+        network: "monad",
+        requestsThisScan: 0,
+        refreshedAssets,
+        cachedAssets,
+        blockedUntil: persistedBlockedUntil,
+        errors: ["DexScreener cooldown active"]
+      }
+    };
+  }
+
   let requestsThisScan = 0;
 
   for (const asset of ARBITRAGE_ASSETS) {
     if (requestsThisScan >= maxRequests) break;
-    const cacheKey = `lst-arb:dexscreener:pairs:${asset.address.toLowerCase()}:v1`;
-    const cached = await readCache<any[]>(cache, cacheKey);
-    let rows: any[] = [];
 
-    if (cached && Date.now() - cached.fetchedAt < DEXSCREENER_CACHE_TTL_MS) {
+    const cacheKey = `lst-arb:dexscreener:pairs:${asset.address.toLowerCase()}:v2`;
+    let rows: any[] = [];
+    const cached = await readCache<any[]>(cache, cacheKey);
+
+    if (cached && now - cached.fetchedAt < DEXSCREENER_CACHE_TTL_MS) {
       rows = cached.data ?? [];
       cachedAssets.push(asset.symbol);
     } else {
       try {
-        const response = await fetch(
+        const result = await fetchProviderJson<any[]>(
+          cacheKey,
           `${DEXSCREENER_BASE_URL}/token-pairs/v1/monad/${asset.address}`,
-          { headers: { accept: "application/json", "user-agent": "geld-lst-arbitrage/1.0" } }
+          { accept: "application/json", "user-agent": "geld-lst-arbitrage/1.0" },
+          DEXSCREENER_CACHE_TTL_MS
         );
-        requestsThisScan++;
-        if (!response.ok) throw new Error(`DexScreener pairs HTTP ${response.status} for ${asset.symbol}`);
-        const json = await response.json() as any;
-        rows = Array.isArray(json) ? json : [];
-        await writeCache(cache, cacheKey, rows);
-        refreshedAssets.push(asset.symbol);
+        rows = Array.isArray(result.data) ? result.data : [];
+        if (!result.fromCache) {
+          requestsThisScan++;
+          refreshedAssets.push(asset.symbol);
+        } else {
+          cachedAssets.push(asset.symbol);
+        }
       } catch (error) {
-        errors.push(error instanceof Error ? error.message : String(error));
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push(message);
+        const status = Number(message.match(/HTTP (\\d+)/)?.[1] ?? 0);
+
+        if (status === 402 || status === 429) {
+          const retryUntil = now + PROVIDER_COOLDOWN_MS;
+          await writeCache(cache, DEXSCREENER_BLOCK_KEY, retryUntil, now);
+          errors.push(`DexScreener cooldown set until ${new Date(retryUntil).toISOString()}`);
+          break;
+        }
+
         if (cached?.data?.length) {
           rows = cached.data;
           cachedAssets.push(asset.symbol);
@@ -715,6 +749,7 @@ async function discoverDexScreenerMonadPools(cache: LSTArbitrageCache | undefine
       const base = normalizeAssetAddress(row?.baseToken?.address);
       const quote = normalizeAssetAddress(row?.quoteToken?.address);
       if (!base || !quote || base === quote || !assets.has(base) || !assets.has(quote)) continue;
+
       const baseAsset = assets.get(base)!;
       const quoteAsset = assets.get(quote)!;
       const baseUsd = num(row?.priceUsd);
@@ -728,7 +763,9 @@ async function discoverDexScreenerMonadPools(cache: LSTArbitrageCache | undefine
       if (!(baseToQuote > 0)) continue;
 
       const dex = String(row?.dexId ?? "").toLowerCase();
-      const labels = Array.isArray(row?.labels) ? row.labels.map((x: unknown) => String(x).toLowerCase()) : [];
+      const labels = Array.isArray(row?.labels)
+        ? row.labels.map((x: unknown) => String(x).toLowerCase())
+        : [];
       let quoteKind: QuoteKind = "unsupported";
       if (dex === "uniswap" && labels.includes("v3")) quoteKind = "uniswap-v3";
       else if (dex === "uniswap" && labels.includes("v2")) quoteKind = "uniswap-v2";
@@ -737,6 +774,7 @@ async function discoverDexScreenerMonadPools(cache: LSTArbitrageCache | undefine
 
       const poolAddress = addr(row?.pairAddress);
       if (!poolAddress) continue;
+
       pools.push({
         id: poolAddress,
         attributes: {
@@ -765,6 +803,7 @@ async function discoverDexScreenerMonadPools(cache: LSTArbitrageCache | undefine
     const key = String(pool?.attributes?.address ?? pool?.id).toLowerCase();
     if (!deduped.has(key)) deduped.set(key, pool);
   }
+
   return {
     pools: [...deduped.values()],
     provider: {
@@ -773,6 +812,7 @@ async function discoverDexScreenerMonadPools(cache: LSTArbitrageCache | undefine
       requestsThisScan,
       refreshedAssets,
       cachedAssets,
+      blockedUntil: null,
       errors: errors.length ? [...new Set(errors)] : undefined,
       availableDexes: [...new Set([...deduped.values()].map(pool => String(pool?.__dexMeta?.id ?? "").toLowerCase()).filter(Boolean))].sort()
     }

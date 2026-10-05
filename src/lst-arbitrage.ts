@@ -127,6 +127,47 @@ const V4_QUOTER_ABI = parseAbi([
   "function quoteExactInputSingle((address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks) poolKey,bool zeroForOne,uint128 exactAmount,bytes hookData) returns (uint256 amountOut,uint256 gasEstimate)"
 ]);
 
+const QUOTER_V2_ABI = parseAbi([
+  "function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96) params) returns (uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)"
+]);
+
+const UNISWAP_V3_POOL_ABI = parseAbi([
+  "function fee() view returns (uint24)"
+]);
+
+const CURVE_POOL_ABI = parseAbi([
+  "function get_dy(int128 i,int128 j,uint256 dx) view returns (uint256)"
+]);
+
+const NADFUN_LENS_ABI = parseAbi([
+  "function getAmountOut(address token,uint256 amountIn,bool isBuy) view returns (address router,uint256 amountOut)"
+]);
+
+export type LSTArbitrageCache = {
+  get(key: string): Promise<string | undefined>;
+  put(key: string, value: string): Promise<void>;
+};
+
+const POOL_CACHE_TTL_MS = 5 * 60_000;
+const PROVIDER_RETRY_FLOOR_MS = 60_000;
+const PROVIDER_ATTEMPT_COOLDOWN_MS = 60_000;
+const CACHE_KEY_PREFIX = "lst-arb:gecko";
+
+class GeckoHttpError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly retryAfterMs: number | null,
+    message: string
+  ) {
+    super(message);
+    this.name = "GeckoHttpError";
+  }
+}
+
+
+
+
+
 export type ArbitrageAsset = {
   symbol: string;
   address: string;

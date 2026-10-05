@@ -113,7 +113,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-universal-token-discovery-v15-2026-10-05";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-universal-token-discovery-v16-2026-10-05";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KYBER_BASE_URL = "https://aggregator-api.kyberswap.com";
@@ -504,7 +504,7 @@ async function discoverDexPaprikaMonadPools(
 
   const headers: Record<string, string> = {
     accept: "application/json",
-    "user-agent": "geld-arbitrage/2.0"
+    "user-agent": "geld-arbitrage/2.1"
   };
   if (apiKey) headers.authorization = apiKey;
 
@@ -518,11 +518,11 @@ async function discoverDexPaprikaMonadPools(
   const pageRows: any[] = [];
   let nextCursor = "";
 
-  // Network-wide, cursor-paginated discovery. Four 100-row pages covers the
-  // current Monad pool universe with headroom and is edge-cached between scans.
+  // Primary network-wide index. Four 100-row cursor pages provide broad coverage
+  // without consuming the entire Worker subrequest budget.
   for (let page = 0; page < 4; page++) {
     const cacheKey =
-      DEXPAPRIKA_CACHE_PREFIX + ":network-pools:page:" + page + ":v4";
+      DEXPAPRIKA_CACHE_PREFIX + ":network-pools:page:" + page + ":v5";
     let pageData: any = null;
     const cached = await readEdgeCache<any>(cacheKey);
 
@@ -578,57 +578,32 @@ async function discoverDexPaprikaMonadPools(
     nextCursor = pageData.next_cursor;
   }
 
-  if (!pageRows.length) {
-    const fallback = await discoverDexScreenerMonadPools(
-      cache,
-      Math.max(0, 4 - requestsThisScan),
-      discoveredAssets
-    );
+  // Always augment the primary index with a dynamic token-address frontier.
+  // Newly discovered addresses are queued and can be batched (up to 30/request)
+  // so the dashboard is not limited to the static seed list.
+  const remainingDiscoveryBudget = Math.max(0, 8 - requestsThisScan);
+  const frontier = remainingDiscoveryBudget > 0
+    ? await discoverDexScreenerMonadPools(cache, remainingDiscoveryBudget, discoveredAssets)
+    : {
+        pools: [] as any[],
+        assets: [...discoveredAssets.values()],
+        provider: {
+          source: "dexscreener-frontier",
+          network: "monad",
+          requestsThisScan: 0,
+          refreshedAssets: [] as string[],
+          cachedAssets: [] as string[],
+          blockedUntil: null as number | null,
+          errors: undefined as string[] | undefined,
+          availableDexes: [] as string[]
+        }
+      };
 
-    for (const asset of fallback.assets ?? []) {
-      discoveredAssets.set(asset.address.toLowerCase(), asset);
-    }
-
-    return {
-      pools: dedupePoolRecords(fallback.pools ?? []),
-      assets: [...discoveredAssets.values()],
-      provider: {
-        source: "dexpaprika",
-        network: DEXPAPRIKA_NETWORK,
-        requestsThisScan: requestsThisScan + Number(fallback.provider?.requestsThisScan ?? 0),
-        assetQueries: 0,
-        assetLimit: Number(discoveredAssets.size),
-        refreshedAssets: [],
-        cachedAssets: ["NETWORK_PAGES:" + cachedPages],
-        pageCount: 0,
-        pagesFetched,
-        cachedPages,
-        blockedUntil: blockedUntil > now ? blockedUntil : null,
-        cacheTtlMs: DEXPAPRIKA_CACHE_TTL_MS,
-        availableDexes: [...new Set(
-          (fallback.pools ?? [])
-            .map((pool: any) => String(pool?.__dexMeta?.id ?? "").toLowerCase())
-            .filter(Boolean)
-        )].sort(),
-        fallbackUsed: true,
-        fallbackSource: fallback.provider?.source,
-        fallbackRequestsThisScan: Number(fallback.provider?.requestsThisScan ?? 0),
-        fallbackRefreshedAssets: fallback.provider?.refreshedAssets ?? [],
-        fallbackCachedAssets: fallback.provider?.cachedAssets ?? [],
-        fallbackAvailableDexes: fallback.provider?.availableDexes ?? [],
-        fallbackErrors: fallback.provider?.errors,
-        errors: errors.length
-          ? [...new Set(errors.concat(fallback.provider?.errors ?? []))]
-          : fallback.provider?.errors,
-        note:
-          "Network-wide discovery includes all indexed DEXes and dynamically discovered tokens. " +
-          "Fallback discovery is bounded and discovery-only; exact on-chain quotes remain the profitability gate."
-      }
-    };
+  for (const asset of frontier.assets ?? []) {
+    discoveredAssets.set(asset.address.toLowerCase(), asset);
   }
 
-  const deduped = new Map<string, any>();
-
+  const parsedDexPaprika = new Map<string, any>();
   for (const row of pageRows) {
     const tokens = Array.isArray(row?.tokens) ? row.tokens.slice(0, 2) : [];
     if (tokens.length < 2) continue;
@@ -643,15 +618,12 @@ async function discoverDexPaprikaMonadPools(
 
     const baseMeta = tokens[0] ?? {};
     const quoteMeta = tokens[1] ?? {};
-
-    const baseKnown = knownAssets.get(token0);
-    const quoteKnown = knownAssets.get(token1);
-    const baseAsset = baseKnown ?? {
+    const baseAsset = knownAssets.get(token0) ?? discoveredAssets.get(token0) ?? {
       symbol: tokenSymbol(baseMeta, "TKN_" + token0.slice(2, 8).toUpperCase()),
       address: token0,
       decimals: tokenDecimals(baseMeta, 18)
     };
-    const quoteAsset = quoteKnown ?? {
+    const quoteAsset = knownAssets.get(token1) ?? discoveredAssets.get(token1) ?? {
       symbol: tokenSymbol(quoteMeta, "TKN_" + token1.slice(2, 8).toUpperCase()),
       address: token1,
       decimals: tokenDecimals(quoteMeta, 18)
@@ -670,12 +642,12 @@ async function discoverDexPaprikaMonadPools(
     const poolAddress = poolIdentifier(row?.id);
     if (!poolAddress) continue;
 
-    const baseToQuoteCandidate =
+    const baseToQuote =
       num(row?.base_token_price_quote_token) ||
       num(row?.last_price) ||
       1;
 
-    deduped.set(poolAddress.toLowerCase(), {
+    parsedDexPaprika.set(poolAddress.toLowerCase(), {
       id: String(row?.id ?? poolAddress),
       attributes: {
         address: poolAddress,
@@ -683,7 +655,7 @@ async function discoverDexPaprikaMonadPools(
           tokenSymbol(baseMeta, baseAsset.symbol) + "/" +
           tokenSymbol(quoteMeta, quoteAsset.symbol) + " " +
           String(row?.dex_name ?? row?.dex_id ?? "dex"),
-        base_token_price_quote_token: String(baseToQuoteCandidate),
+        base_token_price_quote_token: String(baseToQuote),
         pool_fee_percentage: num(row?.fee),
         reserve_in_usd: num(row?.liquidity_usd),
         volume_usd: { h24: num(row?.volume_usd_24h) },
@@ -716,44 +688,58 @@ async function discoverDexPaprikaMonadPools(
     });
   }
 
-  const finalPools = [...deduped.values()];
+  const combinedPools = dedupePoolRecords([
+    ...parsedDexPaprika.values(),
+    ...(frontier.pools ?? [])
+  ]);
+  const combinedDexes = [...new Set(
+    combinedPools
+      .map(pool => String(pool?.__dexMeta?.id ?? "").toLowerCase())
+      .filter(Boolean)
+  )].sort();
+
   return {
-    pools: finalPools,
+    pools: combinedPools,
     assets: [...discoveredAssets.values()],
     provider: {
-      source: "dexpaprika",
+      source: "dexpaprika+dexscreener",
       network: DEXPAPRIKA_NETWORK,
-      requestsThisScan,
+      requestsThisScan:
+        requestsThisScan + Number(frontier.provider?.requestsThisScan ?? 0),
       assetQueries: 0,
       assetLimit: Number(discoveredAssets.size),
-      refreshedAssets: pagesFetched > 0 ? ["NETWORK"] : [],
-      cachedAssets: ["NETWORK_PAGES:" + cachedPages],
+      refreshedAssets: [
+        ...(pagesFetched > 0 ? ["NETWORK"] : []),
+        ...(frontier.provider?.refreshedAssets ?? [])
+      ],
+      cachedAssets: [
+        "NETWORK_PAGES:" + cachedPages,
+        ...(frontier.provider?.cachedAssets ?? [])
+      ],
       pageCount: pageRows.length,
       pagesFetched,
       cachedPages,
       blockedUntil: blockedUntil > now ? blockedUntil : null,
       cacheTtlMs: DEXPAPRIKA_CACHE_TTL_MS,
-      availableDexes: [...new Set(
-        finalPools
-          .map(pool => String(pool?.__dexMeta?.id ?? "").toLowerCase())
-          .filter(Boolean)
-      )].sort(),
-      fallbackUsed: false,
-      fallbackSource: undefined as string | undefined,
-      fallbackRequestsThisScan: 0,
-      fallbackRefreshedAssets: [] as string[],
-      fallbackCachedAssets: [] as string[],
-      fallbackAvailableDexes: [] as string[],
-      fallbackErrors: undefined as string[] | undefined,
-      errors: errors.length ? [...new Set(errors)] : undefined,
+      availableDexes: combinedDexes,
+      fallbackUsed:
+        Number(frontier.provider?.requestsThisScan ?? 0) > 0 ||
+        (frontier.pools?.length ?? 0) > 0,
+      fallbackSource: frontier.provider?.source,
+      fallbackRequestsThisScan: Number(frontier.provider?.requestsThisScan ?? 0),
+      fallbackRefreshedAssets: frontier.provider?.refreshedAssets ?? [],
+      fallbackCachedAssets: frontier.provider?.cachedAssets ?? [],
+      fallbackAvailableDexes: frontier.provider?.availableDexes ?? [],
+      fallbackErrors: frontier.provider?.errors,
+      errors: errors.length
+        ? [...new Set(errors.concat(frontier.provider?.errors ?? []))]
+        : frontier.provider?.errors,
       note:
-        "All indexed Monad pool pages are scanned across all DEXes. Every token found in those " +
-        "pools enters the discovery universe, including thin pools. Exact route probes additionally " +
-        "require the configured minimum liquidity, and exact on-chain quotes decide profitability."
+        "Network discovery combines the indexed Monad pool universe with a batched DexScreener token frontier. " +
+        "Every token found in either source enters the dynamic universe; exact on-chain quotes remain the profitability gate."
     }
   };
 }
-
 function dedupePoolRecords(pools: any[]) {
   const deduped = new Map<string, any>();
   for (const pool of pools) {
@@ -779,7 +765,10 @@ async function discoverDexScreenerMonadPools(
   const cachedAssets: string[] = [];
   const errors: string[] = [];
   const now = Date.now();
-  const universe = [...assets.values()];
+  const queue = [...assets.keys()].map(address => address.toLowerCase());
+  const queued = new Set(queue);
+  const queried = new Set<string>();
+  let requestsThisScan = 0;
 
   const blockedEntry = await readCache<number>(cache, DEXSCREENER_BLOCK_KEY);
   const persistedBlockedUntil = Number(blockedEntry?.data ?? 0);
@@ -788,7 +777,7 @@ async function discoverDexScreenerMonadPools(
       pools: [],
       assets: [...assets.values()],
       provider: {
-        source: "dexscreener-fallback",
+        source: "dexscreener-frontier",
         network: "monad",
         requestsThisScan: 0,
         refreshedAssets,
@@ -800,47 +789,50 @@ async function discoverDexScreenerMonadPools(
     };
   }
 
-  let requestsThisScan = 0;
-  for (const asset of universe) {
-    if (requestsThisScan >= maxRequests) break;
+  // DEX Screener accepts up to 30 token addresses in the multi-token endpoint.
+  // A batch is therefore much more efficient than one HTTP request per token.
+  const MAX_BATCH_TOKENS = 30;
+
+  while (requestsThisScan < Math.max(0, Math.floor(maxRequests)) && queue.length > 0) {
+    const batch: string[] = [];
+
+    while (batch.length < MAX_BATCH_TOKENS && queue.length > 0) {
+      const candidate = queue.shift();
+      if (!candidate || queried.has(candidate)) continue;
+      queried.add(candidate);
+      batch.push(candidate);
+    }
+    if (!batch.length) continue;
 
     const cacheKey =
-      "lst-arb:dexscreener:pairs:" + asset.address.toLowerCase() + ":v3";
+      "lst-arb:dexscreener:tokens:" + batch.join(",") + ":v4";
     let rows: any[] = [];
-    const cached = await readCache<any[]>(cache, cacheKey);
 
-    if (cached && now - cached.fetchedAt < DEXSCREENER_CACHE_TTL_MS) {
-      rows = cached.data ?? [];
-      cachedAssets.push(asset.symbol);
-    } else {
-      try {
-        const result = await fetchProviderJson<any[]>(
-          cacheKey,
-          DEXSCREENER_BASE_URL + "/token-pairs/v1/monad/" + asset.address,
-          { accept: "application/json", "user-agent": "geld-arbitrage/2.0" },
-          DEXSCREENER_CACHE_TTL_MS
-        );
-        rows = Array.isArray(result.data) ? result.data : [];
-        if (!result.fromCache) {
-          requestsThisScan++;
-          refreshedAssets.push(asset.symbol);
-        } else {
-          cachedAssets.push(asset.symbol);
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        errors.push(message);
-        const status = Number(message.match(/HTTP (\\d+)/)?.[1] ?? 0);
-        if (status === 402 || status === 429) {
-          const retryUntil = now + PROVIDER_COOLDOWN_MS;
-          await writeCache(cache, DEXSCREENER_BLOCK_KEY, retryUntil, now);
-          break;
-        }
-        if (cached?.data?.length) {
-          rows = cached.data;
-          cachedAssets.push(asset.symbol);
-        }
+    try {
+      const result = await fetchProviderJson<any[]>(
+        cacheKey,
+        DEXSCREENER_BASE_URL + "/tokens/v1/monad/" + batch.join(","),
+        { accept: "application/json", "user-agent": "geld-arbitrage/2.1" },
+        DEXSCREENER_CACHE_TTL_MS
+      );
+
+      rows = Array.isArray(result.data) ? result.data : [];
+      if (!result.fromCache) {
+        requestsThisScan++;
+        refreshedAssets.push(...batch);
+      } else {
+        cachedAssets.push(...batch);
       }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      errors.push(message);
+      const status = Number(message.match(/HTTP (\\d+)/)?.[1] ?? 0);
+      if (status === 402 || status === 429) {
+        const retryUntil = now + PROVIDER_COOLDOWN_MS;
+        await writeCache(cache, DEXSCREENER_BLOCK_KEY, retryUntil, now);
+        break;
+      }
+      continue;
     }
 
     for (const row of rows) {
@@ -858,17 +850,27 @@ async function discoverDexScreenerMonadPools(
         address: quote,
         decimals: Number(row?.quoteToken?.decimals ?? 18)
       };
-      assets.set(base, baseAsset);
-      assets.set(quote, quoteAsset);
 
-      const priceNative = num(row?.priceNative);
-      const baseToQuote = priceNative > 0 ? priceNative : 1;
-      const baseUsd = num(row?.priceUsd);
+      if (!assets.has(base)) {
+        assets.set(base, baseAsset);
+        if (!queried.has(base) && !queued.has(base)) {
+          queue.push(base);
+          queued.add(base);
+        }
+      }
+      if (!assets.has(quote)) {
+        assets.set(quote, quoteAsset);
+        if (!queried.has(quote) && !queued.has(quote)) {
+          queue.push(quote);
+          queued.add(quote);
+        }
+      }
 
       const dex = String(row?.dexId ?? "").toLowerCase();
       const labels = Array.isArray(row?.labels)
         ? row.labels.map((x: unknown) => String(x).toLowerCase())
         : [];
+
       let quoteKind: QuoteKind = "unsupported";
       if (dex === "uniswap" && labels.includes("v3")) quoteKind = "uniswap-v3";
       else if (dex === "uniswap" && labels.includes("v2")) quoteKind = "uniswap-v2";
@@ -877,6 +879,10 @@ async function discoverDexScreenerMonadPools(
 
       const poolAddress = addr(row?.pairAddress);
       if (!poolAddress) continue;
+
+      const priceNative = num(row?.priceNative);
+      const baseToQuote = priceNative > 0 ? priceNative : 1;
+      const baseUsd = num(row?.priceUsd);
 
       pools.push({
         id: poolAddress,
@@ -922,7 +928,7 @@ async function discoverDexScreenerMonadPools(
     pools: deduped,
     assets: [...assets.values()],
     provider: {
-      source: "dexscreener-fallback",
+      source: "dexscreener-frontier",
       network: "monad",
       requestsThisScan,
       refreshedAssets,
@@ -971,8 +977,44 @@ async function discoverKuruMarkets(
     for (const market of rows) {
       if (String(market?.status ?? "").toUpperCase() !== "TRADING") continue;
 
-      const baseAsset = kuruAssetBySymbol(String(market?.baseAsset ?? ""), assets);
-      const quoteAsset = kuruAssetBySymbol(String(market?.quoteAsset ?? ""), assets);
+      const baseAddress = normalizeAssetAddress(
+        market?.baseAssetAddress ??
+        market?.baseTokenAddress ??
+        market?.baseAddress ??
+        ""
+      );
+      const quoteAddress = normalizeAssetAddress(
+        market?.quoteAssetAddress ??
+        market?.quoteTokenAddress ??
+        market?.quoteAddress ??
+        ""
+      );
+      const baseSymbol = String(market?.baseAsset ?? "").trim() || "TKN_" + baseAddress.slice(2, 8).toUpperCase();
+      const quoteSymbol = String(market?.quoteAsset ?? "").trim() || "TKN_" + quoteAddress.slice(2, 8).toUpperCase();
+
+      const baseAsset =
+        (baseAddress && assets.get(baseAddress)) ??
+        (baseAddress
+          ? {
+              symbol: baseSymbol.toUpperCase() === "MON" ? "WMON" : baseSymbol,
+              address: baseAddress,
+              decimals: Number(market?.baseAssetDecimals ?? 18)
+            }
+          : kuruAssetBySymbol(baseSymbol, assets));
+
+      const quoteAsset =
+        (quoteAddress && assets.get(quoteAddress)) ??
+        (quoteAddress
+          ? {
+              symbol: quoteSymbol.toUpperCase() === "MON" ? "WMON" : quoteSymbol,
+              address: quoteAddress,
+              decimals: Number(market?.quoteAssetDecimals ?? 18)
+            }
+          : kuruAssetBySymbol(quoteSymbol, assets));
+
+      if (baseAsset) assets.set(baseAsset.address.toLowerCase(), baseAsset);
+      if (quoteAsset) assets.set(quoteAsset.address.toLowerCase(), quoteAsset);
+
       const marketAddress = addr(market?.marketAddress);
 
       if (!baseAsset || !quoteAsset || !marketAddress || baseAsset.address.toLowerCase() === quoteAsset.address.toLowerCase()) {
@@ -1330,9 +1372,16 @@ function buildArbitragePotentialTokens(
   ]);
 
   for (const pool of pools) {
+    const derivedQuotePrice =
+      Number.isFinite(pool.priceUsd) &&
+      pool.priceUsd > 0 &&
+      pool.baseToQuote > 0
+        ? pool.priceUsd / pool.baseToQuote
+        : undefined;
+
     const tokenEntries = [
       { address: pool.base, price: pool.priceUsd },
-      { address: pool.quote, price: undefined as number | undefined }
+      { address: pool.quote, price: derivedQuotePrice }
     ];
 
     for (const entry of tokenEntries) {

@@ -75,11 +75,20 @@ export const EXECUTION_BUFFER_PCT = 0.20;
 export const MIN_NET_PROFIT_MON = 0.005;
 export const GAS_BUFFER_MON = 0.001;
 export const TRADE_SIZES_MON = [1, 5, 10];
-export const MAX_EXACT_ROUTES = 3;
+export const MAX_EXACT_ROUTES = 6;
 export const MAX_REFINED_ROUTES = 1;
 export const PROBE_SIZE_MON = 1;
 const EXECUTION_BUFFER_BPS = Math.round(EXECUTION_BUFFER_PCT * 100);
 const DEXPAPRIKA_POOLS_URL = "https://api.dexpaprika.com/networks/monad/pools/search";
+const DEXPAPRIKA_DEXES_URL = "https://api.dexpaprika.com/networks/monad/dexes";
+const DEXPAPRIKA_DEX_CACHE_TTL_MS = 15 * 60_000;
+const DEXPAPRIKA_MAX_POOL_PAGES = 4;
+const FREE_EXTERNAL_SUBREQUEST_LIMIT = 50;
+const PLANNED_DISCOVERY_REQUESTS = 1 + DEXPAPRIKA_MAX_POOL_PAGES;
+const PLANNED_EXACT_REQUESTS =
+  MAX_EXACT_ROUTES * 3 * 2 + TRADE_SIZES_MON.length;
+const PLANNED_WORST_CASE_EXTERNAL_REQUESTS =
+  PLANNED_DISCOVERY_REQUESTS + PLANNED_EXACT_REQUESTS;
 const PANCAKE_V3_QUOTER_V2 = "0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997" as Address;
 const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
@@ -193,7 +202,8 @@ export type ArbitrageSignal = {
     dex: string;
     quoteKind: QuoteKind;
     feePct: number;
-    feeBps: number;
+    feeBps: number | null;
+    feeSource?: string;
     curveI: number | null;
     curveJ: number | null;
     amountInRaw: string;
@@ -272,134 +282,253 @@ function normalizeAssetAddress(value: unknown) {
 
 
 async function discoverDexPaprikaPools(cache?: LSTArbitrageCache) {
-  // Use the network-wide index as the Worker-safe discovery path. It is
-  // paginated and does not require one subrequest per DEX.
-  const key = "lst-arb:dexpaprika:pools:v6";
-  const legacyKey = "lst-arb:dexpaprika:pools:v4";
+  const poolKey = "lst-arb:dexpaprika:pools:v7";
+  const lastGoodPoolKey = "lst-arb:dexpaprika:pools:last-good:v7";
+  const dexKey = "lst-arb:dexpaprika:dexes:v1";
+  const lastGoodDexKey = "lst-arb:dexpaprika:dexes:last-good:v1";
   const now = Date.now();
-  const cached = await readCache<any[]>(cache, key);
-  const legacyCached = cached ? null : await readCache<any[]>(cache, legacyKey);
 
-  if (cached && now - cached.fetchedAt < DEXPAPRIKA_CACHE_TTL_MS) {
-    return {
-      pools: cached.data,
-      provider: {
-        name: "DexPaprika network-wide paginated discovery",
-        requestsThisScan: 0,
-        cached: true,
-        fetchedAt: cached.fetchedAt,
-        queryMode: "network_wide_paginated",
-        poolCount: cached.data.length
-      }
-    };
-  }
+  const [cachedPools, lastGoodPools, cachedDexes, lastGoodDexes] =
+    await Promise.all([
+      readCache<any[]>(cache, poolKey),
+      readCache<any[]>(cache, lastGoodPoolKey),
+      readCache<any[]>(cache, dexKey),
+      readCache<any[]>(cache, lastGoodDexKey)
+    ]);
 
-  const deduped = new Map<string, any>();
-  const errors: string[] = [];
-  let requestsThisScan = 0;
+  let poolRequestsThisScan = 0;
+  let inventoryRequestsThisScan = 0;
+  let pools: any[] = [];
+  let stale = false;
+  let staleFrom: number | null = null;
   let truncated = false;
+  const errors: string[] = [];
 
-  async function fetchPoolPage(params: Record<string, string>) {
-    const url = new URL(DEXPAPRIKA_POOLS_URL);
-    for (const [name, value] of Object.entries(params)) {
-      if (value) url.searchParams.set(name, value);
-    }
-    // Avoid an HTTP-200 empty edge-cache response persisting as the market
-    // topology for the full provider cache window.
-    url.searchParams.set(
-      "_geld_cache_bust",
-      String(Math.floor(now / DEXPAPRIKA_CACHE_TTL_MS))
-    );
-
-    const response = await fetch(url.toString(), {
-      headers: {
-        accept: "application/json",
-        "user-agent": "geld-lst-arbitrage/1.0",
-        "cache-control": "no-cache",
-        pragma: "no-cache"
-      }
-    });
-    requestsThisScan++;
-
-    if (!response.ok) {
-      throw new Error("DexPaprika HTTP " + response.status);
-    }
-
-    return response.json() as Promise<any>;
-  }
-
-  try {
-    let cursor = "";
-    for (let page = 1; page <= 4; page++) {
-      const json = await fetchPoolPage({
-        order_by: "volume_usd_24h",
-        sort: "desc",
-        limit: "100",
-        ...(cursor ? { cursor } : {})
-      });
-
-      const rows = Array.isArray(json?.results) ? json.results : [];
-      for (const pool of rows) {
-        const id = String(pool?.id ?? "");
-        if (id) deduped.set(id.toLowerCase(), pool);
-      }
-
-      if (!json?.has_next_page) break;
-      const nextCursor = String(json?.next_cursor ?? "");
-      if (!nextCursor || nextCursor === cursor) {
-        truncated = true;
-        break;
-      }
-      cursor = nextCursor;
-      if (page === 4) truncated = true;
-    }
-  } catch (error) {
-    errors.push(error instanceof Error ? error.message : String(error));
-  }
-
-  let pools = [...deduped.values()];
-  let usedStaleFallback = false;
-
-  // During provider incidents the API can return an HTTP-success response
-  // with an empty result set. Keep the previous known-good topology rather
-  // than collapsing back to only the three hard-coded pools.
   if (
-    pools.length === 0 &&
-    legacyCached?.data?.length &&
-    legacyCached.data.length > 0
+    cachedPools &&
+    now - cachedPools.fetchedAt < DEXPAPRIKA_CACHE_TTL_MS
   ) {
-    pools = legacyCached.data;
-    usedStaleFallback = true;
+    pools = cachedPools.data;
+  } else {
+    const deduped = new Map<string, any>();
+
+    try {
+      let cursor = "";
+      for (
+        let page = 1;
+        page <= DEXPAPRIKA_MAX_POOL_PAGES;
+        page++
+      ) {
+        const url = new URL(DEXPAPRIKA_POOLS_URL);
+        url.searchParams.set("order_by", "volume_usd_24h");
+        url.searchParams.set("sort", "desc");
+        url.searchParams.set("limit", "100");
+        if (cursor) url.searchParams.set("cursor", cursor);
+        url.searchParams.set(
+          "_geld_cache_bust",
+          String(Math.floor(now / DEXPAPRIKA_CACHE_TTL_MS))
+        );
+
+        const response = await fetch(url.toString(), {
+          headers: {
+            accept: "application/json",
+            "user-agent": "geld-lst-arbitrage/1.0",
+            "cache-control": "no-cache",
+            pragma: "no-cache"
+          }
+        });
+        poolRequestsThisScan++;
+
+        if (!response.ok) {
+          throw new Error("DexPaprika pool HTTP " + response.status);
+        }
+
+        const json = await response.json() as any;
+        const rows = Array.isArray(json?.results)
+          ? json.results
+          : [];
+
+        for (const pool of rows) {
+          const id = String(pool?.id ?? "");
+          if (id) deduped.set(id.toLowerCase(), pool);
+        }
+
+        if (!json?.has_next_page) break;
+
+        const nextCursor = String(json?.next_cursor ?? "");
+        if (!nextCursor || nextCursor === cursor) {
+          truncated = true;
+          break;
+        }
+
+        cursor = nextCursor;
+
+        if (page === DEXPAPRIKA_MAX_POOL_PAGES) {
+          truncated = true;
+        }
+      }
+
+      if (deduped.size === 0) {
+        throw new Error("DexPaprika returned an empty pool set");
+      }
+
+      pools = [...deduped.values()];
+      await writeCache(cache, poolKey, pools, now);
+      await writeCache(cache, lastGoodPoolKey, pools, now);
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+
+      const fallback = lastGoodPools?.data?.length
+        ? lastGoodPools
+        : cachedPools;
+
+      if (fallback?.data?.length) {
+        pools = fallback.data;
+        stale = true;
+        staleFrom = fallback.fetchedAt;
+      }
+    }
   }
 
-  if (deduped.size > 0) {
-    await writeCache(cache, key, pools, now);
+  let dexInventory: any[] = [];
+  let inventoryCached = false;
+  let inventoryStale = false;
+  let inventoryStaleFrom: number | null = null;
+
+  if (
+    cachedDexes &&
+    now - cachedDexes.fetchedAt < DEXPAPRIKA_DEX_CACHE_TTL_MS
+  ) {
+    dexInventory = cachedDexes.data;
+    inventoryCached = true;
+  } else {
+    try {
+      const response = await fetch(
+        `${DEXPAPRIKA_DEXES_URL}?_geld_cache_bust=${Math.floor(
+          now / DEXPAPRIKA_DEX_CACHE_TTL_MS
+        )}`,
+        {
+          headers: {
+            accept: "application/json",
+            "user-agent": "geld-lst-arbitrage/1.0",
+            "cache-control": "no-cache",
+            pragma: "no-cache"
+          }
+        }
+      );
+      inventoryRequestsThisScan++;
+
+      if (!response.ok) {
+        throw new Error(
+          "DexPaprika DEX inventory HTTP " + response.status
+        );
+      }
+
+      const json = await response.json() as any;
+      dexInventory = Array.isArray(json?.dexes)
+        ? json.dexes
+        : [];
+
+      if (dexInventory.length === 0) {
+        throw new Error(
+          "DexPaprika returned an empty DEX inventory"
+        );
+      }
+
+      await writeCache(cache, dexKey, dexInventory, now);
+      await writeCache(cache, lastGoodDexKey, dexInventory, now);
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+
+      const fallback = lastGoodDexes?.data?.length
+        ? lastGoodDexes
+        : cachedDexes;
+
+      if (fallback?.data?.length) {
+        dexInventory = fallback.data;
+        inventoryStale = true;
+        inventoryStaleFrom = fallback.fetchedAt;
+      }
+    }
   }
 
-  const provider: Record<string, unknown> = {
-    name: "DexPaprika network-wide paginated discovery",
-    requestsThisScan,
-    cached: false,
-    fetchedAt: now,
-    queryMode: "network_wide_paginated",
-    poolCount: pools.length,
-    truncated,
-    pageSize: 100,
-    externalMarketDataRequired: false,
-    staleFallbackUsed: usedStaleFallback
+  const rawObservedDexes = [
+    ...new Set(
+      pools
+        .map(pool => String(pool?.dex_id ?? "").toLowerCase())
+        .filter(Boolean)
+    )
+  ].sort();
+
+  const availableDexes = dexInventory
+    .map(dex => ({
+      dexId: String(dex?.dex_id ?? "").toLowerCase(),
+      dexName: String(
+        dex?.dex_name ?? dex?.dex_id ?? "unknown"
+      ),
+      protocol: String(dex?.protocol ?? ""),
+      poolsCount: num(dex?.pools_count),
+      volume24hUsd: num(dex?.volume_usd_24h)
+    }))
+    .filter((dex: any) => Boolean(dex.dexId));
+
+  const inventoryDexIds = availableDexes.map(
+    (dex: any) => dex.dexId
+  );
+
+  const missingDexes = inventoryDexIds.filter(
+    (dexId: string) => !rawObservedDexes.includes(dexId)
+  );
+
+  const dexCoverageComplete =
+    availableDexes.length > 0 &&
+    !truncated &&
+    missingDexes.length === 0;
+
+  return {
+    pools,
+    provider: {
+      name: "DexPaprika network-wide paginated discovery",
+      requestsThisScan:
+        poolRequestsThisScan + inventoryRequestsThisScan,
+      poolRequestsThisScan,
+      inventoryRequestsThisScan,
+      cached: Boolean(
+        cachedPools &&
+        now - cachedPools.fetchedAt < DEXPAPRIKA_CACHE_TTL_MS
+      ),
+      stale,
+      staleFrom,
+      staleAgeMs: staleFrom
+        ? Math.max(0, now - staleFrom)
+        : 0,
+      queryMode: "network_wide_paginated",
+      poolCount: pools.length,
+      truncated,
+      maxPoolPages: DEXPAPRIKA_MAX_POOL_PAGES,
+      externalMarketDataRequired: false,
+      availableDexes,
+      inventoryCached,
+      inventoryStale,
+      inventoryStaleFrom,
+      inventoryPoolCount: availableDexes.reduce(
+        (sum: number, dex: any) => sum + dex.poolsCount,
+        0
+      ),
+      rawObservedDexes,
+      missingDexes,
+      dexCoverageComplete,
+      errors: errors.length ? errors : undefined,
+      note: dexCoverageComplete
+        ? "DEX inventory and paginated pool discovery agree on current Monad DEX coverage."
+        : missingDexes.length
+          ? "Some inventory DEXes were not present in the fetched pool pages: " +
+            missingDexes.join(", ") + "."
+          : "DEX inventory or pool discovery is stale/incomplete; exact profitability remains gated by on-chain quotes."
+    }
   };
-
-  if (errors.length > 0) provider.errors = errors;
-  if (usedStaleFallback) {
-    provider.stale = true;
-    provider.staleFrom = legacyCached?.fetchedAt ?? null;
-  }
-  if (pools.length === 0) {
-    provider.note = "DexPaprika returned no pools; scanner will retain only configured known pools.";
-  }
-
-  return { pools, provider };
 }
+
 function parseDexPaprikaPool(record: any, assets: Map<string, ArbitrageAsset>): PoolRecord | null {
   const tokens = Array.isArray(record?.tokens) ? record.tokens : [];
   const firstRaw = tokens[0];
@@ -1100,7 +1229,13 @@ async function quoteExactEdge(
     tickSpacing: number;
     hooks: string;
   } | null>
-): Promise<{ amountOut: bigint; gasEstimate?: bigint } | null> {
+): Promise<{
+  amountOut: bigint;
+  gasEstimate?: bigint;
+  feeBps?: number | null;
+  feePct?: number | null;
+  feeSource?: string;
+} | null> {
   if (edge.quoteKind === "curve-lst") {
     const indexByAddress: Record<string, number> = {
       "0x3bd359c1119da7da1d913d1c4d2b7c461115433a": 0,
@@ -1112,7 +1247,12 @@ async function quoteExactEdge(
     const j = indexByAddress[edge.to];
     if (i === undefined || j === undefined || i === j) return null;
     const amountOut = await client.readContract({ address: CURVE_LST_POOL, abi: CURVE_POOL_ABI, functionName: "get_dy", args: [BigInt(i), BigInt(j), amountIn] });
-    return { amountOut };
+    return {
+      amountOut,
+      feeBps: null,
+      feePct: null,
+      feeSource: "curve_pool_quote"
+    };
   }
 
   if (edge.quoteKind === "uniswap-v4") {
@@ -1199,7 +1339,10 @@ async function quoteExactEdge(
     const values = result as readonly [bigint, bigint];
     return {
       amountOut: values[0],
-      gasEstimate: values[1]
+      gasEstimate: values[1],
+      feeBps: poolKey.fee / 100,
+      feePct: poolKey.fee / 10_000,
+      feeSource: "uniswap_v4_initialize_event"
     };
   }
 
@@ -1223,7 +1366,13 @@ async function quoteExactEdge(
       args: [{ tokenIn: edge.from as Address, tokenOut: edge.to as Address, amountIn, fee: feeBps, sqrtPriceLimitX96: 0n }]
     });
     const values = result as readonly [bigint, bigint, number, bigint];
-    return { amountOut: values[0], gasEstimate: values[3] };
+    return {
+      amountOut: values[0],
+      gasEstimate: values[3],
+      feeBps: feeBps / 100,
+      feePct: feeBps / 10_000,
+      feeSource: "pool.fee()"
+    };
   }
 
   if (edge.quoteKind === "uniswap-v2" || edge.quoteKind === "pancake-v2") {
@@ -1233,9 +1382,20 @@ async function quoteExactEdge(
     const [reserveIn, reserveOut] = edge.from.toLowerCase() === String(token0).toLowerCase() ? [reserve0, reserve1] : [reserve1, reserve0];
     if (reserveIn <= 0n || reserveOut <= 0n) return null;
     const feeBps = edge.quoteKind === "pancake-v2" ? 25n : 30n;
+    const feeBpsNumber = Number(feeBps);
     const amountInWithFee = amountIn * (10_000n - feeBps);
     const amountOut = amountInWithFee * reserveOut / (reserveIn * 10_000n + amountInWithFee);
-    return amountOut > 0n ? { amountOut } : null;
+    return amountOut > 0n
+      ? {
+          amountOut,
+          feeBps: feeBpsNumber,
+          feePct: feeBpsNumber / 100,
+          feeSource:
+            edge.quoteKind === "pancake-v2"
+              ? "pancakeswap_v2_default"
+              : "uniswap_v2_default"
+        }
+      : null;
   }
 
   if (edge.quoteKind === "kuru") {
@@ -1306,8 +1466,9 @@ async function simulateCycle(
         venue: leg.venue,
         dex: leg.dex,
         quoteKind: leg.quoteKind,
-        feePct: leg.feePct,
-        feeBps: Math.round(leg.feePct * 10_000),
+        feePct: quote.feePct ?? leg.feePct ?? null,
+        feeBps: quote.feeBps ?? null,
+        feeSource: quote.feeSource ?? "discovery_metadata",
         curveI: curveIndex[leg.from] ?? null,
         curveJ: curveIndex[leg.to] ?? null,
         amountInRaw: amount.toString(),
@@ -1453,19 +1614,56 @@ export async function scanLSTArbitrage(
     );
 
   const seenRouteKeys = new Set<string>();
-  const probeRoutes = allRoutes
-    .filter(route => {
-      const key = route.legs
-        .map((leg: PoolEdge) =>
-          leg.pool.toLowerCase()
-        )
-        .join("|");
+  const remainingRoutes = allRoutes.filter(route => {
+    const key = route.legs
+      .map((leg: PoolEdge) => leg.pool.toLowerCase())
+      .join("|");
 
-      if (seenRouteKeys.has(key)) return false;
-      seenRouteKeys.add(key);
-      return true;
-    })
-    .slice(0, MAX_EXACT_ROUTES);
+    if (seenRouteKeys.has(key)) return false;
+    seenRouteKeys.add(key);
+    return true;
+  });
+
+  const probeRoutes: any[] = [];
+  const coveredProbeDexes = new Set<string>();
+
+  while (
+    probeRoutes.length < MAX_EXACT_ROUTES &&
+    remainingRoutes.length > 0
+  ) {
+    let bestIndex = 0;
+    let bestScore = -Infinity;
+
+    for (let index = 0; index < remainingRoutes.length; index++) {
+      const route = remainingRoutes[index];
+      const routeDexes = new Set(
+        route.legs.map((leg: PoolEdge) =>
+          leg.dex.toLowerCase()
+        )
+      );
+      const newDexCount = [
+        ...routeDexes
+      ].filter(dex => !coveredProbeDexes.has(dex)).length;
+
+      const score =
+        newDexCount * 1_000_000 +
+        route.distinctDexes * 10_000 +
+        route.distinctPools * 1_000 +
+        route.liquidityScore;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    }
+
+    const [selected] = remainingRoutes.splice(bestIndex, 1);
+    probeRoutes.push(selected);
+
+    for (const leg of selected.legs) {
+      coveredProbeDexes.add(leg.dex.toLowerCase());
+    }
+  }
 
   const client = createClient(rpcUrl);
   const kuruParamsCache = new Map<string, any>();
@@ -1601,6 +1799,7 @@ export async function scanLSTArbitrage(
           quoteKind: leg.quoteKind,
           feePct: leg.feePct,
           feeBps: leg.feeBps,
+          feeSource: leg.feeSource,
           curveI: leg.curveI,
           curveJ: leg.curveJ,
           amountInRaw: leg.amountInRaw,
@@ -1643,22 +1842,8 @@ export async function scanLSTArbitrage(
       probeSizeMon: PROBE_SIZE_MON
     },
     provider: {
-      name:
-        "DexPaprika network-wide paginated discovery",
-      requestsThisScan:
-        discovery.provider.requestsThisScan,
-      cached: discovery.provider.cached ?? false,
-      stale: discovery.provider.stale ?? false,
-      poolCount:
-        discovery.provider.poolCount ??
-        discovery.pools.length,
+      ...discovery.provider,
       parsedPoolCount: parsedPools.length,
-      truncated:
-        discovery.provider.truncated ?? false,
-      queryMode:
-        discovery.provider.queryMode ??
-        "network_wide_paginated",
-      externalMarketDataRequired: false,
       discoveredDexes: [
         ...new Set(pools.map(pool => pool.dex))
       ].sort(),
@@ -1680,16 +1865,35 @@ export async function scanLSTArbitrage(
             .map(pool => pool.dex)
         )
       ].sort(),
+      probeDexes: [...coveredProbeDexes].sort(),
       note:
-        "Routes are built from the network-wide indexed pool graph. " +
-        "Profitability is accepted only after exact sequential on-chain " +
+        "Routes are built from the complete paginated Monad pool graph. " +
+        "Exact profitability is accepted only after sequential on-chain " +
         "quotes, with each leg consuming the actual output of the prior leg."
+    },
+    externalRequestBudget: {
+      freeTierLimit: FREE_EXTERNAL_SUBREQUEST_LIMIT,
+      plannedDiscoveryRequests: PLANNED_DISCOVERY_REQUESTS,
+      plannedExactAndRefinementRequests: PLANNED_EXACT_REQUESTS,
+      plannedWorstCaseExternalRequests:
+        PLANNED_WORST_CASE_EXTERNAL_REQUESTS,
+      headroom:
+        FREE_EXTERNAL_SUBREQUEST_LIMIT -
+        PLANNED_WORST_CASE_EXTERNAL_REQUESTS
     },
     execution: {
       live: false,
+      attempted: false,
+      submitted: false,
       transactionsSubmitted: 0,
       reason:
         "Paper-only scanner. No transaction submission is performed."
+    },
+    executionPolicy: {
+      enabled: true,
+      liveExecutionEnabled: false,
+      requiresGlobalLiveTrading: true,
+      executorConfigured: false
     }
-  };
+
 }

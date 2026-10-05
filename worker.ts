@@ -1097,13 +1097,43 @@ export default {
       try {
         const runtime = await getRuntimeConfig(env);
         const targetParam = url.searchParams.get("target") ?? url.searchParams.get("token") ?? "";
-        const targetAsset = targetParam
-          ? (await import("./src/lst-arbitrage.js")).ARBITRAGE_ASSETS.find((asset: any) => asset.symbol.toLowerCase() === targetParam.toLowerCase() || asset.address.toLowerCase() === targetParam.toLowerCase())
-          : null;
-        const target = targetAsset;
-        return Response.json(target);
+        const targetAsset = ARBITRAGE_ASSETS.find(
+          (asset) =>
+            asset.symbol.toLowerCase() === targetParam.toLowerCase() ||
+            asset.address.toLowerCase() === targetParam.toLowerCase()
+        );
+        if (!targetAsset) {
+          return Response.json(
+            { ok: false, error: "Unknown target token", supported: ARBITRAGE_ASSETS.map((asset) => asset.symbol) },
+            { status: 400 }
+          );
+        }
+
+        const sizeMon = Number(url.searchParams.get("sizeMon") ?? "5");
+        if (!Number.isFinite(sizeMon) || sizeMon <= 0 || sizeMon > 10) {
+          return Response.json({ ok: false, error: "sizeMon must be > 0 and <= 10" }, { status: 400 });
+        }
+
+        const sender = url.searchParams.get("sender") ?? undefined;
+        const slippageBps = Number(url.searchParams.get("slippageBps") ?? "30");
+        if (!Number.isFinite(slippageBps) || slippageBps < 0 || slippageBps > 2000) {
+          return Response.json({ ok: false, error: "slippageBps must be between 0 and 2000" }, { status: 400 });
+        }
+
+        const result = await preflightKyberRoundTrip(
+          runtime.rpcUrl,
+          targetAsset.address,
+          sizeMon,
+          sender,
+          runtime.privateKey,
+          slippageBps
+        );
+        return Response.json(result, { headers: { "Cache-Control": "no-store" } });
       } catch (error) {
-        return Response.json({ ok: false, error: error instanceof Error ? error.message : String(error) }, { status: 503 });
+        return Response.json(
+          { ok: false, error: error instanceof Error ? error.message : String(error) },
+          { status: 503, headers: { "Cache-Control": "no-store" } }
+        );
       }
     }
 

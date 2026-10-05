@@ -29,6 +29,8 @@ export const GAS_BUFFER_MON = 0.001;
 export const TRADE_SIZES_MON = [1, 5, 10];
 export const MAX_EXACT_TRIANGLES = 3;
 const EXECUTION_BUFFER_BPS = Math.round(EXECUTION_BUFFER_PCT * 100);
+const DEXSCREENER_TOKEN_URL = "https://api.dexscreener.com/tokens/v1/monad";
+const DEXSCREENER_CACHE_TTL_MS = 60_000;
 
 export type LSTArbitrageCache = {
   get(key: string): Promise<string | undefined>;
@@ -54,6 +56,10 @@ class GeckoHttpError extends Error {
 
 const QUOTER_V2_ABI = parseAbi([
   "function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96) params) returns (uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)"
+]);
+
+const UNISWAP_V3_POOL_ABI = parseAbi([
+  "function fee() view returns (uint24)"
 ]);
 
 const CURVE_POOL_ABI = parseAbi([
@@ -188,6 +194,116 @@ async function fetchTokenPools(asset: ArbitrageAsset) {
     `https://api.geckoterminal.com/api/v2/networks/${MONAD_NETWORK}/tokens/${asset.address}/pools?page=1&include=base_token,quote_token,dex`;
   const json = await fetchJson(url);
   return Array.isArray(json?.data) ? json.data : [];
+}
+
+async function fetchDexScreenerPairs() {
+  const addresses = ARBITRAGE_ASSETS
+    .map(a => a.address)
+    .join(",");
+  const json = await fetchJson(
+    `${DEXSCREENER_TOKEN_URL}/${addresses}`
+  );
+  return Array.isArray(json) ? json : [];
+}
+
+function parseDexScreenerPair(
+  pair: any,
+  assets: Map<string, ArbitrageAsset>
+): PoolRecord | null {
+  const base = addr(pair?.baseToken?.address);
+  const quote = addr(pair?.quoteToken?.address);
+  if (!base || !quote || base === quote) return null;
+
+  const baseAsset = assets.get(base);
+  const quoteAsset = assets.get(quote);
+  if (!baseAsset || !quoteAsset) return null;
+
+  const baseToQuote = num(pair?.priceNative);
+  if (!(baseToQuote > 0)) return null;
+
+  const dex = String(pair?.dexId ?? "unknown");
+  const labels = Array.isArray(pair?.labels)
+    ? pair.labels.map((x: unknown) => String(x).toLowerCase())
+    : [];
+  const pairAddress = addr(pair?.pairAddress);
+  const isV3 = dex.includes("uniswap") && labels.includes("v3");
+  const quoteKind: QuoteKind =
+    pairAddress === CURVE_LST_POOL.toLowerCase()
+      ? "curve-lst"
+      : isV3
+        ? "uniswap-v3"
+        : "unsupported";
+
+  return {
+    id: String(pair?.pairAddress ?? ""),
+    name: `${baseAsset.symbol}/${quoteAsset.symbol} ${dex}${isV3 ? " v3" : ""}`,
+    address: pairAddress,
+    base,
+    quote,
+    baseSymbol: baseAsset.symbol,
+    quoteSymbol: quoteAsset.symbol,
+    baseToQuote,
+    // Uniswap v3 fee is read directly from the pool contract before exact
+    // quoting. DEX Screener does not expose the fee tier in this response.
+    feePct: 0,
+    liquidityUsd: num(pair?.liquidity?.usd),
+    volume24hUsd: num(pair?.volume?.h24),
+    dex,
+    quoteKind
+  };
+}
+
+async function getDexScreenerSnapshot(cache?: LSTArbitrageCache) {
+  const key = `${CACHE_KEY_PREFIX}:dexscreener:pairs`;
+  const now = Date.now();
+  const cached = await readCache<any[]>(cache, key);
+
+  if (cached && now - cached.fetchedAt < DEXSCREENER_CACHE_TTL_MS) {
+    return {
+      pairs: cached.data,
+      provider: {
+        name: "DEX Screener",
+        requestsThisScan: 0,
+        cached: true,
+        fetchedAt: cached.fetchedAt,
+        cacheTtlMs: DEXSCREENER_CACHE_TTL_MS
+      }
+    };
+  }
+
+  try {
+    const pairs = await fetchDexScreenerPairs();
+    await writeCache(cache, key, pairs, now);
+    return {
+      pairs,
+      provider: {
+        name: "DEX Screener",
+        requestsThisScan: 1,
+        cached: false,
+        fetchedAt: now,
+        cacheTtlMs: DEXSCREENER_CACHE_TTL_MS
+      }
+    };
+  } catch (error) {
+    // A stale snapshot is preferable to turning the arbitrage endpoint red.
+    // Exact quotes still come from Monad RPC, so stale market topology cannot
+    // become a submitted transaction.
+    if (cached) {
+      return {
+        pairs: cached.data,
+        provider: {
+          name: "DEX Screener",
+          requestsThisScan: 1,
+          cached: true,
+          stale: true,
+          fetchedAt: cached.fetchedAt,
+          cacheTtlMs: DEXSCREENER_CACHE_TTL_MS,
+          error: error instanceof Error ? error.message : String(error)
+        }
+      };
+    }
+    throw error;
+  }
 }
 
 type CacheEntry<T> = {
@@ -616,8 +732,18 @@ async function quoteExactEdge(
   }
 
   if (edge.quoteKind === "uniswap-v3") {
-    const fee = Math.round(edge.feePct * 10_000);
-    if (!(fee > 0 && fee <= 1_000_000)) return null;
+    let feeBps = Math.round(edge.feePct * 10_000);
+
+    if (!(feeBps > 0)) {
+      const poolFee = await client.readContract({
+        address: edge.pool as Address,
+        abi: UNISWAP_V3_POOL_ABI,
+        functionName: "fee"
+      });
+      feeBps = Number(poolFee);
+    }
+
+    if (!(feeBps > 0 && feeBps <= 1_000_000)) return null;
 
     const result = await client.readContract({
       address: UNISWAP_V3_QUOTER_V2,
@@ -627,7 +753,7 @@ async function quoteExactEdge(
         tokenIn: edge.from as Address,
         tokenOut: edge.to as Address,
         amountIn,
-        fee,
+        fee: feeBps,
         sqrtPriceLimitX96: 0n
       }]
     });
@@ -753,24 +879,41 @@ export async function scanLSTArbitrage(
   cache?: LSTArbitrageCache
 ) {
   const assets = assetMap();
-  const collection = await collectPoolPayloads(cache);
 
-  const pools: PoolRecord[] = collection.payloads
-    .flat()
-    .map((record: any) => parsePool(record, assets))
-    .filter((pool: PoolRecord | null): pool is PoolRecord => Boolean(pool));
+  let pools: PoolRecord[] = [];
+  let provider: any = null;
+
+  try {
+    const dexSnapshot = await getDexScreenerSnapshot(cache);
+    pools = dexSnapshot.pairs
+      .map((pair: any) => parseDexScreenerPair(pair, assets))
+      .filter((pool: PoolRecord | null): pool is PoolRecord => Boolean(pool));
+    provider = dexSnapshot.provider;
+  } catch (error) {
+    // GeckoTerminal remains as a degraded fallback. Its requests are still
+    // persisted and rate-limited by the Durable Object cache.
+    const collection = await collectPoolPayloads(cache);
+    pools = collection.payloads
+      .flat()
+      .map((record: any) => parsePool(record, assets))
+      .filter((pool: PoolRecord | null): pool is PoolRecord => Boolean(pool));
+    provider = {
+      ...collection.provider,
+      fallbackFrom: "DEX Screener",
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
 
   const edges: PoolEdge[] = [];
   for (const pool of pools) addEdge(edges, pool);
 
-  // Keep the known multi-asset Curve pool available even while GeckoTerminal
-  // is rate-limited. It is quoted on-chain, so it is never used as a fake price.
+  // Keep the known multi-asset Curve pool available even when external market
+  // data is degraded. It is always quoted on-chain before being considered.
   addKnownCurveEdges(edges);
 
   const wmon = ARBITRAGE_ASSETS.find(a => a.symbol === "WMON")!;
 
   // A useful triangular opportunity needs at least two distinct pools/venues.
-  // Routes that use one pool for every leg are not cross-venue arbitrage.
   const triangles = findTriangles(edges, wmon.address.toLowerCase())
     .filter(t =>
       t.exactQuoteSupported &&
@@ -847,7 +990,7 @@ export async function scanLSTArbitrage(
       gasBufferMon: GAS_BUFFER_MON,
       tradeSizesMon: TRADE_SIZES_MON
     },
-    provider: collection.provider,
+    provider,
     execution: {
       live: false,
       transactionsSubmitted: 0,

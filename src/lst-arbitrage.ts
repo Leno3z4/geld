@@ -52,6 +52,7 @@ import {
   parseAbi,
   formatUnits,
   parseUnits,
+  encodeFunctionData,
   type Address
 } from "viem";
 
@@ -114,6 +115,13 @@ const LST_ARBITRAGE_BUILD_REVISION = "arb-kuru-subrequest-safe-v12-2026-10-05";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KYBER_BASE_URL = "https://aggregator-api.kyberswap.com";
+const KYBER_NATIVE_TOKEN = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
+const KYBER_CLIENT_ID = "GELD";
+const KYBER_SIMULATION_SLIPPAGE_BPS = 30;
+const ERC20_ALLOWANCE_ABI = parseAbi([
+  "function allowance(address owner,address spender) view returns (uint256)",
+  "function approve(address spender,uint256 amount) returns (bool)"
+]);
 const KYBER_CACHE_TTL_MS = 30_000;
 const KYBER_PROBE_SIZE_MON = 5;
 const KYBER_SCOUT_TARGETS: Array<{symbol: string; address: string}> = [
@@ -1228,107 +1236,170 @@ function addKnownCurveEdges(edges: PoolEdge[]) {
     }
   }
 }
-async function scoutKyberRoundTrips(rpcMonUsd = 0) {
-  const mon = "0x3bd359c1119da7da1d913d1c4d2b7c461115433a";
-  const amountIn = parseUnits(String(KYBER_PROBE_SIZE_MON), 18).toString();
-  const results: any[] = [];
-  const errors: string[] = [];
-  let requestsThisScan = 0;
+async function fetchKyberRouteFresh(tokenIn: string, tokenOut: string, amountIn: string) {
+  const url = KYBER_BASE_URL + "/monad/api/v1/routes?tokenIn=" + encodeURIComponent(tokenIn) +
+    "&tokenOut=" + encodeURIComponent(tokenOut) + "&amountIn=" + encodeURIComponent(amountIn) + "&gasInclude=true";
+  const response = await fetch(url, {
+    headers: { accept: "application/json", "user-agent": "geld-arbitrage/1.0", "x-client-id": KYBER_CLIENT_ID }
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error("Kyber route HTTP " + response.status + ": " + String((body as any)?.message ?? "unknown error"));
+  const routeSummary = (body as any)?.data?.routeSummary;
+  if (!routeSummary) throw new Error("Kyber route unavailable: " + String((body as any)?.message ?? "missing routeSummary"));
+  return { routeSummary, routerAddress: String((body as any)?.data?.routerAddress ?? "") };
+}
 
-  for (const target of KYBER_SCOUT_TARGETS) {
-    const forwardKey = `kyber:roundtrip:${mon}:${target.address}:forward:${amountIn}`;
-    const reverseKeyPrefix = `kyber:roundtrip:${target.address}:${mon}:reverse:`;
+async function buildKyberRouteFresh(routeSummary: any, sender: string, recipient: string, deadline: number, slippageTolerance = KYBER_SIMULATION_SLIPPAGE_BPS) {
+  const response = await fetch(KYBER_BASE_URL + "/monad/api/v1/route/build", {
+    method: "POST",
+    headers: { accept: "application/json", "content-type": "application/json", "user-agent": "geld-arbitrage/1.0", "x-client-id": KYBER_CLIENT_ID },
+    body: JSON.stringify({ routeSummary, sender, origin: sender, recipient, deadline, slippageTolerance, enableGasEstimation: true, source: "GELD" })
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error("Kyber build HTTP " + response.status + ": " + String((body as any)?.message ?? "unknown error"));
+  const data = (body as any)?.data;
+  if (!data?.data || !data?.routerAddress) throw new Error("Kyber build unavailable: " + String((body as any)?.message ?? "missing calldata"));
+  return data;
+}
 
-    try {
-      const forward = await fetchProviderJson<any>(
-        forwardKey,
-        `${KYBER_BASE_URL}/monad/api/v1/routes?tokenIn=${mon}&tokenOut=${target.address}&amountIn=${amountIn}`,
-        { accept: "application/json", "user-agent": "geld-arbitrage/1.0" },
-        KYBER_CACHE_TTL_MS
-      );
-      if (!forward.fromCache) requestsThisScan++;
+async function rpcJson(rpcUrl: string, method: string, params: unknown[] = []): Promise<any> {
+  const response = await fetch(rpcUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params })
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error("RPC HTTP " + response.status);
+  if ((body as any)?.error) throw new Error("RPC " + method + " error: " + String((body as any).error?.message ?? JSON.stringify((body as any).error)));
+  return (body as any)?.result;
+}
 
-      const routeSummary = forward.data?.data?.routeSummary;
-      const mid = String(routeSummary?.amountOut ?? "");
-      if (!/^\\d+$/.test(mid) || BigInt(mid) <= 0n) {
-        errors.push(`Kyber no forward quote for ${target.symbol}`);
-        continue;
-      }
+async function simulationSenderFromPrivateKey(sender?: string, privateKey?: string) {
+  const explicit = addr(sender);
+  if (explicit) return explicit;
+  const key = String(privateKey ?? "");
+  if (!/^0x[0-9a-fA-F]{64}$/.test(key)) throw new Error("Simulation requires a sender address or a configured MONAD_PRIVATE_KEY");
+  const { privateKeyToAccount } = await import("viem/accounts");
+  return privateKeyToAccount(key as `0x${string}`).address.toLowerCase();
+}
 
-      const reverse = await fetchProviderJson<any>(
-        reverseKeyPrefix + mid,
-        `${KYBER_BASE_URL}/monad/api/v1/routes?tokenIn=${target.address}&tokenOut=${mon}&amountIn=${mid}`,
-        { accept: "application/json", "user-agent": "geld-arbitrage/1.0" },
-        KYBER_CACHE_TTL_MS
-      );
-      if (!reverse.fromCache) requestsThisScan++;
+function simulationAssetDecimals(address: string) {
+  const asset = ARBITRAGE_ASSETS.find(a => a.address.toLowerCase() === address.toLowerCase());
+  return asset?.decimals ?? 18;
+}
 
-      const backRaw = String(reverse.data?.data?.routeSummary?.amountOut ?? "");
-      if (!/^\\d+$/.test(backRaw) || BigInt(backRaw) <= 0n) {
-        errors.push(`Kyber no reverse quote for ${target.symbol}`);
-        continue;
-      }
+function decodeCallManyResult(item: any) {
+  if (item && typeof item === "object" && "error" in item) return { ok: false, error: item.error };
+  if (typeof item === "string") return { ok: true, value: item };
+  if (item && typeof item === "object" && typeof item.value === "string") return { ok: true, value: item.value };
+  return { ok: false, error: item ?? "unknown simulation result" };
+}
 
-      const backMon = Number(backRaw) / 1e18;
-      const grossProfitMon = backMon - KYBER_PROBE_SIZE_MON;
-      const gasUsd =
-        Number(routeSummary?.gasUsd ?? 0) +
-        Number(reverse.data?.data?.routeSummary?.gasUsd ?? 0);
+export async function preflightKyberRoundTrip(rpcUrl: string, targetAddress: string, sizeMon: number, sender?: string, privateKey?: string, slippageTolerance = KYBER_SIMULATION_SLIPPAGE_BPS) {
+  if (!(sizeMon > 0)) throw new Error("sizeMon must be greater than zero");
+  const target = addr(targetAddress);
+  if (!target || target === addr(KYBER_NATIVE_TOKEN)) throw new Error("targetAddress must be a valid ERC-20 token address");
+  const simulationSender = await simulationSenderFromPrivateKey(sender, privateKey);
+  const amountInRaw = parseUnits(String(sizeMon), 18).toString();
+  const deadline = Math.floor(Date.now() / 1000) + 120;
 
-      const impliedMonUsd =
-        rpcMonUsd > 0
-          ? rpcMonUsd
-          : target.symbol === "USDC"
-            ? (Number(mid) / 1e6) / KYBER_PROBE_SIZE_MON
-            : 0;
-      const gasMon = impliedMonUsd > 0 ? gasUsd / impliedMonUsd : 0;
-      const netProfitMon = grossProfitMon - gasMon - GAS_BUFFER_MON;
+  const forward = await fetchKyberRouteFresh(KYBER_NATIVE_TOKEN, target, amountInRaw);
+  const forwardOutRaw = String(forward.routeSummary?.amountOut ?? "");
+  if (!/^\d+$/.test(forwardOutRaw) || BigInt(forwardOutRaw) <= 0n) throw new Error("Kyber forward route returned no output");
+  const reverse = await fetchKyberRouteFresh(target, KYBER_NATIVE_TOKEN, forwardOutRaw);
+  const [forwardBuild, reverseBuild] = await Promise.all([
+    buildKyberRouteFresh(forward.routeSummary, simulationSender, simulationSender, deadline, slippageTolerance),
+    buildKyberRouteFresh(reverse.routeSummary, simulationSender, simulationSender, deadline, slippageTolerance)
+  ]);
+  const reverseRouter = addr(reverseBuild.routerAddress);
+  if (!reverseRouter) throw new Error("Kyber reverse build returned no router address");
 
-      const flatten = (summary: any) =>
-        (summary?.route ?? []).flat().map((leg: any) => ({
-          exchange: String(leg?.exchange ?? ""),
-          poolType: String(leg?.poolType ?? ""),
-          pool: String(leg?.pool ?? ""),
-          tokenIn: String(leg?.tokenIn ?? ""),
-          tokenOut: String(leg?.tokenOut ?? ""),
-          swapAmount: String(leg?.swapAmount ?? ""),
-          amountOut: String(leg?.amountOut ?? "")
-        }));
+  const allowanceCalldata = encodeFunctionData({
+    abi: ERC20_ALLOWANCE_ABI,
+    functionName: "allowance",
+    args: [simulationSender as Address, reverseRouter as Address]
+  });
+  let allowance = 0n;
+  try {
+    const allowanceRaw = await rpcJson(rpcUrl, "eth_call", [{ to: target, data: allowanceCalldata }, "latest"]);
+    allowance = BigInt(allowanceRaw);
+  } catch {}
 
-      results.push({
-        provider: "kyberswap",
-        path: ["MON", target.symbol, "MON"],
-        sizeMon: KYBER_PROBE_SIZE_MON,
-        intermediateAmountRaw: mid,
-        finalMon: backMon,
-        grossProfitMon,
-        gasUsd,
-        gasMon,
-        netProfitMon,
-        candidate: netProfitMon >= MIN_NET_PROFIT_MON,
-        routes: {
-          forward: flatten(routeSummary),
-          reverse: flatten(reverse.data?.data?.routeSummary)
-        }
-      });
-    } catch (error) {
-      errors.push(
-        error instanceof Error
-          ? `Kyber ${target.symbol}: ${error.message}`
-          : `Kyber ${target.symbol}: ${String(error)}`
-      );
-    }
+  const approvalNeeded = allowance < BigInt(forwardOutRaw);
+  const transactions: any[] = [{
+    from: simulationSender,
+    to: addr(forwardBuild.routerAddress),
+    value: "0x" + BigInt(String(forwardBuild.transactionValue ?? "0")).toString(16),
+    input: String(forwardBuild.data),
+    chainId: "0x8f"
+  }];
+  if (approvalNeeded) {
+    const approveData = encodeFunctionData({
+      abi: ERC20_ALLOWANCE_ABI,
+      functionName: "approve",
+      args: [reverseRouter as Address, (2n ** 256n) - 1n]
+    });
+    transactions.push({ from: simulationSender, to: target, value: "0x0", input: approveData, chainId: "0x8f" });
+  }
+  transactions.push({
+    from: simulationSender,
+    to: reverseRouter,
+    value: "0x" + BigInt(String(reverseBuild.transactionValue ?? "0")).toString(16),
+    input: String(reverseBuild.data),
+    chainId: "0x8f"
+  });
+
+  let blockNumber: string | null = null;
+  let callMany: any = null;
+  let callManyError: string | null = null;
+  try {
+    blockNumber = await rpcJson(rpcUrl, "eth_blockNumber");
+    callMany = await rpcJson(rpcUrl, "eth_callMany", [[{ transactions }], { blockNumber, transactionIndex: 0 }, {}, 7000]);
+  } catch (error) {
+    callManyError = error instanceof Error ? error.message : String(error);
   }
 
-  results.sort((a, b) => b.netProfitMon - a.netProfitMon);
+  const simulatedTransactions = Array.isArray(callMany?.[0]) ? callMany[0].map(decodeCallManyResult) : [];
+  const successfulSimulation = simulatedTransactions.length === transactions.length && simulatedTransactions.every((result: any) => result.ok === true);
+  const quotedFinalMon = Number(String(reverse.routeSummary?.amountOut ?? "0")) / 1e18;
+  const grossProfitMon = quotedFinalMon - sizeMon;
+  const buildGas = transactions.map((_, index) => {
+    const build = index === 0 ? forwardBuild : approvalNeeded && index === 1 ? null : reverseBuild;
+    return build?.gas ? BigInt(String(build.gas)) : 0n;
+  });
+  const gasPriceRaw = await rpcJson(rpcUrl, "eth_gasPrice").catch(() => "0x0");
+  const gasPrice = BigInt(String(gasPriceRaw));
+  const totalGas = buildGas.reduce((sum, value) => sum + value, 0n);
+  const gasCostMon = Number(totalGas * gasPrice) / 1e18;
+  const netProfitMon = quotedFinalMon - sizeMon - gasCostMon - GAS_BUFFER_MON;
+
   return {
-    enabled: true,
-    probeSizeMon: KYBER_PROBE_SIZE_MON,
-    requestsThisScan,
-    targetCount: KYBER_SCOUT_TARGETS.length,
-    results,
-    topSignal: results.find(x => x.candidate === true) ?? null,
-    errors: errors.length ? [...new Set(errors)] : undefined
+    mode: "PAPER_PREFLIGHT",
+    provider: "kyberswap",
+    chainId: 143,
+    sender: simulationSender,
+    target,
+    targetDecimals: simulationAssetDecimals(target),
+    sizeMon,
+    amountInRaw,
+    quotedIntermediateRaw: forwardOutRaw,
+    quotedFinalMon,
+    grossProfitMon,
+    gasPriceRaw: gasPrice.toString(),
+    gasUnits: totalGas.toString(),
+    gasCostMon,
+    gasBufferMon: GAS_BUFFER_MON,
+    netProfitMon,
+    candidate: successfulSimulation && netProfitMon >= MIN_NET_PROFIT_MON,
+    atomic: false,
+    executable: false,
+    approval: { spender: reverseRouter, currentAllowanceRaw: allowance.toString(), requiredRaw: forwardOutRaw, needed: approvalNeeded, approvalWasSimulated: approvalNeeded },
+    route: {
+      forward: { tokenIn: KYBER_NATIVE_TOKEN, tokenOut: target, routeSummary: forward.routeSummary, build: forwardBuild },
+      reverse: { tokenIn: target, tokenOut: KYBER_NATIVE_TOKEN, routeSummary: reverse.routeSummary, build: reverseBuild }
+    },
+    simulation: { method: "eth_callMany", blockNumber, transactionCount: transactions.length, transactions, results: simulatedTransactions, successful: successfulSimulation, error: callManyError },
+    safety: { broadcasted: false, liveExecutionEnabled: false, requiresAtomicExecutor: true, note: "The sequence is simulated only. Approval, if required, exists only inside the simulation and is not sent to the chain." }
   };
 }
 

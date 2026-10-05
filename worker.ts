@@ -242,6 +242,9 @@ function parseGeldConfig(env: Env): Record<string, string | undefined> {
 let standaloneLSTInFlight = false;
 let standaloneLSTLastAt = 0;
 let standaloneLSTLastResult: any = null;
+let standaloneArbDiscoveryInFlight = false;
+let standaloneArbDiscoveryLastAt = 0;
+let standaloneArbDiscoveryLastResult: any = null;
 const standaloneLSTCache = new Map<string, string>();
 
 async function runStandaloneLSTArbitrage(env: Env, force = false) {
@@ -286,6 +289,55 @@ async function runStandaloneLSTArbitrage(env: Env, force = false) {
     return standaloneLSTLastResult;
   } finally {
     standaloneLSTInFlight = false;
+  }
+}
+
+async function runStandaloneArbitrageDiscovery(env: Env, force = false) {
+  const runtime = await getRuntimeConfig(env);
+  if (!runtime.lstArbitrageEnabled) return standaloneArbDiscoveryLastResult;
+
+  const now = Date.now();
+  if (
+    !force &&
+    standaloneArbDiscoveryLastResult &&
+    now - standaloneArbDiscoveryLastAt < Math.max(runtime.lstArbitrageIntervalMs, 30_000)
+  ) {
+    return standaloneArbDiscoveryLastResult;
+  }
+  if (standaloneArbDiscoveryInFlight) return standaloneArbDiscoveryLastResult;
+
+  standaloneArbDiscoveryInFlight = true;
+  standaloneArbDiscoveryLastAt = now;
+  try {
+    const scan = await scanLSTArbitrage(
+      runtime.rpcUrl,
+      {
+        get: async (key) => standaloneLSTCache.get(key),
+        put: async (key, value) => {
+          if (!standaloneLSTCache.has(key) && standaloneLSTCache.size >= 128) {
+            const oldest = standaloneLSTCache.keys().next().value;
+            if (oldest) standaloneLSTCache.delete(oldest);
+          }
+          standaloneLSTCache.delete(key);
+          standaloneLSTCache.set(key, value);
+        }
+      },
+      env.DEXPAPRIKA_API_KEY,
+      { discoveryOnly: true, probeLimit: 1, includeKyberScout: false }
+    );
+    standaloneArbDiscoveryLastResult = {
+      ...scan,
+      executionPolicy: {
+        enabled: runtime.lstArbitrageEnabled,
+        liveExecutionEnabled: false,
+        requiresGlobalLiveTrading: true,
+        executorConfigured: Boolean(runtime.lstArbitrageExecutorAddress)
+      },
+      scheduledAt: now
+    };
+    return standaloneArbDiscoveryLastResult;
+  } finally {
+    standaloneArbDiscoveryInFlight = false;
   }
 }
 
@@ -1189,6 +1241,22 @@ export default {
         );
       }
     }
+    if (url.pathname === "/api/arbitrage/discovery") {
+      const force = url.searchParams.get("refresh") === "1";
+      try {
+        const result = await runStandaloneArbitrageDiscovery(env, force);
+        return Response.json(result, { headers: { "Cache-Control": "no-store" } });
+      } catch (error) {
+        console.error("Standalone arbitrage discovery API failed:", error);
+        return Response.json({
+          mode: "PAPER_DISCOVERY_ONLY",
+          generatedAt: new Date().toISOString(),
+          execution: { attempted: false, submitted: false },
+          error: error instanceof Error ? error.message : String(error)
+        }, { status: 503, headers: { "Cache-Control": "no-store" } });
+      }
+    }
+
     if (url.pathname === "/api/lst/arbitrage" || url.pathname === "/api/arbitrage") {
       const force = url.searchParams.get("refresh") === "1";
       try {

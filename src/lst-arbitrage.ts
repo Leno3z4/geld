@@ -3011,9 +3011,12 @@ export async function scanLSTArbitrage(
       // monopolize every probe slot.
       const theoreticalEdgeScore =
         Math.max(-100, Number(route.grossEdgePct ?? -100)) * 1_000_000;
+      const dexDiversityWeight = options.exactOnly
+        ? 10_000_000
+        : 100_000;
       const score =
         theoreticalEdgeScore +
-        newDexCount * 100_000 +
+        newDexCount * dexDiversityWeight +
         route.distinctDexes * 10_000 +
         route.distinctPools * 1_000 +
         Math.min(route.liquidityScore, 1_000_000);

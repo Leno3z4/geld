@@ -645,8 +645,19 @@ async function discoverDexPaprikaMonadPools(
 
     const baseMeta = tokens[0] ?? {};
     const quoteMeta = tokens[1] ?? {};
-    const baseAsset = dynamicAsset(token0, knownAssets);
-    const quoteAsset = dynamicAsset(token1, knownAssets);
+
+    const baseKnown = knownAssets.get(token0);
+    const quoteKnown = knownAssets.get(token1);
+    const baseAsset = baseKnown ?? {
+      symbol: tokenSymbol(baseMeta, "TKN_" + token0.slice(2, 8).toUpperCase()),
+      address: token0,
+      decimals: tokenDecimals(baseMeta, 18)
+    };
+    const quoteAsset = quoteKnown ?? {
+      symbol: tokenSymbol(quoteMeta, "TKN_" + token1.slice(2, 8).toUpperCase()),
+      address: token1,
+      decimals: tokenDecimals(quoteMeta, 18)
+    };
     discoveredAssets.set(token0, baseAsset);
     discoveredAssets.set(token1, quoteAsset);
 
@@ -839,8 +850,16 @@ async function discoverDexScreenerMonadPools(
       const quote = normalizeAssetAddress(row?.quoteToken?.address);
       if (!base || !quote || base === quote) continue;
 
-      const baseAsset = assets.get(base) ?? dynamicAsset(base, assets);
-      const quoteAsset = assets.get(quote) ?? dynamicAsset(quote);
+      const baseAsset = assets.get(base) ?? {
+        symbol: String(row?.baseToken?.symbol ?? ("TKN_" + base.slice(2, 8).toUpperCase())),
+        address: base,
+        decimals: Number(row?.baseToken?.decimals ?? 18)
+      };
+      const quoteAsset = assets.get(quote) ?? {
+        symbol: String(row?.quoteToken?.symbol ?? ("TKN_" + quote.slice(2, 8).toUpperCase())),
+        address: quote,
+        decimals: Number(row?.quoteToken?.decimals ?? 18)
+      };
       assets.set(base, baseAsset);
       assets.set(quote, quoteAsset);
 

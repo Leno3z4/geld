@@ -1594,6 +1594,7 @@ export async function preflightAllLSTArbitrage(
   });
 
   const results: any[] = [];
+  const prepared: Array<{ route: any; quote: any; transactions: any[]; legResults: any[] }> = [];
   for (const route of scan.routes as any[]) {
     const quote = (route.exactQuotes ?? []).find((q: any) => q.ok === true && Number(q.sizeMon) === sizeMon)
       ?? (route.exactQuotes ?? []).find((q: any) => q.ok === true);
@@ -1756,96 +1757,13 @@ export async function preflightAllLSTArbitrage(
         continue;
       }
 
-      let simulationMethod = "eth_callMany";
-      let blockNumber: string | null = null;
-      let simulated: any[] = [];
-      let successful = false;
-      let simulationError: string | null = null;
-      let gasUnits = 0n;
-
-      try {
-        blockNumber = await rpcJson(rpcUrl, "eth_blockNumber");
-        const callMany = await rpcJson(rpcUrl, "eth_callMany", [
-          [{ transactions }],
-          { blockNumber, transactionIndex: 0 },
-          { [sender]: { balance: hexValue(1000n * 10n ** 18n) } },
-          9000
-        ]);
-        simulated = Array.isArray(callMany?.[0]) ? callMany[0].map((item: any) => ({
-          ...decodeCallManyResult(item),
-          gasUsed: item?.gasUsed ? String(item.gasUsed) : null
-        })) : [];
-        successful = simulated.length === transactions.length && simulated.every((x: any) => x.ok === true);
-        for (const item of simulated) {
-          if (item?.gasUsed) gasUnits += BigInt(item.gasUsed);
-        }
-      } catch (firstError) {
-        const firstMessage = firstError instanceof Error ? firstError.message : String(firstError);
-        if (!/method not found|not supported|unsupported/i.test(firstMessage)) {
-          simulationError = firstMessage;
-        } else {
-          simulationMethod = "eth_simulateV1";
-          try {
-            const simulatedBlocks = await rpcJson(rpcUrl, "eth_simulateV1", [{
-              blockStateCalls: [{
-                stateOverrides: {
-                  [sender]: { balance: hexValue(1000n * 10n ** 18n) }
-                },
-                calls: transactions.map((tx: any) => ({
-                  from: tx.from,
-                  to: tx.to,
-                  value: tx.value,
-                  data: tx.input
-                }))
-              }],
-              traceTransfers: true,
-              validation: true
-            }, "latest"]);
-            const calls = Array.isArray(simulatedBlocks?.[0]?.calls) ? simulatedBlocks[0].calls : [];
-            simulated = calls.map((call: any) => ({
-              ok: String(call?.status ?? "0x0") === "0x1",
-              status: String(call?.status ?? ""),
-              gasUsed: call?.gasUsed ? String(call.gasUsed) : null,
-              returnData: String(call?.returnData ?? ""),
-              error: call?.error ?? null
-            }));
-            successful = simulated.length === transactions.length && simulated.every((x: any) => x.ok === true);
-            for (const item of simulated) {
-              if (item?.gasUsed) gasUnits += BigInt(item.gasUsed);
-            }
-          } catch (fallbackError) {
-            simulationError = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
-          }
-        }
-      }
-
-      const gasPriceRaw = await rpcJson(rpcUrl, "eth_gasPrice").catch(() => "0x0");
-      const gasPrice = BigInt(String(gasPriceRaw));
-      const gasCostMon = gasUnits > 0n ? Number(gasUnits * gasPrice) / 1e18 : null;
-
-      results.push({
-        route: route.path,
-        ok: true,
-        quoteOnly: false,
-        sizeMon,
-        quotedFinalMon: quote.finalMon,
-        quotedGrossProfitMon: quote.grossProfitMon,
-        quotedNetProfitMon: quote.netProfitMon,
-        gasUnits: gasUnits.toString(),
-        gasPriceRaw: gasPrice.toString(),
-        gasCostMon,
-        candidate: successful && quote.candidate === true,
-        transactionCount: transactions.length,
+      prepared.push({
+        route,
+        quote,
         transactions,
-        simulation: {
-          method: simulationMethod,
-          blockNumber,
-          successful,
-          results: simulated,
-          error: simulationError
-        },
         legResults
       });
+
     } catch (error) {
       results.push({
         route: route.path,
@@ -1855,6 +1773,89 @@ export async function preflightAllLSTArbitrage(
         error: error instanceof Error ? error.message : String(error),
         transactions,
         legResults
+      });
+    }
+  }
+
+  if (prepared.length > 0) {
+    let blockNumber: string | null = null;
+    let simulatedBlocks: any[] = [];
+    let simulationError: string | null = null;
+
+    try {
+      blockNumber = await rpcJson(rpcUrl, "eth_blockNumber");
+      const simulated = await rpcJson(rpcUrl, "eth_simulateV1", [{
+        blockStateCalls: prepared.map((item) => ({
+          stateOverrides: {
+            [sender]: { balance: hexValue(1000n * 10n ** 18n) }
+          },
+          calls: item.transactions.map((tx: any) => ({
+            from: tx.from,
+            to: tx.to,
+            value: tx.value,
+            data: tx.input
+          }))
+        })),
+        traceTransfers: true,
+        validation: true
+      }, "latest"]);
+      simulatedBlocks = Array.isArray(simulated) ? simulated : [];
+    } catch (error) {
+      simulationError = error instanceof Error ? error.message : String(error);
+    }
+
+    const gasPriceRaw = await rpcJson(rpcUrl, "eth_gasPrice").catch(() => "0x0");
+    const gasPrice = BigInt(String(gasPriceRaw));
+
+    for (let index = 0; index < prepared.length; index++) {
+      const item = prepared[index];
+      const calls = Array.isArray(simulatedBlocks[index]?.calls)
+        ? simulatedBlocks[index].calls
+        : [];
+      const simulatedResults = calls.map((call: any) => ({
+        ok: String(call?.status ?? "0x0") === "0x1",
+        status: String(call?.status ?? ""),
+        gasUsed: call?.gasUsed ? String(call.gasUsed) : null,
+        returnData: String(call?.returnData ?? ""),
+        error: call?.error ?? null
+      }));
+      const successful =
+        simulatedResults.length === item.transactions.length &&
+        simulatedResults.every((entry: any) => entry.ok === true);
+      const gasUnits = simulatedResults.reduce(
+        (sum: bigint, entry: any) =>
+          sum + (entry?.gasUsed ? BigInt(entry.gasUsed) : 0n),
+        0n
+      );
+      const gasCostMon =
+        gasUnits > 0n ? Number(gasUnits * gasPrice) / 1e18 : null;
+
+      results.push({
+        route: item.route.path,
+        ok: true,
+        quoteOnly: false,
+        sizeMon,
+        quotedFinalMon: item.quote.finalMon,
+        quotedGrossProfitMon: item.quote.grossProfitMon,
+        quotedNetProfitMon: item.quote.netProfitMon,
+        gasUnits: gasUnits.toString(),
+        gasPriceRaw: gasPrice.toString(),
+        gasCostMon,
+        candidate:
+          successful &&
+          item.quote.candidate === true &&
+          gasCostMon !== null &&
+          item.quote.finalMon - sizeMon - gasCostMon - GAS_BUFFER_MON >= MIN_NET_PROFIT_MON,
+        transactionCount: item.transactions.length,
+        transactions: item.transactions,
+        simulation: {
+          method: "eth_simulateV1",
+          blockNumber,
+          successful,
+          results: simulatedResults,
+          error: simulationError
+        },
+        legResults: item.legResults
       });
     }
   }

@@ -28,6 +28,7 @@ export function ArbitrageOpportunities() {
   const discovered = Array.isArray(arb?.discoveredTokens)
     ? arb.discoveredTokens
     : [];
+  const monitored = Object.values(s.tokens ?? {});
 
   const potentialByAddress = useMemo(() => {
     const map = new Map<string, any>();
@@ -56,7 +57,7 @@ export function ArbitrageOpportunities() {
         venue.toLowerCase().includes(needle)
       ))
     );
-  }, [potential, discovered, potentialByAddress, filter, view]);
+  }, [potential, discovered, monitored, potentialByAddress, filter, view]);
 
   const exactRoutes = Number(arb?.routeCount ?? 0);
   const discoveryRoutes = Number(arb?.discoveryRouteCount ?? 0);
@@ -87,7 +88,10 @@ export function ArbitrageOpportunities() {
               onClick={() => setView("all")}
               className={`rounded-md px-3 py-1.5 text-[10px] uppercase tracking-wider ${view === "all" ? "bg-zinc-800 text-zinc-100" : "text-zinc-500"}`}
             >
-              All discovered ({discovered.length})
+              All available ({new Set([
+                ...discovered.map((item: any) => String(item?.address ?? "").toLowerCase()),
+                ...monitored.map((item: any) => String(item?.token ?? item?.address ?? "").toLowerCase())
+              ].filter(Boolean)).size})
             </button>
           </div>
           <input

@@ -1307,7 +1307,8 @@ export type ArbitragePotentialToken = {
 
 function buildArbitragePotentialTokens(
   pools: PoolRecord[],
-  assets: Map<string, ArbitrageAsset>
+  assets: Map<string, ArbitrageAsset>,
+  cycleTokenAddresses = new Set<string>()
 ): ArbitragePotentialToken[] {
   const byToken = new Map<string, {
     poolCount: number;
@@ -1373,6 +1374,7 @@ function buildArbitragePotentialTokens(
     if (row.poolCount >= 2) reasons.push("multi-pool");
     if (spread !== null && spread >= MIN_GROSS_EDGE_PCT) reasons.push("price-divergence");
     if (row.exactVenues.size >= 2) reasons.push("multi-venue-exact");
+    if (cycleTokenAddresses.has(address)) reasons.push("cycle-topology");
     if (!reasons.length) continue;
 
     const maxLiquidityUsd = Math.max(...row.liquidity, 0);
@@ -2976,7 +2978,19 @@ export async function scanLSTArbitrage(
     });
   }
 
-  const arbitragePotentialTokens = buildArbitragePotentialTokens(pools, assets);
+  const cycleTokenAddresses = new Set<string>();
+  for (const route of discoveryCycles) {
+    for (const leg of route.legs as PoolEdge[]) {
+      cycleTokenAddresses.add(leg.from.toLowerCase());
+      cycleTokenAddresses.add(leg.to.toLowerCase());
+    }
+  }
+
+  const arbitragePotentialTokens = buildArbitragePotentialTokens(
+    pools,
+    assets,
+    cycleTokenAddresses
+  );
 
   if (options.discoveryOnly) {
     return {

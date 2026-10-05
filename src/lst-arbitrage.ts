@@ -1895,5 +1895,5 @@ export async function scanLSTArbitrage(
       requiresGlobalLiveTrading: true,
       executorConfigured: false
     }
-
+  };
 }

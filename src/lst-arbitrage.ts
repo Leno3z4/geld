@@ -2223,17 +2223,46 @@ export async function preflightKyberRoundTrip(rpcUrl: string, targetAddress: str
   });
 
   let blockNumber: string | null = null;
-  let callMany: any = null;
-  let callManyError: string | null = null;
+  let simulatedBlock: any = null;
+  let simulationError: string | null = null;
+
   try {
     blockNumber = await rpcJson(rpcUrl, "eth_blockNumber");
-    callMany = await rpcJson(rpcUrl, "eth_callMany", [[{ transactions }], { blockNumber, transactionIndex: 0 }, {}, 7000]);
+    const simulated = await rpcJson(rpcUrl, "eth_simulateV1", [{
+      blockStateCalls: [{
+        stateOverrides: {
+          [simulationSender]: { balance: hexValue(1000n * 10n ** 18n) }
+        },
+        calls: transactions.map(tx => ({
+          from: tx.from,
+          to: tx.to,
+          value: tx.value,
+          data: tx.input
+        }))
+      }],
+      traceTransfers: true,
+      validation: true
+    }, "latest"]);
+    simulatedBlock = Array.isArray(simulated) ? (simulated[0] ?? null) : null;
   } catch (error) {
-    callManyError = error instanceof Error ? error.message : String(error);
+    simulationError = error instanceof Error ? error.message : String(error);
   }
 
-  const simulatedTransactions = Array.isArray(callMany?.[0]) ? callMany[0].map(decodeCallManyResult) : [];
-  const successfulSimulation = simulatedTransactions.length === transactions.length && simulatedTransactions.every((result: any) => result.ok === true);
+  const simulatedCalls = Array.isArray(simulatedBlock?.calls)
+    ? simulatedBlock.calls
+    : [];
+  const simulatedResults = simulatedCalls.map((call: any) => ({
+    ok: String(call?.status ?? "0x0") === "0x1",
+    status: String(call?.status ?? ""),
+    gasUsed: call?.gasUsed ? String(call.gasUsed) : null,
+    maxUsedGas: call?.maxUsedGas ? String(call.maxUsedGas) : null,
+    returnData: String(call?.returnData ?? ""),
+    error: call?.error ?? null
+  }));
+  const successfulSimulation =
+    simulatedResults.length === transactions.length &&
+    simulatedResults.every((result: any) => result.ok === true);
+
   const quotedFinalMon = Number(String(reverse.routeSummary?.amountOut ?? "0")) / 1e18;
   const grossProfitMon = quotedFinalMon - sizeMon;
   const buildGas = transactions.map((_, index) => {
@@ -2271,7 +2300,7 @@ export async function preflightKyberRoundTrip(rpcUrl: string, targetAddress: str
       forward: { tokenIn: KYBER_NATIVE_TOKEN, tokenOut: target, routeSummary: forward.routeSummary, build: forwardBuild },
       reverse: { tokenIn: target, tokenOut: KYBER_NATIVE_TOKEN, routeSummary: reverse.routeSummary, build: reverseBuild }
     },
-    simulation: { method: "eth_callMany", blockNumber, transactionCount: transactions.length, transactions, results: simulatedTransactions, successful: successfulSimulation, error: callManyError },
+    simulation: { method: "eth_simulateV1", blockNumber, transactionCount: transactions.length, transactions, results: simulatedResults, successful: successfulSimulation, error: simulationError },
     safety: { broadcasted: false, liveExecutionEnabled: false, requiresAtomicExecutor: true, note: "The sequence is simulated only. Approval, if required, exists only inside the simulation and is not sent to the chain." }
   };
 }

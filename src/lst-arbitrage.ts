@@ -2497,7 +2497,7 @@ export async function preflightAllLSTArbitrage(
           batched: true,
           authoritativeForProfitability: true,
           conservativeRule: "use uncapped sequential eth_simulateV1 gas as the state-aware baseline; when eth_estimateGas is available, use the higher value; never use an artificial simulation ceiling",
-          sequentialStateAware: true
+          sequentialStateAware: true,
           requiresCompleteEstimates: true
         },
         legResults: item.legResults

@@ -2531,8 +2531,85 @@ export async function preflightAllLSTArbitrage(
   apiKey: string | undefined,
   sender: string,
   sizeMon = 1,
-  routeLimit = 2
+  routeLimit = 2,
+  memeOnly = false
 ) {
+  if (memeOnly) {
+    const memeTargets = KYBER_MEME_SCOUT_TARGETS.slice(0, 4);
+    const memeScout = await scoutKyberRoundTrips(0, memeTargets, sizeMon);
+    const memeCandidates = [...memeScout.results].sort(
+      (a, b) =>
+        (Number(b.grossProfitMon ?? -Infinity) - Number(a.grossProfitMon ?? -Infinity)) ||
+        (Number(b.netProfitMon ?? -Infinity) - Number(a.netProfitMon ?? -Infinity))
+    );
+
+    const memePreflightAttempts: any[] = [];
+    let memePreflight: any = null;
+
+    for (const candidate of memeCandidates) {
+      const target = memeTargets.find(
+        item =>
+          item.symbol.toUpperCase() ===
+          String(candidate.path?.[1] ?? "").toUpperCase()
+      );
+      if (!target) continue;
+
+      try {
+        const attempt = await preflightKyberRoundTrip(
+          rpcUrl,
+          target.address,
+          sizeMon,
+          sender,
+          undefined,
+          KYBER_SIMULATION_SLIPPAGE_BPS
+        );
+        const summarized = {
+          target: target.symbol,
+          ok: true,
+          simulationSuccessful: attempt.simulation?.successful === true,
+          candidate: attempt.candidate === true,
+          quotedFinalMon: attempt.quotedFinalMon,
+          grossProfitMon: attempt.grossProfitMon,
+          gasCostMon: attempt.gasCostMon,
+          netProfitMon: attempt.netProfitMon,
+          simulationError: attempt.simulation?.error ?? null,
+          route: attempt.route
+        };
+        memePreflightAttempts.push(summarized);
+        memePreflight = attempt;
+        if (attempt.simulation?.successful === true) break;
+      } catch (error) {
+        const failed = {
+          target: target.symbol,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error)
+        };
+        memePreflightAttempts.push(failed);
+      }
+    }
+
+    return {
+      mode: "PAPER_PREFLIGHT_MEME",
+      generatedAt: new Date().toISOString(),
+      sender,
+      sizeMon,
+      memeAggregator: {
+        enabled: true,
+        scout: memeScout,
+        candidatesTested: memePreflightAttempts.length,
+        preflightAttempts: memePreflightAttempts,
+        preflight: memePreflight,
+        simulationSuccessful: memePreflight?.simulation?.successful === true,
+        profitableCandidate: memePreflight?.candidate === true
+      },
+      safety: {
+        broadcasted: false,
+        liveExecutionEnabled: false,
+        atomic: false,
+        note: "Meme-only preflight. Quotes, calldata and stateful simulation are performed only; no approval, transfer, swap, or arbitrage transaction is broadcast."
+      }
+    };
+  }
   const safeRouteLimit = Math.max(1, Math.min(MAX_EXACT_ROUTES, Math.floor(routeLimit)));
   // Probe the full small route set, then choose up to routeLimit buildable routes.
   // This prevents one unsupported/non-exact probe from starving a real meme route.

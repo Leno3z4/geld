@@ -809,8 +809,9 @@ async function discoverDexPaprikaMonadPools(
     0,
     8 - requestsThisScan - Number(nadfun.provider?.requestsThisScan ?? 0)
   );
-  const gecko = remainingAfterNadfun > 0
-    ? await discoverGeckoTerminalMonadPools(cache, 1, discoveredAssets)
+  const geckoBudget = Math.min(3, remainingAfterNadfun);
+  const gecko = geckoBudget > 0
+    ? await discoverGeckoTerminalMonadPools(cache, geckoBudget, discoveredAssets)
     : {
         pools: [] as any[],
         assets: [...discoveredAssets.values()],
@@ -1133,6 +1134,119 @@ async function discoverGeckoTerminalMonadPools(
     }
 
     const deduped = dedupePoolRecords(pools);
+
+    // Trending gives us a broad current snapshot. Use the remaining Gecko
+    // request budget to ask directly for pools of the strongest known memes;
+    // this is much more likely to surface a second venue for the same token.
+    const preferredSymbols = [
+      "CHOG", "MOE", "FLING", "JAMES", "MONCOCK",
+      "MOLANDAK", "ANAGO", "MONCAT", "GOCHI"
+    ];
+    const memeTargets = [...assets.values()]
+      .filter(asset => isMemeLikeSymbol(asset.symbol))
+      .sort((a, b) => {
+        const ai = preferredSymbols.indexOf(normalizeMemeSymbol(a.symbol));
+        const bi = preferredSymbols.indexOf(normalizeMemeSymbol(b.symbol));
+        const ar = ai < 0 ? Number.MAX_SAFE_INTEGER : ai;
+        const br = bi < 0 ? Number.MAX_SAFE_INTEGER : bi;
+        return ar - br || a.symbol.localeCompare(b.symbol);
+      });
+
+    let extraRequests = 0;
+    for (
+      const target of memeTargets.slice(0, Math.max(0, maxRequests - (result.fromCache ? 0 : 1)))
+    ) {
+      if (extraRequests >= Math.max(0, maxRequests - (result.fromCache ? 0 : 1))) break;
+
+      try {
+        const tokenResult = await fetchProviderJson<any>(
+          "geld:arb:gecko:monad:token:" + target.address.toLowerCase() + ":v1",
+          GECKOTERMINAL_BASE_URL +
+            "/networks/monad/tokens/" + target.address.toLowerCase() +
+            "/pools?include=base_token,quote_token,dex&page=1",
+          { accept: "application/json", "user-agent": "geld-arbitrage/2.1" },
+          GECKOTERMINAL_CACHE_TTL_MS
+        );
+
+        if (!tokenResult.fromCache) extraRequests++;
+        const tokenRows = Array.isArray(tokenResult.data?.data) ? tokenResult.data.data : [];
+        const tokenIncluded = Array.isArray(tokenResult.data?.included) ? tokenResult.data.included : [];
+        const tokenIncludedById = new Map<string, any>(
+          tokenIncluded.map((item: any) => [String(item?.id ?? "").toLowerCase(), item])
+        );
+
+        for (const row of tokenRows) {
+          const a = row?.attributes ?? {};
+          const rel = row?.relationships ?? {};
+          const baseId = String(rel?.base_token?.data?.id ?? "").toLowerCase();
+          const quoteId = String(rel?.quote_token?.data?.id ?? "").toLowerCase();
+          const base = normalizeAssetAddress(baseId.replace(/^monad_/i, ""));
+          const quote = normalizeAssetAddress(quoteId.replace(/^monad_/i, ""));
+          if (!base || !quote || base === quote) continue;
+
+          const baseMeta = tokenIncludedById.get(baseId);
+          const quoteMeta = tokenIncludedById.get(quoteId);
+          const baseSymbol = String(
+            baseMeta?.attributes?.symbol ??
+            (base === target.address.toLowerCase() ? target.symbol : "")
+          ).trim() || "TKN_" + base.slice(2, 8).toUpperCase();
+          const quoteSymbol = String(
+            quoteMeta?.attributes?.symbol ??
+            (quote === target.address.toLowerCase() ? target.symbol : "")
+          ).trim() || "TKN_" + quote.slice(2, 8).toUpperCase();
+
+          const baseDecimals = Number(baseMeta?.attributes?.decimals ?? assets.get(base)?.decimals ?? 18);
+          const quoteDecimals = Number(quoteMeta?.attributes?.decimals ?? assets.get(quote)?.decimals ?? 18);
+          if (!assets.has(base)) assets.set(base, {
+            symbol: baseSymbol, address: base,
+            decimals: Number.isFinite(baseDecimals) ? baseDecimals : 18
+          });
+          if (!assets.has(quote)) assets.set(quote, {
+            symbol: quoteSymbol, address: quote,
+            decimals: Number.isFinite(quoteDecimals) ? quoteDecimals : 18
+          });
+
+          const poolAddress = addr(a.address);
+          const dex = String(rel?.dex?.data?.id ?? "").toLowerCase();
+          const baseToQuote = num(a.base_token_price_quote_token);
+          if (!poolAddress || !dex || !(baseToQuote > 0)) continue;
+
+          pools.push({
+            id: String(row?.id ?? poolAddress),
+            attributes: {
+              address: poolAddress,
+              name: String(a.name ?? (baseSymbol + "/" + quoteSymbol + " " + dex)),
+              base_token_price_quote_token: String(baseToQuote),
+              pool_fee_percentage: Number(String(a.name ?? "").match(/(\d+(?:\.\d+)?)%/)?.[1] ?? 0),
+              reserve_in_usd: num(a.reserve_in_usd),
+              volume_usd: { h24: num(a.volume_usd?.h24) },
+              price_usd: num(a.base_token_price_usd)
+            },
+            relationships: {
+              base_token: { data: { id: base } },
+              quote_token: { data: { id: quote } },
+              dex: { data: { id: dex } }
+            },
+            __baseTokenMeta: {
+              attributes: { address: base, symbol: baseSymbol, decimals: baseDecimals }
+            },
+            __quoteTokenMeta: {
+              attributes: { address: quote, symbol: quoteSymbol, decimals: quoteDecimals }
+            },
+            __dexMeta: { id: dex },
+            __quoteKind: classifyQuoteKind(poolAddress, dex),
+            __priceUsd: num(a.base_token_price_usd)
+          });
+        }
+      } catch (tokenError) {
+        errors.push(
+          "Gecko " + target.symbol + ": " +
+          (tokenError instanceof Error ? tokenError.message : String(tokenError))
+        );
+      }
+    }
+
+    const finalPools = dedupePoolRecords(pools);
     return {
       pools: deduped,
       assets: [...assets.values()],

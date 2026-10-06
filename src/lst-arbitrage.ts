@@ -115,7 +115,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-universal-token-discovery-v22-nadfun-dexscreen-frontier-2026-10-05";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-universal-token-discovery-v23-batched-estimate-gas-2026-10-06";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KYBER_BASE_URL = "https://aggregator-api.kyberswap.com";
@@ -2096,6 +2096,47 @@ function buildKuruCall(edge: any, amountIn: bigint, minOut: bigint) {
   };
 }
 
+async function rpcBatch(rpcUrl: string, requests: Array<{ method: string; params: unknown[] }>): Promise<any[]> {
+  if (!requests.length) return [];
+  const payload = requests.map((request, index) => ({
+    jsonrpc: "2.0", id: index + 1, method: request.method, params: request.params
+  }));
+  const response = await fetch(rpcUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const body = await response.json().catch(() => []);
+  if (!response.ok) throw new Error("RPC batch HTTP " + response.status);
+  if (!Array.isArray(body)) throw new Error("RPC batch returned a non-array response");
+  return body;
+}
+
+async function estimateGasBatch(
+  rpcUrl: string,
+  transactions: any[]
+): Promise<Array<{ gas: bigint | null; error?: string }>> {
+  if (!transactions.length) return [];
+  try {
+    const responses = await rpcBatch(rpcUrl, transactions.map(tx => ({
+      method: "eth_estimateGas",
+      params: [{
+        from: tx.from, to: tx.to, value: tx.value, data: tx.input
+      }, "latest"]
+    })));
+    return transactions.map((_, index) => {
+      const response = responses.find(item => Number(item?.id) === index + 1);
+      if (response?.result) {
+        try { return { gas: BigInt(String(response.result)) }; } catch {}
+      }
+      return { gas: null, error: String(response?.error?.message ?? "eth_estimateGas unavailable") };
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return transactions.map(() => ({ gas: null, error: message }));
+  }
+}
+
 export async function preflightAllLSTArbitrage(
   rpcUrl: string,
   cache: LSTArbitrageCache | undefined,
@@ -2326,6 +2367,13 @@ export async function preflightAllLSTArbitrage(
     const gasPriceRaw = await rpcJson(rpcUrl, "eth_gasPrice").catch(() => "0x0");
     const gasPrice = BigInt(String(gasPriceRaw));
 
+    // Use eth_estimateGas as an independent check. Profitability uses the
+    // conservative maximum of estimateGas and simulation gasUsed so the
+    // simulation gas ceiling cannot become the gas cost.
+    const gasEstimatesByRoute = await Promise.all(
+      prepared.map(item => estimateGasBatch(rpcUrl, item.transactions))
+    );
+
     for (let index = 0; index < prepared.length; index++) {
       const item = prepared[index];
       const calls = Array.isArray(simulatedBlocks[index]?.calls)
@@ -2341,13 +2389,41 @@ export async function preflightAllLSTArbitrage(
       const successful =
         simulatedResults.length === item.transactions.length &&
         simulatedResults.every((entry: any) => entry.ok === true);
-      const gasUnits = simulatedResults.reduce(
-        (sum: bigint, entry: any) =>
-          sum + (entry?.gasUsed ? BigInt(entry.gasUsed) : 0n),
+
+      const estimates = gasEstimatesByRoute[index] ?? [];
+      const gasByTx = item.transactions.map((_, txIndex) => {
+        const simulatedGas = simulatedResults[txIndex]?.gasUsed
+          ? BigInt(simulatedResults[txIndex].gasUsed)
+          : 0n;
+        const estimatedGas = estimates[txIndex]?.gas ?? 0n;
+        return {
+          simulatedGas,
+          estimatedGas,
+          effectiveGas: estimatedGas > simulatedGas ? estimatedGas : simulatedGas,
+          source:
+            estimates[txIndex]?.gas !== null &&
+            estimates[txIndex]?.gas !== undefined
+              ? "max(eth_estimateGas,eth_simulateV1.gasUsed)"
+              : simulatedGas > 0n
+                ? "eth_simulateV1.gasUsed:fallback"
+                : "unavailable"
+        };
+      });
+
+      const gasUnits = gasByTx.reduce(
+        (sum: bigint, entry: any) => sum + entry.effectiveGas,
         0n
       );
       const gasCostMon =
         gasUnits > 0n ? Number(gasUnits * gasPrice) / 1e18 : null;
+      const allGasEstimated =
+        estimates.length === item.transactions.length &&
+        estimates.every((entry: any) => entry?.gas !== null && entry?.gas !== undefined);
+      const gasSource = allGasEstimated
+        ? "max(eth_estimateGas,eth_simulateV1.gasUsed)"
+        : gasUnits > 0n
+          ? "mixed:eth_estimateGas+eth_simulateV1.gasUsed"
+          : "unavailable";
 
       results.push({
         route: item.route.path,
@@ -2360,6 +2436,15 @@ export async function preflightAllLSTArbitrage(
         gasUnits: gasUnits.toString(),
         gasPriceRaw: gasPrice.toString(),
         gasCostMon,
+        gasSource,
+        gasByTransaction: gasByTx.map((entry: any, txIndex: number) => ({
+          transactionIndex: txIndex,
+          simulatedGas: entry.simulatedGas.toString(),
+          estimatedGas: estimates[txIndex]?.gas?.toString() ?? null,
+          effectiveGas: entry.effectiveGas.toString(),
+          estimateError: estimates[txIndex]?.error ?? null,
+          source: entry.source
+        })),
         candidate:
           successful &&
           item.quote.candidate === true &&
@@ -2373,6 +2458,12 @@ export async function preflightAllLSTArbitrage(
           successful,
           results: simulatedResults,
           error: simulationError
+        },
+        gasEstimation: {
+          method: "eth_estimateGas",
+          batched: true,
+          authoritativeForProfitability: true,
+          conservativeRule: "effectiveGas=max(eth_estimateGas,simulation.gasUsed)"
         },
         legResults: item.legResults
       });

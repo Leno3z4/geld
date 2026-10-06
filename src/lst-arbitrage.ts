@@ -84,6 +84,31 @@ export const MAX_REFINED_ROUTES = 0;
 // A closed arbitrage path needs at least 2 hops; six is the maximum without revisiting an asset.
 export const MAX_ARBITRAGE_HOPS = 6;
 export const PROBE_SIZE_MON = 1;
+
+// Meme-first arbitrage policy. The scanner remains dynamic: known Monad memes
+// get first priority, while any non-infrastructure token discovered from the
+// live DEX universe can also qualify as meme-like. Exact quotes/simulation are
+// still mandatory, so classification never creates a trade by itself.
+const MEME_SYMBOLS = new Set([
+  "MOE", "CHOG", "FLING", "JAMES", "MONCOCK", "MOLANDAK", "ANAGO",
+  "MONCAT", "GOCHI", "BOB", "NADS", "HOGDOG", "GROOL", "EGG", "MONIGGA",
+  "UNIT", "DUST", "ALLOCA", "WRAITH", "MOYAKI", "PAMPAM", "SALMONAD",
+  "CATLABS", "PEPE", "BCHOG", "MONCHEL", "MONI", "TCG", "GMONAD", "143"
+]);
+const NON_MEME_SYMBOLS = new Set([
+  "WMON", "MON", "USDC", "USDT", "USDT0", "AUSD", "WETH", "WBTC", "CBUSDC",
+  "CBBTC", "SHMON", "SMON", "GMON", "APRMON", "CAKE", "LVMON", "LV"
+]);
+const MEME_PROBE_MIN_LIQUIDITY_USD = 2_500;
+const MEME_PROBE_MIN_VOLUME_24H_USD = 500;
+const normalizeMemeSymbol = (symbol: string) =>
+  String(symbol ?? "").trim().toUpperCase().replace(/^V[23]/, "");
+const isMemeLikeSymbol = (symbol: string) => {
+  const normalized = normalizeMemeSymbol(symbol);
+  if (!normalized || normalized.startsWith("TKN_")) return false;
+  if (NON_MEME_SYMBOLS.has(normalized)) return false;
+  return MEME_SYMBOLS.has(normalized) || normalized.length > 0;
+};
 const EXECUTION_BUFFER_BPS = Math.round(EXECUTION_BUFFER_PCT * 100);
 const DEXPAPRIKA_NETWORK = "monad";
 const DEXPAPRIKA_BASE_URL = "https://api.dexpaprika.com";
@@ -116,7 +141,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-universal-token-discovery-v25-kuru-quote-fill-estimation-2026-10-06";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-meme-primary-v26-sequential-gas-2026-10-06";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KYBER_BASE_URL = "https://aggregator-api.kyberswap.com";
@@ -2528,14 +2553,18 @@ export async function preflightAllLSTArbitrage(
   };
 }
 
-async function scoutKyberRoundTrips(rpcMonUsd = 0) {
+async function scoutKyberRoundTrips(
+  rpcMonUsd = 0,
+  targetOverride?: Array<{symbol: string; address: string}>
+) {
+  const targets = targetOverride?.length ? targetOverride : KYBER_SCOUT_TARGETS;
   const mon = "0x3bd359c1119da7da1d913d1c4d2b7c461115433a";
   const amountIn = parseUnits(String(KYBER_PROBE_SIZE_MON), 18).toString();
   const results: any[] = [];
   const errors: string[] = [];
   let requestsThisScan = 0;
 
-  for (const target of KYBER_SCOUT_TARGETS) {
+  for (const target of targets) {
     const forwardKey = "kyber:roundtrip:" + mon + ":" + target.address + ":forward:" + amountIn;
     const reverseKeyPrefix = "kyber:roundtrip:" + target.address + ":" + mon + ":reverse:";
     try {
@@ -2617,7 +2646,7 @@ async function scoutKyberRoundTrips(rpcMonUsd = 0) {
     enabled: true,
     probeSizeMon: KYBER_PROBE_SIZE_MON,
     requestsThisScan,
-    targetCount: KYBER_SCOUT_TARGETS.length,
+    targetCount: targets.length,
     results,
     topSignal: results.find(x => x.candidate === true) ?? null,
     errors: errors.length ? [...new Set(errors)] : undefined
@@ -3288,15 +3317,21 @@ export async function scanLSTArbitrage(
       dexes.size >= 2
     );
   };
-  const isKuruMonUsdc = (route: any) =>
-    isCrossVenueKuru(route) &&
-    route.legs.some(
-      (leg: PoolEdge) =>
-        leg.quoteKind === "kuru" &&
-        String(leg.kuruMarket?.symbol ?? "").toUpperCase() === "MON_USDC"
-    );
+  const isMemeArbitrageRoute = (route: any) =>
+    route.legs.some((leg: PoolEdge) => isMemeLikeSymbol(leg.fromSymbol) || isMemeLikeSymbol(leg.toSymbol));
+  const isQualifiedMemeProbe = (route: any) =>
+    isMemeArbitrageRoute(route) &&
+    route.distinctDexes >= 2 &&
+    route.liquidityScore >= MEME_PROBE_MIN_LIQUIDITY_USD &&
+    route.volumeScore >= MEME_PROBE_MIN_VOLUME_24H_USD;
 
-  let kuruIndex = remainingRoutes.findIndex(isKuruMonUsdc);
+  // Kuru remains strategically important, but only force it when the Kuru
+  // route is also a qualified meme route. Otherwise the generic meme ranking
+  // below gets the exact probe slots.
+  const isKuruQualifiedMeme = (route: any) =>
+    isCrossVenueKuru(route) && isQualifiedMemeProbe(route);
+
+  let kuruIndex = remainingRoutes.findIndex(isKuruQualifiedMeme);
   if (kuruIndex < 0) {
     kuruIndex = remainingRoutes.findIndex(isCrossVenueKuru);
   }
@@ -3335,7 +3370,18 @@ export async function scanLSTArbitrage(
       const dexDiversityWeight = options.exactOnly
         ? 10_000_000
         : 100_000;
+      const memePriority = isQualifiedMemeProbe(route)
+        ? 1_000_000_000_000
+        : isMemeArbitrageRoute(route)
+          ? 100_000_000_000
+          : 0;
+      const qualityScore = isQualifiedMemeProbe(route)
+        ? Math.min(route.liquidityScore, 1_000_000) * 10_000 +
+          Math.min(route.volumeScore, 1_000_000) * 100
+        : 0;
       const score =
+        memePriority +
+        qualityScore +
         theoreticalEdgeScore +
         newDexCount * dexDiversityWeight +
         route.distinctDexes * 10_000 +
@@ -3602,6 +3648,13 @@ export async function scanLSTArbitrage(
     (a, b) => b.netProfitMon - a.netProfitMon
   );
 
+  const memeKyberTargets = [...assets.values()]
+    .filter(asset => asset.address.toLowerCase() !== WMON_ADDRESS.toLowerCase())
+    .filter(asset => isMemeLikeSymbol(asset.symbol))
+    .sort((a, b) => b.symbol.localeCompare(a.symbol))
+    .slice(0, 6)
+    .map(asset => ({ symbol: asset.symbol, address: asset.address }));
+
   const kyberScout = includeKyberScout
     ? await scoutKyberRoundTrips(
         (() => {
@@ -3611,7 +3664,8 @@ export async function scanLSTArbitrage(
           return usdcQuote && usdcQuote.finalQuoteRaw
             ? Number(usdcQuote.finalQuoteRaw) / 1e6 / Number(usdcQuote.sizeMon)
             : 0;
-        })()
+        })(),
+        memeKyberTargets
       )
     : {
     enabled: false,
@@ -3635,6 +3689,10 @@ export async function scanLSTArbitrage(
     routeCount: allRoutes.length,
     discoveryRouteCount: discoveryRoutes.length,
     probeRouteCount: probeRoutes.length,
+    memeRouteCount: allRoutes.filter(isMemeArbitrageRoute).length,
+    qualifiedMemeRouteCount: allRoutes.filter(isQualifiedMemeProbe).length,
+    memeProbeRouteCount: probeRoutes.filter(isMemeArbitrageRoute).length,
+    strategy: "meme-primary",
     arbitragePotentialTokenCount: arbitragePotentialTokens.length,
     arbitragePotentialTokens,
     discoveredTokenCount: assets.size,

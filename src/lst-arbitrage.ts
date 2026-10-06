@@ -99,11 +99,12 @@ const PLANNED_DISCOVERY_REQUESTS = 8;
 const PLANNED_KYBER_SCOUT_REQUESTS = 12;
 // A route with six hops can consume one external RPC call per exact leg.
 // Keep enough headroom for provider/cache calls on the Free 50-subrequest plan.
-const PLANNED_CACHE_API_CALLS = 10;
+const PLANNED_CACHE_API_CALLS = 0;
 const PLANNED_EXACT_REQUESTS =
   MAX_EXACT_ROUTES * MAX_ARBITRAGE_HOPS;
 
 const PLANNED_DISCOVERY_FALLBACK_REQUESTS = 0;
+const PLANNED_KURU_REQUESTS = 1;
 const PLANNED_WORST_CASE_EXTERNAL_REQUESTS =
   PLANNED_DISCOVERY_REQUESTS +
   PLANNED_KYBER_SCOUT_REQUESTS +

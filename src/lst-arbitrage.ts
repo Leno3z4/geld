@@ -78,7 +78,7 @@ export const EXECUTION_BUFFER_PCT = 0.20;
 export const MIN_NET_PROFIT_MON = 0.005;
 export const GAS_BUFFER_MON = 0.001;
 export const TRADE_SIZES_MON = [1, 5, 10];
-export const MAX_EXACT_ROUTES = 2;
+export const MAX_EXACT_ROUTES = 4;
 export const MAX_REFINED_ROUTES = 0;
 // Search every simple closed route possible across the six configured assets.
 // A closed arbitrage path needs at least 2 hops; six is the maximum without revisiting an asset.
@@ -2145,7 +2145,7 @@ export async function preflightAllLSTArbitrage(
   sizeMon = 1,
   routeLimit = 2
 ) {
-  const safeRouteLimit = Math.max(1, Math.min(2, Math.floor(routeLimit)));
+  const safeRouteLimit = Math.max(1, Math.min(MAX_EXACT_ROUTES, Math.floor(routeLimit)));
   const scan = await scanLSTArbitrage(rpcUrl, cache, apiKey, {
     probeLimit: safeRouteLimit,
     includeKyberScout: false,
@@ -3692,10 +3692,10 @@ export async function scanLSTArbitrage(
     externalRequestBudget: {
       freeTierLimit: FREE_EXTERNAL_SUBREQUEST_LIMIT,
       plannedDiscoveryRequests: PLANNED_DISCOVERY_REQUESTS,
-      plannedExactAndRefinementRequests: PLANNED_EXACT_REQUESTS,
+      plannedKuruRequests: PLANNED_KURU_REQUESTS,\n      plannedExactAndRefinementRequests: PLANNED_EXACT_REQUESTS,
       plannedWorstCaseExternalRequests:
         PLANNED_WORST_CASE_EXTERNAL_REQUESTS,
-      safetyMarginRequests: 4,
+      safetyMarginRequests: FREE_EXTERNAL_SUBREQUEST_LIMIT - PLANNED_WORST_CASE_EXTERNAL_REQUESTS,
       headroom:
         FREE_EXTERNAL_SUBREQUEST_LIMIT -
         PLANNED_WORST_CASE_EXTERNAL_REQUESTS

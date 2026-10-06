@@ -148,7 +148,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-meme-primary-v28-nadfun-exact-2026-10-06";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-meme-primary-v29-ign-meme-gate-2026-10-06";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KYBER_BASE_URL = "https://aggregator-api.kyberswap.com";
@@ -248,6 +248,7 @@ export const ARBITRAGE_ASSETS: ArbitrageAsset[] = [
   { symbol: "FLING", address: "0xa9da3c77ec7cdc4dfaa1fe142af583543d1c540f", decimals: 18 },
   { symbol: "CHOG", address: "0x350035555e10d9afaf1566aaebfced5ba6c27777", decimals: 18 },
   { symbol: "JAMES", address: "0x43cf5407bda1400498b8064d50a7e17528d87777", decimals: 18 },
+  { symbol: "IGN", address: "0x11ed3b12d99d508f926c870fb44f472001842c96", decimals: 18 },
   { symbol: "ANAGO", address: "0x99ae2dc76c43979e3bcc0ae8d69f1fca077c8888", decimals: 18 },
   { symbol: "UNIT", address: "0x788571e0e5067adea87e6ba22a2b738ffdf48888", decimals: 18 },
   { symbol: "DUST", address: "0xad96c3dffcd6374294e2573a7fbba96097cc8d7c", decimals: 18 },

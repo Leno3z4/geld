@@ -26,7 +26,6 @@ type DashboardState = {
     watchedTokens?: number;
     eligibleCandidates?: number;
   };
-  arbitrage?: any;
 };
 
 const initialState: DashboardState = {
@@ -48,7 +47,6 @@ const initialState: DashboardState = {
     wins: 0,
     losses: 0
   },
-  arbitrage: null
 };
 
 const C = createContext<DashboardState>(initialState);
@@ -79,7 +77,6 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
           ...initialState.stats,
           ...(next.stats ?? {})
         },
-        arbitrage: next.arbitrage ?? null
       });
       setApiError("");
     };
@@ -99,31 +96,10 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
 
     void refresh();
 
-    const refreshArbitrage = async () => {
-      try {
-        const response = await fetch(CLOUDFLARE_API_BASE + "/api/arbitrage/discovery", {
-          headers: { accept: "application/json" },
-          cache: "no-store"
-        });
-        if (!response.ok) throw new Error(`Arbitrage API ${response.status}`);
-        if (!mounted) return;
-        const arbitrage = await response.json();
-        setState(current => ({ ...current, arbitrage }));
-      } catch (error) {
-        if (mounted) {
-          console.warn("GELD arbitrage discovery refresh failed", error);
-        }
-      }
-    };
-
-    void refreshArbitrage();
     const timer = window.setInterval(() => void refresh(), 5000);
-    const arbitrageTimer = window.setInterval(() => void refreshArbitrage(), 30000);
-
     return () => {
       mounted = false;
       window.clearInterval(timer);
-      window.clearInterval(arbitrageTimer);
     };
   }, []);
 

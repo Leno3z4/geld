@@ -2942,7 +2942,6 @@ export async function preflightAllLSTArbitrage(
           batched: true,
           authoritativeForProfitability: true,
           conservativeRule: "use eth_estimateGas only for profitability; eth_simulateV1 validates sequential execution state and its gas fields are diagnostic only",
-          sequentialStateAware: true
           simulationIsolation: "one route per eth_simulateV1 call to stay under Monad aggregate simulation gas limits",
           sequentialStateAware: true,
           requiresCompleteEstimates: true

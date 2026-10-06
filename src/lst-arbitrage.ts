@@ -2150,14 +2150,16 @@ export async function preflightAllLSTArbitrage(
   const scan = await scanLSTArbitrage(rpcUrl, cache, apiKey, {
     probeLimit: safeRouteLimit,
     includeKyberScout: false,
-    exactOnly: true
+    exactOnly: true,
+    probeSizeMon: sizeMon
   });
 
   const results: any[] = [];
   const prepared: Array<{ route: any; quote: any; transactions: any[]; legResults: any[] }> = [];
   for (const route of scan.routes as any[]) {
-    const quote = (route.exactQuotes ?? []).find((q: any) => q.ok === true && Number(q.sizeMon) === sizeMon)
-      ?? (route.exactQuotes ?? []).find((q: any) => q.ok === true);
+    const quote = (route.exactQuotes ?? []).find(
+      (q: any) => q.ok === true && Number(q.sizeMon) === sizeMon
+    );
     if (!quote?.exactLegs?.length) {
       results.push({ route: route.path, ok: false, reason: "No exact quote legs available" });
       continue;
@@ -3080,6 +3082,8 @@ export type LSTArbitrageScanOptions = {
   includeKyberScout?: boolean;
   discoveryOnly?: boolean;
   exactOnly?: boolean;
+  /** Exact quote size used for probe/refinement. Defaults to the scanner probe size. */
+  probeSizeMon?: number;
 };
 
 export async function scanLSTArbitrage(
@@ -3089,6 +3093,10 @@ export async function scanLSTArbitrage(
   options: LSTArbitrageScanOptions = {}
 ) {
   const probeLimit = Math.max(1, Math.min(6, Math.floor(options.probeLimit ?? MAX_EXACT_ROUTES)));
+  const requestedProbeSize = Number(options.probeSizeMon ?? PROBE_SIZE_MON);
+  const probeSizeMon = Number.isFinite(requestedProbeSize) && requestedProbeSize > 0
+    ? Math.min(requestedProbeSize, 10)
+    : PROBE_SIZE_MON;
   const includeKyberScout = options.includeKyberScout !== false;
   const discovery = await discoverDexPaprikaMonadPools(cache, apiKey);
   const assets = new Map<string, ArbitrageAsset>(assetMap());
@@ -3203,9 +3211,9 @@ export async function scanLSTArbitrage(
       // but it is never treated as executable profit. Exact on-chain quotes
       // and preflight simulation remain mandatory before a candidate exists.
       discoveryEstimate: {
-        sizeMon: PROBE_SIZE_MON,
-        estimatedFinalMon: PROBE_SIZE_MON * route.multiplier,
-        estimatedGrossProfitMon: PROBE_SIZE_MON * (route.multiplier - 1),
+        sizeMon: probeSizeMon,
+        estimatedFinalMon: probeSizeMon * route.multiplier,
+        estimatedGrossProfitMon: probeSizeMon * (route.multiplier - 1),
         estimatedGrossReturnPct: route.grossEdgePct,
         basis: "discovery-pool-rates",
         exactQuoteRequired: true
@@ -3346,7 +3354,7 @@ export async function scanLSTArbitrage(
         await simulateCycle(
           client,
           route,
-          PROBE_SIZE_MON,
+          probeSizeMon,
           kuruParamsCache,
           uniswapFeeCache,
           v4KeyCache

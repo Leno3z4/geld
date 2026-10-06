@@ -3703,7 +3703,8 @@ export async function scanLSTArbitrage(
     externalRequestBudget: {
       freeTierLimit: FREE_EXTERNAL_SUBREQUEST_LIMIT,
       plannedDiscoveryRequests: PLANNED_DISCOVERY_REQUESTS,
-      plannedKuruRequests: PLANNED_KURU_REQUESTS,\n      plannedExactAndRefinementRequests: PLANNED_EXACT_REQUESTS,
+      plannedKuruRequests: PLANNED_KURU_REQUESTS,
+      plannedExactAndRefinementRequests: PLANNED_EXACT_REQUESTS,
       plannedWorstCaseExternalRequests:
         PLANNED_WORST_CASE_EXTERNAL_REQUESTS,
       safetyMarginRequests: FREE_EXTERNAL_SUBREQUEST_LIMIT - PLANNED_WORST_CASE_EXTERNAL_REQUESTS,

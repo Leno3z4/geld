@@ -1268,7 +1268,7 @@ async function discoverGeckoTerminalMonadPools(
       provider: {
         source: "geckoterminal",
         network: "monad",
-        requestsThisScan: 0,
+        requestsThisScan: 1,
         poolCount: 0,
         availableDexes: [],
         errors

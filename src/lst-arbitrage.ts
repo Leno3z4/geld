@@ -115,7 +115,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-universal-token-discovery-v23-batched-estimate-gas-2026-10-06";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-universal-token-discovery-v24-safe-gas-estimate-gating-2026-10-06";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KYBER_BASE_URL = "https://aggregator-api.kyberswap.com";
@@ -2394,36 +2394,39 @@ export async function preflightAllLSTArbitrage(
       const gasByTx = item.transactions.map((_, txIndex) => {
         const simulatedGas = simulatedResults[txIndex]?.gasUsed
           ? BigInt(simulatedResults[txIndex].gasUsed)
-          : 0n;
-        const estimatedGas = estimates[txIndex]?.gas ?? 0n;
+          : null;
+        const estimatedGas = estimates[txIndex]?.gas ?? null;
         return {
           simulatedGas,
           estimatedGas,
-          effectiveGas: estimatedGas > simulatedGas ? estimatedGas : simulatedGas,
-          source:
-            estimates[txIndex]?.gas !== null &&
-            estimates[txIndex]?.gas !== undefined
-              ? "max(eth_estimateGas,eth_simulateV1.gasUsed)"
-              : simulatedGas > 0n
-                ? "eth_simulateV1.gasUsed:fallback"
-                : "unavailable"
+          // NEVER use eth_simulateV1's configured per-call gas ceiling as
+          // a profitability fallback. A failed estimate means gas is unknown.
+          effectiveGas: estimatedGas,
+          source: estimatedGas !== null ? "eth_estimateGas" : "unavailable",
+          estimateError: estimates[txIndex]?.error ?? null
         };
       });
 
-      const gasUnits = gasByTx.reduce(
-        (sum: bigint, entry: any) => sum + entry.effectiveGas,
-        0n
-      );
-      const gasCostMon =
-        gasUnits > 0n ? Number(gasUnits * gasPrice) / 1e18 : null;
       const allGasEstimated =
         estimates.length === item.transactions.length &&
         estimates.every((entry: any) => entry?.gas !== null && entry?.gas !== undefined);
+      const gasUnits = allGasEstimated
+        ? gasByTx.reduce(
+            (sum: bigint, entry: any) => sum + (entry.effectiveGas ?? 0n),
+            0n
+          )
+        : null;
+      const gasCostMon =
+        gasUnits !== null ? Number(gasUnits * gasPrice) / 1e18 : null;
       const gasSource = allGasEstimated
-        ? "max(eth_estimateGas,eth_simulateV1.gasUsed)"
-        : gasUnits > 0n
-          ? "mixed:eth_estimateGas+eth_simulateV1.gasUsed"
-          : "unavailable";
+        ? "eth_estimateGas"
+        : "unavailable:incomplete-estimates";
+      const gasEstimationErrors = gasByTx
+        .filter((entry: any) => entry.estimateError)
+        .map((entry: any, txIndex: number) => ({
+          transactionIndex: txIndex,
+          error: entry.estimateError
+        }));
 
       results.push({
         route: item.route.path,
@@ -2433,22 +2436,26 @@ export async function preflightAllLSTArbitrage(
         quotedFinalMon: item.quote.finalMon,
         quotedGrossProfitMon: item.quote.grossProfitMon,
         quotedNetProfitMon: item.quote.netProfitMon,
-        gasUnits: gasUnits.toString(),
+        gasUnits: gasUnits?.toString() ?? null,
         gasPriceRaw: gasPrice.toString(),
         gasCostMon,
         gasSource,
+        gasEstimationComplete: allGasEstimated,
+        gasEstimationErrors,
         gasByTransaction: gasByTx.map((entry: any, txIndex: number) => ({
           transactionIndex: txIndex,
-          simulatedGas: entry.simulatedGas.toString(),
-          estimatedGas: estimates[txIndex]?.gas?.toString() ?? null,
-          effectiveGas: entry.effectiveGas.toString(),
-          estimateError: estimates[txIndex]?.error ?? null,
+          simulatedGas: entry.simulatedGas?.toString() ?? null,
+          estimatedGas: entry.estimatedGas?.toString() ?? null,
+          effectiveGas: entry.effectiveGas?.toString() ?? null,
+          estimateError: entry.estimateError ?? null,
           source: entry.source
         })),
         candidate:
           successful &&
           item.quote.candidate === true &&
           gasCostMon !== null &&
+          allGasEstimated &&
+          gasEstimationErrors.length === 0 &&
           item.quote.finalMon - sizeMon - gasCostMon - GAS_BUFFER_MON >= MIN_NET_PROFIT_MON,
         transactionCount: item.transactions.length,
         transactions: item.transactions,
@@ -2463,7 +2470,8 @@ export async function preflightAllLSTArbitrage(
           method: "eth_estimateGas",
           batched: true,
           authoritativeForProfitability: true,
-          conservativeRule: "effectiveGas=max(eth_estimateGas,simulation.gasUsed)"
+          conservativeRule: "use eth_estimateGas only; simulation gasUsed is diagnostic and never a profitability fallback",
+          requiresCompleteEstimates: true
         },
         legResults: item.legResults
       });

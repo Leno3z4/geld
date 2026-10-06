@@ -2355,8 +2355,7 @@ export async function preflightAllLSTArbitrage(
             from: tx.from,
             to: tx.to,
             value: tx.value,
-            data: tx.input,
-            gas: "0x4c4b40"
+            data: tx.input
           }))
         })),
         traceTransfers: true,
@@ -2396,24 +2395,46 @@ export async function preflightAllLSTArbitrage(
 
       const estimates = gasEstimatesByRoute[index] ?? [];
       const gasByTx = item.transactions.map((_, txIndex) => {
-        const simulatedGas = simulatedResults[txIndex]?.gasUsed
-          ? BigInt(simulatedResults[txIndex].gasUsed)
+        const simulatedEntry = simulatedResults[txIndex];
+        const simulatedGas = simulatedEntry?.gasUsed
+          ? BigInt(simulatedEntry.gasUsed)
           : null;
+        const simulatedMaxUsedGas = simulatedEntry?.maxUsedGas
+          ? BigInt(simulatedEntry.maxUsedGas)
+          : null;
+        const sequentialSimulationGas = simulatedMaxUsedGas ?? simulatedGas;
         const estimatedGas = estimates[txIndex]?.gas ?? null;
+
+        // eth_estimateGas runs each transaction independently against latest,
+        // so later swaps cannot see uncommitted approvals/transfers. The
+        // uncapped eth_simulateV1 sequence executes the full route in order,
+        // so its per-call gas is the state-aware baseline.
+        let effectiveGas = sequentialSimulationGas;
+        let source = sequentialSimulationGas !== null
+          ? "eth_simulateV1-sequential"
+          : "unavailable";
+
+        if (estimatedGas !== null && effectiveGas !== null) {
+          effectiveGas = effectiveGas > estimatedGas ? effectiveGas : estimatedGas;
+          source = "max(eth_simulateV1-sequential,eth_estimateGas)";
+        } else if (estimatedGas !== null) {
+          effectiveGas = estimatedGas;
+          source = "eth_estimateGas";
+        }
+
         return {
           simulatedGas,
+          simulatedMaxUsedGas,
           estimatedGas,
-          // NEVER use eth_simulateV1's configured per-call gas ceiling as
-          // a profitability fallback. A failed estimate means gas is unknown.
-          effectiveGas: estimatedGas,
-          source: estimatedGas !== null ? "eth_estimateGas" : "unavailable",
+          effectiveGas,
+          source,
           estimateError: estimates[txIndex]?.error ?? null
         };
       });
 
       const allGasEstimated =
-        estimates.length === item.transactions.length &&
-        estimates.every((entry: any) => entry?.gas !== null && entry?.gas !== undefined);
+        gasByTx.length === item.transactions.length &&
+        gasByTx.every((entry: any) => entry?.effectiveGas !== null && entry?.effectiveGas !== undefined);
       const gasUnits = allGasEstimated
         ? gasByTx.reduce(
             (sum: bigint, entry: any) => sum + (entry.effectiveGas ?? 0n),
@@ -2445,10 +2466,12 @@ export async function preflightAllLSTArbitrage(
         gasCostMon,
         gasSource,
         gasEstimationComplete: allGasEstimated,
+        gasEstimationSequentialStateAware: true,
         gasEstimationErrors,
         gasByTransaction: gasByTx.map((entry: any, txIndex: number) => ({
           transactionIndex: txIndex,
           simulatedGas: entry.simulatedGas?.toString() ?? null,
+          simulatedMaxUsedGas: entry.simulatedMaxUsedGas?.toString() ?? null,
           estimatedGas: entry.estimatedGas?.toString() ?? null,
           effectiveGas: entry.effectiveGas?.toString() ?? null,
           estimateError: entry.estimateError ?? null,
@@ -2459,7 +2482,6 @@ export async function preflightAllLSTArbitrage(
           item.quote.candidate === true &&
           gasCostMon !== null &&
           allGasEstimated &&
-          gasEstimationErrors.length === 0 &&
           item.quote.finalMon - sizeMon - gasCostMon - GAS_BUFFER_MON >= MIN_NET_PROFIT_MON,
         transactionCount: item.transactions.length,
         transactions: item.transactions,
@@ -2474,7 +2496,8 @@ export async function preflightAllLSTArbitrage(
           method: "eth_estimateGas",
           batched: true,
           authoritativeForProfitability: true,
-          conservativeRule: "use eth_estimateGas only; simulation gasUsed is diagnostic and never a profitability fallback",
+          conservativeRule: "use uncapped sequential eth_simulateV1 gas as the state-aware baseline; when eth_estimateGas is available, use the higher value; never use an artificial simulation ceiling",
+          sequentialStateAware: true
           requiresCompleteEstimates: true
         },
         legResults: item.legResults

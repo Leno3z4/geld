@@ -1248,14 +1248,14 @@ async function discoverGeckoTerminalMonadPools(
 
     const finalPools = dedupePoolRecords(pools);
     return {
-      pools: deduped,
+      pools: finalPools,
       assets: [...assets.values()],
       provider: {
         source: "geckoterminal",
         network: "monad",
-        requestsThisScan: result.fromCache ? 0 : 1,
-        poolCount: deduped.length,
-        availableDexes: [...new Set(deduped.map(pool =>
+        requestsThisScan: (result.fromCache ? 0 : 1) + extraRequests,
+        poolCount: finalPools.length,
+        availableDexes: [...new Set(finalPools.map(pool =>
           String(pool?.relationships?.dex?.data?.id ?? "").toLowerCase()
         ).filter(Boolean))].sort()
       }
@@ -1268,7 +1268,7 @@ async function discoverGeckoTerminalMonadPools(
       provider: {
         source: "geckoterminal",
         network: "monad",
-        requestsThisScan: 1,
+        requestsThisScan: 0,
         poolCount: 0,
         availableDexes: [],
         errors

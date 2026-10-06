@@ -518,6 +518,8 @@ async function getRuntimeConfig(env: Env) {
 
 export { GeldHighCapLearning, GeldLeverUpPaper };
 
+const MAX_STATE_SNAPSHOT_BYTES = 750 * 1024;
+
 export class GeldState extends DurableObject<Env> {
   async fetch(request: Request) {
     const secret = this.env.STATE_SYNC_SECRET;
@@ -550,9 +552,43 @@ export class GeldState extends DurableObject<Env> {
 
     if (request.method === "POST") {
       const body = await request.text();
-      JSON.parse(body);
+      const bytes = new TextEncoder().encode(body).byteLength;
+
+      // Protect the SQLite-backed DO value from oversized callers. GELD's
+      // StateStore already compacts snapshots below this threshold; this guard
+      // also protects the internal endpoint from malformed/manual requests.
+      if (bytes > MAX_STATE_SNAPSHOT_BYTES) {
+        return Response.json(
+          {
+            ok: false,
+            error: "State snapshot exceeds safe persistence limit",
+            bytes,
+            maxBytes: MAX_STATE_SNAPSHOT_BYTES,
+            recoverable: true
+          },
+          { status: 413 }
+        );
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        return Response.json(
+          { ok: false, error: "State snapshot must be valid JSON", recoverable: true },
+          { status: 400 }
+        );
+      }
+
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return Response.json(
+          { ok: false, error: "State snapshot must be a JSON object", recoverable: true },
+          { status: 400 }
+        );
+      }
+
       await this.ctx.storage.put("snapshot", body);
-      return Response.json({ ok: true });
+      return Response.json({ ok: true, bytes });
     }
 
     return new Response("Method Not Allowed", { status: 405 });

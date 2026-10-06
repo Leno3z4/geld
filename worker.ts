@@ -1198,13 +1198,15 @@ export default {
         if (!Number.isFinite(sizeMon) || sizeMon <= 0 || sizeMon > 10) {
           return Response.json({ ok: false, error: "sizeMon must be > 0 and <= 10" }, { status: 400 });
         }
+        const memeOnly = url.searchParams.get("memeOnly") === "1";
         const result = await preflightAllLSTArbitrage(
           runtime.rpcUrl,
           undefined,
           env.DEXPAPRIKA_API_KEY,
           sender,
           sizeMon,
-          routeLimit
+          routeLimit,
+          memeOnly
         );
         return Response.json(result, { headers: { "Cache-Control": "no-store" } });
       } catch (error) {

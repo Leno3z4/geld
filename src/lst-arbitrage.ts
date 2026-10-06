@@ -148,7 +148,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-meme-primary-v29-ign-meme-gate-2026-10-06";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-meme-primary-v30-fresh-gecko-meme-priority-2026-10-06";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KYBER_BASE_URL = "https://aggregator-api.kyberswap.com";
@@ -1052,7 +1052,7 @@ async function discoverGeckoTerminalMonadPools(
   }
 
   try {
-    const cacheKey = "geld:arb:gecko:monad:trending:1h:v1";
+    const cacheKey = "geld:arb:gecko:monad:trending:1h:v2";
     const result = await fetchProviderJson<any>(
       cacheKey,
       GECKOTERMINAL_BASE_URL +
@@ -1163,7 +1163,7 @@ async function discoverGeckoTerminalMonadPools(
 
       try {
         const tokenResult = await fetchProviderJson<any>(
-          "geld:arb:gecko:monad:token:" + target.address.toLowerCase() + ":v1",
+          "geld:arb:gecko:monad:token:" + target.address.toLowerCase() + ":v2",
           GECKOTERMINAL_BASE_URL +
             "/networks/monad/tokens/" + target.address.toLowerCase() +
             "/pools?include=base_token,quote_token,dex&page=1",
@@ -3663,6 +3663,13 @@ export async function scanLSTArbitrage(
     5000
   );
 
+  const isMemeArbitrageRoute = (route: any) =>
+    route.legs.some((leg: PoolEdge) =>
+      leg.quoteKind === "nadfun" ||
+      isMemeLikeSymbol(leg.fromSymbol) ||
+      isMemeLikeSymbol(leg.toSymbol)
+    );
+
   const allRoutes = discoveryCycles
     .filter((route) =>
       route.legs.every((leg: PoolEdge) => isExactQuoteSupported(leg.quoteKind))
@@ -3696,12 +3703,18 @@ export async function scanLSTArbitrage(
       )
     }))
     .sort(
-      (a, b) =>
-        (b.distinctDexes - a.distinctDexes) ||
-        (b.distinctPools - a.distinctPools) ||
-        (b.grossEdgePct - a.grossEdgePct) ||
-        (b.liquidityScore - a.liquidityScore) ||
-        (b.volumeScore - a.volumeScore)
+      (a, b) => {
+        const aMeme = isMemeArbitrageRoute(a);
+        const bMeme = isMemeArbitrageRoute(b);
+        if (aMeme !== bMeme) return aMeme ? -1 : 1;
+        return (
+          (b.distinctDexes - a.distinctDexes) ||
+          (b.distinctPools - a.distinctPools) ||
+          (b.grossEdgePct - a.grossEdgePct) ||
+          (b.liquidityScore - a.liquidityScore) ||
+          (b.volumeScore - a.volumeScore)
+        );
+      }
     );
 
   const discoveryRoutes = discoveryCycles

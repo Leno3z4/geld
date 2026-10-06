@@ -977,8 +977,9 @@ async function discoverDexPaprikaMonadPools(
               ...(frontier.provider?.errors ?? [])
             ])]
           : frontier.provider?.errors,
+      memePriorityFrontier: true,
       note:
-        "Network discovery combines the indexed Monad pool universe, NadFun's meme-token universe, and a batched DexScreener token frontier. " +
+        "Network discovery combines the indexed Monad pool universe, NadFun's meme-token universe, and a meme-priority batched DexScreener token frontier. " +
         "Every token found in any source enters the dynamic universe; exact on-chain quotes remain the profitability gate."
     }
   };
@@ -1051,7 +1052,12 @@ async function discoverDexScreenerMonadPools(
   // edge cache so it survives Worker isolate churn without consuming DO storage.
   const frontierAddresses = [...new Set(
     [...assets.keys()].map(address => address.toLowerCase())
-  )].sort();
+  )].sort((a, b) => {
+    const aMeme = isMemeLikeSymbol(assets.get(a)?.symbol ?? "");
+    const bMeme = isMemeLikeSymbol(assets.get(b)?.symbol ?? "");
+    if (aMeme !== bMeme) return aMeme ? -1 : 1;
+    return a.localeCompare(b);
+  });
 
   if (frontierAddresses.length) {
     const cursorEntry = await readEdgeCache<number>(DEXSCREENER_FRONTIER_CURSOR_KEY);

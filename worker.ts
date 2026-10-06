@@ -1,7 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { GeldHighCapLearning } from "./src/highcap-learning.js";
 import { GeldLeverUpPaper } from "./src/leverup-paper.js";
-import { ARBITRAGE_ASSETS, preflightAllLSTArbitrage, preflightKyberRoundTrip, scanLSTArbitrage } from "./src/lst-arbitrage.js";
 
 interface Env {
   GELD_BOT: DurableObjectNamespace<GeldBot>;
@@ -23,11 +22,6 @@ interface Env {
   MONAD_RPC_URL?: string;
   ALCHEMY_RPC_URL?: string;
   MONAD_WS_URL?: string;
-
-  LST_ARBITRAGE_ENABLED?: string;
-  LST_ARBITRAGE_LIVE_EXECUTION?: string;
-  LST_ARBITRAGE_EXECUTOR_ADDRESS?: string;
-  LST_ARBITRAGE_INTERVAL_MS?: string;
 
   GEMINI_FAST_MODEL?: string;
   GEMINI_ESCALATION_MODEL?: string;
@@ -189,9 +183,6 @@ const PUBLIC_API_GET_PATHS = new Set([
   "/api/events",
   "/api/leverup/paper",
   "/api/leverup/preflight",
-  "/api/lst/arbitrage",
-  "/api/lst/arbitrage/preflight-all",
-  "/api/arbitrage/discovery"
 ]);
 
 function isAuthorized(request: Request, env: Env) {
@@ -240,108 +231,6 @@ function parseGeldConfig(env: Env): Record<string, string | undefined> {
   }
 }
 
-let standaloneLSTInFlight = false;
-let standaloneLSTLastAt = 0;
-let standaloneLSTLastResult: any = null;
-let standaloneArbDiscoveryInFlight = false;
-let standaloneArbDiscoveryLastAt = 0;
-let standaloneArbDiscoveryLastResult: any = null;
-const standaloneLSTCache = new Map<string, string>();
-
-async function runStandaloneLSTArbitrage(env: Env, force = false) {
-  const runtime = await getRuntimeConfig(env);
-  if (!runtime.lstArbitrageEnabled) return standaloneLSTLastResult;
-
-  const now = Date.now();
-  if (!force && standaloneLSTLastResult && now - standaloneLSTLastAt < runtime.lstArbitrageIntervalMs) {
-    return standaloneLSTLastResult;
-  }
-  if (standaloneLSTInFlight) return standaloneLSTLastResult;
-
-  standaloneLSTInFlight = true;
-  standaloneLSTLastAt = now;
-  try {
-    const scan = await scanLSTArbitrage(runtime.rpcUrl, {
-      get: async (key) => standaloneLSTCache.get(key),
-      put: async (key, value) => {
-        if (!standaloneLSTCache.has(key) && standaloneLSTCache.size >= 128) {
-          const oldest = standaloneLSTCache.keys().next().value;
-          if (oldest) standaloneLSTCache.delete(oldest);
-        }
-        standaloneLSTCache.delete(key);
-        standaloneLSTCache.set(key, value);
-      }
-    }, env.DEXPAPRIKA_API_KEY);
-    standaloneLSTLastResult = {
-      ...scan,
-      executionPolicy: {
-        enabled: runtime.lstArbitrageEnabled,
-        liveExecutionEnabled: runtime.lstArbitrageLiveExecution,
-        requiresGlobalLiveTrading: true,
-        executorConfigured: Boolean(runtime.lstArbitrageExecutorAddress)
-      },
-      execution: {
-        attempted: false,
-        submitted: false,
-        reason: "Paper-only scanner. No transaction submission is performed."
-      },
-      scheduledAt: now
-    };
-    return standaloneLSTLastResult;
-  } finally {
-    standaloneLSTInFlight = false;
-  }
-}
-
-async function runStandaloneArbitrageDiscovery(env: Env, force = false) {
-  const runtime = await getRuntimeConfig(env);
-  if (!runtime.lstArbitrageEnabled) return standaloneArbDiscoveryLastResult;
-
-  const now = Date.now();
-  if (
-    !force &&
-    standaloneArbDiscoveryLastResult &&
-    now - standaloneArbDiscoveryLastAt < Math.max(runtime.lstArbitrageIntervalMs, 30_000)
-  ) {
-    return standaloneArbDiscoveryLastResult;
-  }
-  if (standaloneArbDiscoveryInFlight) return standaloneArbDiscoveryLastResult;
-
-  standaloneArbDiscoveryInFlight = true;
-  standaloneArbDiscoveryLastAt = now;
-  try {
-    const scan = await scanLSTArbitrage(
-      runtime.rpcUrl,
-      {
-        get: async (key) => standaloneLSTCache.get(key),
-        put: async (key, value) => {
-          if (!standaloneLSTCache.has(key) && standaloneLSTCache.size >= 128) {
-            const oldest = standaloneLSTCache.keys().next().value;
-            if (oldest) standaloneLSTCache.delete(oldest);
-          }
-          standaloneLSTCache.delete(key);
-          standaloneLSTCache.set(key, value);
-        }
-      },
-      env.DEXPAPRIKA_API_KEY,
-      { discoveryOnly: true, probeLimit: 0, includeKyberScout: false }
-    );
-    standaloneArbDiscoveryLastResult = {
-      ...scan,
-      executionPolicy: {
-        enabled: runtime.lstArbitrageEnabled,
-        liveExecutionEnabled: false,
-        requiresGlobalLiveTrading: true,
-        executorConfigured: Boolean(runtime.lstArbitrageExecutorAddress)
-      },
-      scheduledAt: now
-    };
-    return standaloneArbDiscoveryLastResult;
-  } finally {
-    standaloneArbDiscoveryInFlight = false;
-  }
-}
-
 function hydrateProcessEnv(env: Env) {
   const config = parseGeldConfig(env);
 
@@ -362,10 +251,6 @@ function hydrateProcessEnv(env: Env) {
     ALCHEMY_RPC_URL: env.ALCHEMY_RPC_URL,
     MONAD_RPC_URL: valueFor("MONAD_RPC_URL", env.MONAD_RPC_URL),
     MONAD_WS_URL: valueFor("MONAD_WS_URL", env.MONAD_WS_URL),
-    LST_ARBITRAGE_ENABLED: valueFor("LST_ARBITRAGE_ENABLED", env.LST_ARBITRAGE_ENABLED),
-    LST_ARBITRAGE_LIVE_EXECUTION: valueFor("LST_ARBITRAGE_LIVE_EXECUTION", env.LST_ARBITRAGE_LIVE_EXECUTION),
-    LST_ARBITRAGE_EXECUTOR_ADDRESS: valueFor("LST_ARBITRAGE_EXECUTOR_ADDRESS", env.LST_ARBITRAGE_EXECUTOR_ADDRESS),
-    LST_ARBITRAGE_INTERVAL_MS: valueFor("LST_ARBITRAGE_INTERVAL_MS", env.LST_ARBITRAGE_INTERVAL_MS),
     GEMINI_FAST_MODEL: valueFor("GEMINI_FAST_MODEL", env.GEMINI_FAST_MODEL),
     GEMINI_ESCALATION_MODEL: valueFor("GEMINI_ESCALATION_MODEL", env.GEMINI_ESCALATION_MODEL),
     STARTING_CAPITAL_MON: valueFor("STARTING_CAPITAL_MON", env.STARTING_CAPITAL_MON),
@@ -605,15 +490,6 @@ export class GeldBot extends DurableObject<Env> {
   private leverUpReadiness: any = null;
   private lastFullCycleAttemptAt = 0;
   private lastLeverUpPaperAt = 0;
-  private lastLSTArbitrageAt = 0;
-  private lstArbitrageInFlight = false;
-  private lastLSTArbitrageResult: any = null;
-  // LST quote/cache data is deliberately kept in-memory. Persisting every
-  // provider-cache read/write in Durable Object storage can exhaust the Free
-  // tier row-read budget during frequent arbitrage scans.
-  private lstArbitrageCache = new Map<string, string>();
-  private lstArbitrageCacheMaxEntries = 128;
-
   private async getEngine() {
     if (this.engine) return this.engine;
 
@@ -728,85 +604,6 @@ export class GeldBot extends DurableObject<Env> {
     }
   }
 
-  private async runLSTArbitrageCycle(options: { force?: boolean; allowExecution?: boolean } = {}) {
-    const runtime = await getRuntimeConfig(this.env);
-    if (!runtime.lstArbitrageEnabled) return this.lastLSTArbitrageResult;
-
-    const now = Date.now();
-    const force = Boolean(options.force);
-    if (
-      !force &&
-      this.lastLSTArbitrageResult &&
-      now - this.lastLSTArbitrageAt < runtime.lstArbitrageIntervalMs
-    ) {
-      return this.lastLSTArbitrageResult;
-    }
-
-    if (this.lstArbitrageInFlight) return this.lastLSTArbitrageResult;
-
-    this.lstArbitrageInFlight = true;
-    this.lastLSTArbitrageAt = now;
-
-    try {
-      const scan = await scanLSTArbitrage(runtime.rpcUrl, {
-        get: async (key) => this.lstArbitrageCache.get(key),
-        put: async (key, value) => {
-          // Keep the hot cache in the Durable Object isolate instead of
-          // Durable Object storage. This avoids consuming the Free-tier
-          // storage row-read budget on every scan.
-          if (!this.lstArbitrageCache.has(key) && this.lstArbitrageCache.size >= this.lstArbitrageCacheMaxEntries) {
-            const oldest = this.lstArbitrageCache.keys().next().value;
-            if (oldest) this.lstArbitrageCache.delete(oldest);
-          }
-          this.lstArbitrageCache.delete(key);
-          this.lstArbitrageCache.set(key, value);
-        }
-      }, this.env.DEXPAPRIKA_API_KEY);
-      const result = {
-        ...scan,
-        executionPolicy: {
-          enabled: runtime.lstArbitrageEnabled,
-          liveExecutionEnabled: runtime.lstArbitrageLiveExecution,
-          requiresGlobalLiveTrading: true,
-          executorConfigured: Boolean(runtime.lstArbitrageExecutorAddress)
-        },
-        execution: {
-          attempted: false,
-          submitted: false,
-          reason: "Paper-only scanner. No transaction submission is performed."
-        },
-        scheduledAt: now
-      };
-
-      // Keep the latest result in the DO isolate only. The API already
-      // returns this in-memory result and the scanner cache above prevents
-      // another provider burst while this isolate remains warm.
-      this.lastLSTArbitrageResult = result;
-      return result;
-    } catch (error) {
-      const failure = {
-        mode: "PAPER_SIGNAL_ONLY",
-        generatedAt: new Date().toISOString(),
-        executionPolicy: {
-          enabled: runtime.lstArbitrageEnabled,
-          liveExecutionEnabled: runtime.lstArbitrageLiveExecution,
-          requiresGlobalLiveTrading: true,
-          executorConfigured: Boolean(runtime.lstArbitrageExecutorAddress)
-        },
-        execution: {
-          attempted: false,
-          submitted: false,
-          reason: "Scanner failure; no transaction submission is performed."
-        },
-        error: error instanceof Error ? error.message : String(error)
-      };
-      this.lastLSTArbitrageResult = failure;
-      return failure;
-    } finally {
-      this.lstArbitrageInFlight = false;
-    }
-  }
-
   private async runRiskCycle() {
     if (this.cycleInFlight) return;
     this.cycleInFlight = true;
@@ -826,7 +623,6 @@ export class GeldBot extends DurableObject<Env> {
         }
 
         await this.sampleHighCaps(engine);
-        await this.runLSTArbitrageCycle({ allowExecution: false });
       }
     } finally {
       this.cycleInFlight = false;
@@ -845,7 +641,6 @@ export class GeldBot extends DurableObject<Env> {
       if (engine.snapshot().running) {
         await engine.runScheduledCycle();
       }
-      await this.runLSTArbitrageCycle({ allowExecution: false });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("GELD full cycle failed:", error);
@@ -914,29 +709,6 @@ export class GeldBot extends DurableObject<Env> {
 
     if (!isPublicApiRead(request) && !isAuthorized(request, this.env)) {
       return new Response("Unauthorized", { status: 401 });
-    }
-
-    // LST arbitrage is deliberately independent from the TradingEngine.
-    // Do not initialize the memecoin engine/state-sync path just to read or
-    // refresh arbitrage quotes; a corrupt/unavailable remote snapshot must not
-    // take down this paper-only scanner.
-    if (path === "/api/lst/arbitrage") {
-      const force = url.searchParams.get("refresh") === "1";
-      try {
-        const result = await this.runLSTArbitrageCycle({ force, allowExecution: false });
-        return Response.json(result, { headers: { "Cache-Control": "no-store" } });
-      } catch (error) {
-        console.error("LST arbitrage API failed:", error);
-        return Response.json(
-          {
-            mode: "PAPER_SIGNAL_ONLY",
-            generatedAt: new Date().toISOString(),
-            execution: { attempted: false, submitted: false },
-            error: error instanceof Error ? error.message : String(error)
-          },
-          { status: 503, headers: { "Cache-Control": "no-store" } }
-        );
-      }
     }
 
     const engine = await this.getEngine();
@@ -1102,10 +874,6 @@ export class GeldBot extends DurableObject<Env> {
         earlyLaunchProbePortfolioPct: runtimeConfig.earlyLaunchProbePortfolioPct,
         newEventPollMs: runtimeConfig.newEventPollMs,
         newEventCandidateLimit: runtimeConfig.newEventCandidateLimit,
-        lstArbitrageEnabled: runtimeConfig.lstArbitrageEnabled,
-        lstArbitrageLiveExecution: runtimeConfig.lstArbitrageLiveExecution,
-        lstArbitrageExecutorConfigured: Boolean(runtimeConfig.lstArbitrageExecutorAddress),
-        lstArbitrageIntervalMs: runtimeConfig.lstArbitrageIntervalMs
       });
     }
 
@@ -1181,146 +949,6 @@ export default {
     const publicRead = isPublicApiRead(request);
     if (!publicRead && !isAuthorized(request, env)) {
       return new Response("Unauthorized", { status: 401 });
-    }
-
-    if ((url.pathname === "/api/lst/arbitrage/preflight-all" || url.pathname === "/api/arbitrage/preflight-all") && (request.method === "GET" || request.method === "POST")) {
-      try {
-        const runtime = await getRuntimeConfig(env);
-        const memeOnly = url.searchParams.get("memeOnly") === "1";
-        let sender = (url.searchParams.get("sender") ?? "0x000000000000000000000000000000000000dEaD").toLowerCase();
-        if (memeOnly && !url.searchParams.get("sender") && runtime.privateKey) {
-          try {
-            const { privateKeyToAccount } = await import("viem/accounts");
-            sender = privateKeyToAccount(runtime.privateKey as `0x${string}`).address.toLowerCase();
-          } catch (error) {
-            return Response.json(
-              { ok: false, error: "Unable to derive the configured GELD wallet for meme preflight: " + String(error) },
-              { status: 503 }
-            );
-          }
-        }
-        if (!/^0x[0-9a-f]{40}$/.test(sender)) {
-          return Response.json({ ok: false, error: "sender must be a valid EVM address" }, { status: 400 });
-        }
-        const sizeMon = Number(url.searchParams.get("sizeMon") ?? "1");
-        const routeLimit = Number(url.searchParams.get("routeLimit") ?? "2");
-        if (!Number.isFinite(routeLimit) || routeLimit < 1 || routeLimit > 2) {
-          return Response.json({ ok: false, error: "routeLimit must be between 1 and 2 on the Cloudflare Free budget" }, { status: 400 });
-        }
-        if (!Number.isFinite(sizeMon) || sizeMon <= 0 || sizeMon > 10) {
-          return Response.json({ ok: false, error: "sizeMon must be > 0 and <= 10" }, { status: 400 });
-        }
-        const result = await preflightAllLSTArbitrage(
-          runtime.rpcUrl,
-          undefined,
-          env.DEXPAPRIKA_API_KEY,
-          sender,
-          sizeMon,
-          routeLimit,
-          memeOnly
-        );
-        return Response.json(result, { headers: { "Cache-Control": "no-store" } });
-      } catch (error) {
-        return Response.json(
-          { ok: false, error: error instanceof Error ? error.message : String(error) },
-          { status: 503, headers: { "Cache-Control": "no-store" } }
-        );
-      }
-    }
-
-    if (request.method === "POST" && (url.pathname === "/api/lst/arbitrage/preflight" || url.pathname === "/api/arbitrage/preflight")) {
-      try {
-        const runtime = await getRuntimeConfig(env);
-        const targetParam = (url.searchParams.get("target") ?? url.searchParams.get("token") ?? "").trim();
-        if (!targetParam) {
-          return Response.json(
-            { ok: false, error: "target/token is required", example: "/api/arbitrage/preflight?target=0x..." },
-            { status: 400 }
-          );
-        }
-
-        // Arbitrage discovery is dynamic. Do not reject a token merely because
-        // it is absent from the static seed list. Accept any Monad ERC-20
-        // address and let the provider/on-chain route preflight decide whether
-        // there is an actual route.
-        let targetAddress = "";
-        const seeded = ARBITRAGE_ASSETS.find(
-          asset =>
-            asset.symbol.toLowerCase() === targetParam.toLowerCase() ||
-            asset.address.toLowerCase() === targetParam.toLowerCase()
-        );
-        if (seeded) {
-          targetAddress = seeded.address;
-        } else if (/^0x[0-9a-fA-F]{40}$/.test(targetParam)) {
-          targetAddress = targetParam.toLowerCase();
-        } else {
-          return Response.json(
-            {
-              ok: false,
-              error: "target must be a known symbol or a valid Monad ERC-20 address",
-              hint: "Use the dynamic token address returned by /api/arbitrage or /api/lst/arbitrage."
-            },
-            { status: 400 }
-          );
-        }
-
-        const sizeMon = Number(url.searchParams.get("sizeMon") ?? "5");
-        if (!Number.isFinite(sizeMon) || sizeMon <= 0 || sizeMon > 10) {
-          return Response.json({ ok: false, error: "sizeMon must be > 0 and <= 10" }, { status: 400 });
-        }
-
-        const sender = url.searchParams.get("sender") ?? undefined;
-        const slippageBps = Number(url.searchParams.get("slippageBps") ?? "30");
-        if (!Number.isFinite(slippageBps) || slippageBps < 0 || slippageBps > 2000) {
-          return Response.json({ ok: false, error: "slippageBps must be between 0 and 2000" }, { status: 400 });
-        }
-
-        const result = await preflightKyberRoundTrip(
-          runtime.rpcUrl,
-          targetAddress,
-          sizeMon,
-          sender,
-          runtime.privateKey,
-          slippageBps
-        );
-        return Response.json(result, { headers: { "Cache-Control": "no-store" } });
-      } catch (error) {
-        return Response.json(
-          { ok: false, error: error instanceof Error ? error.message : String(error) },
-          { status: 503, headers: { "Cache-Control": "no-store" } }
-        );
-      }
-    }
-    if (url.pathname === "/api/arbitrage/discovery") {
-      const force = url.searchParams.get("refresh") === "1";
-      try {
-        const result = await runStandaloneArbitrageDiscovery(env, force);
-        return Response.json(result, { headers: { "Cache-Control": "no-store" } });
-      } catch (error) {
-        console.error("Standalone arbitrage discovery API failed:", error);
-        return Response.json({
-          mode: "PAPER_DISCOVERY_ONLY",
-          generatedAt: new Date().toISOString(),
-          execution: { attempted: false, submitted: false },
-          error: error instanceof Error ? error.message : String(error)
-        }, { status: 503, headers: { "Cache-Control": "no-store" } });
-      }
-    }
-
-    if (url.pathname === "/api/lst/arbitrage" || url.pathname === "/api/arbitrage") {
-      const force = url.searchParams.get("refresh") === "1";
-      try {
-        const result = await runStandaloneLSTArbitrage(env, force);
-        return Response.json(result, { headers: { "Cache-Control": "no-store" } });
-      } catch (error) {
-        console.error("Standalone LST arbitrage API failed:", error);
-        return Response.json({
-          mode: "PAPER_SIGNAL_ONLY",
-          generatedAt: new Date().toISOString(),
-          execution: { attempted: false, submitted: false },
-          error: error instanceof Error ? error.message : String(error)
-        }, { status: 503, headers: { "Cache-Control": "no-store" } });
-      }
     }
 
     const id = env.GELD_BOT.idFromName("singleton");

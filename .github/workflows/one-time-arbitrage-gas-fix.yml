@@ -273,3 +273,5 @@ jobs:
           git add src/lst-arbitrage.ts
           git commit -m "fix: arbitrage gas estimation" || exit 0
           git push
+
+# trigger one-time patch after workflow installation

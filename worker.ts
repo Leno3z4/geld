@@ -1186,7 +1186,19 @@ export default {
     if ((url.pathname === "/api/lst/arbitrage/preflight-all" || url.pathname === "/api/arbitrage/preflight-all") && (request.method === "GET" || request.method === "POST")) {
       try {
         const runtime = await getRuntimeConfig(env);
-        const sender = (url.searchParams.get("sender") ?? "0x000000000000000000000000000000000000dEaD").toLowerCase();
+        const memeOnly = url.searchParams.get("memeOnly") === "1";
+        let sender = (url.searchParams.get("sender") ?? "0x000000000000000000000000000000000000dEaD").toLowerCase();
+        if (memeOnly && !url.searchParams.get("sender") && runtime.privateKey) {
+          try {
+            const { privateKeyToAccount } = await import("viem/accounts");
+            sender = privateKeyToAccount(runtime.privateKey as `0x${string}`).address.toLowerCase();
+          } catch (error) {
+            return Response.json(
+              { ok: false, error: "Unable to derive the configured GELD wallet for meme preflight: " + String(error) },
+              { status: 503 }
+            );
+          }
+        }
         if (!/^0x[0-9a-f]{40}$/.test(sender)) {
           return Response.json({ ok: false, error: "sender must be a valid EVM address" }, { status: 400 });
         }
@@ -1198,7 +1210,6 @@ export default {
         if (!Number.isFinite(sizeMon) || sizeMon <= 0 || sizeMon > 10) {
           return Response.json({ ok: false, error: "sizeMon must be > 0 and <= 10" }, { status: 400 });
         }
-        const memeOnly = url.searchParams.get("memeOnly") === "1";
         const result = await preflightAllLSTArbitrage(
           runtime.rpcUrl,
           undefined,

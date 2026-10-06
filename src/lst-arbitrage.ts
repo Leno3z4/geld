@@ -57,6 +57,11 @@ import {
   encodePacked,
   type Address
 } from "viem";
+import {
+  ADDRESSES as NADFUN_ADDRESSES,
+  routerAbi as NADFUN_ROUTER_ABI,
+  v1LensAbi as NADFUN_V1_LENS_ABI
+} from "./nadfun.js";
 
 const MONAD_NETWORK = "monad";
 const MONAD_CHAIN = {
@@ -119,6 +124,8 @@ const NADFUN_BASE_URL = "https://api.nad.fun";
 const NADFUN_CACHE_TTL_MS = 60_000;
 const DEXSCREENER_BASE_URL = "https://api.dexscreener.com";
 const DEXSCREENER_CACHE_TTL_MS = 5 * 60_000;
+const GECKOTERMINAL_BASE_URL = "https://api.geckoterminal.com/api/v2";
+const GECKOTERMINAL_CACHE_TTL_MS = 60_000;
 const FREE_EXTERNAL_SUBREQUEST_LIMIT = 50;
 const PLANNED_DISCOVERY_REQUESTS = 8;
 const PLANNED_KYBER_SCOUT_REQUESTS = 12;
@@ -141,7 +148,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-meme-primary-v26-sequential-gas-2026-10-06";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-meme-primary-v27-nadfun-gecko-safe-gas-2026-10-06";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KYBER_BASE_URL = "https://aggregator-api.kyberswap.com";
@@ -251,7 +258,7 @@ export const ARBITRAGE_ASSETS: ArbitrageAsset[] = [
   { symbol: "Cake", address: "0x01bff41798a0bcf287b996046ca68b395dbc1071", decimals: 18 }
 ];
 
-type QuoteKind = "uniswap-v4" | "uniswap-v3" | "uniswap-v2" | "pancake-v3" | "pancake-v2" | "curve-lst" | "kuru" | "unsupported";
+type QuoteKind = "uniswap-v4" | "uniswap-v3" | "uniswap-v2" | "pancake-v3" | "pancake-v2" | "curve-lst" | "kuru" | "nadfun" | "unsupported";
 type KuruMarket = {
   symbol: string;
   status: string;
@@ -627,7 +634,7 @@ async function discoverNadfunMonadTokens(
           },
           __dexMeta: { id: "nad-fun" },
           __dexName: "nad.fun",
-          __quoteKind: "unsupported",
+          __quoteKind: "nadfun",
           __priceUsd: priceUsd,
           __createdAtBlock: undefined
         });
@@ -796,12 +803,40 @@ async function discoverDexPaprikaMonadPools(
     discoveredAssets.set(asset.address.toLowerCase(), asset);
   }
 
+  // Free GeckoTerminal fallback: current Monad trending pools, including meme markets.
+  // It runs before DexScreener so a transient 429 there does not erase cross-venue coverage.
+  const remainingAfterNadfun = Math.max(
+    0,
+    8 - requestsThisScan - Number(nadfun.provider?.requestsThisScan ?? 0)
+  );
+  const gecko = remainingAfterNadfun > 0
+    ? await discoverGeckoTerminalMonadPools(cache, 1, discoveredAssets)
+    : {
+        pools: [] as any[],
+        assets: [...discoveredAssets.values()],
+        provider: {
+          source: "geckoterminal",
+          network: "monad",
+          requestsThisScan: 0,
+          poolCount: 0,
+          availableDexes: [] as string[],
+          errors: undefined as string[] | undefined
+        }
+      };
+
+  for (const asset of gecko.assets ?? []) {
+    discoveredAssets.set(asset.address.toLowerCase(), asset);
+  }
+
   // Always augment the primary index with dynamic token-address frontiers.
   // Newly discovered addresses are queued and can be batched (up to 30/request)
   // so the dashboard is not limited to the static seed list.
   const remainingDiscoveryBudget = Math.max(
     0,
-    8 - requestsThisScan - Number(nadfun.provider?.requestsThisScan ?? 0)
+    8 -
+      requestsThisScan -
+      Number(nadfun.provider?.requestsThisScan ?? 0) -
+      Number(gecko.provider?.requestsThisScan ?? 0)
   );
   const frontier = remainingDiscoveryBudget > 0
     ? await discoverDexScreenerMonadPools(cache, remainingDiscoveryBudget, discoveredAssets)
@@ -912,6 +947,7 @@ async function discoverDexPaprikaMonadPools(
   const combinedPools = dedupePoolRecords([
     ...parsedDexPaprika.values(),
     ...(nadfun.pools ?? []),
+    ...(gecko.pools ?? []),
     ...(frontier.pools ?? [])
   ]);
   const combinedDexes = [...new Set(
@@ -935,6 +971,7 @@ async function discoverDexPaprikaMonadPools(
       refreshedAssets: [
         ...(pagesFetched > 0 ? ["NETWORK"] : []),
         ...(nadfun.provider?.requestsThisScan ? ["NADFUN"] : []),
+        ...(gecko.provider?.requestsThisScan ? ["GECKO"] : []),
         ...(frontier.provider?.refreshedAssets ?? [])
       ],
       cachedAssets: [
@@ -966,6 +1003,9 @@ async function discoverDexPaprikaMonadPools(
         : undefined,
       nadfunRequestsThisScan: Number(nadfun.provider?.requestsThisScan ?? 0),
       nadfunPoolCount: Number(nadfun.provider?.poolCount ?? 0),
+      geckoRequestsThisScan: Number(gecko.provider?.requestsThisScan ?? 0),
+      geckoPoolCount: Number(gecko.provider?.poolCount ?? 0),
+      geckoAvailableDexes: gecko.provider?.availableDexes ?? [],
       errors: errors.length
         ? [...new Set(errors.concat(nadfun.provider?.errors ?? [], frontier.provider?.errors ?? []))]
         : [
@@ -984,6 +1024,145 @@ async function discoverDexPaprikaMonadPools(
     }
   };
 }
+async function discoverGeckoTerminalMonadPools(
+  cache: LSTArbitrageCache | undefined,
+  maxRequests: number,
+  availableAssets: Map<string, ArbitrageAsset>
+) {
+  const assets = new Map(availableAssets);
+  const pools: any[] = [];
+  const errors: string[] = [];
+
+  if (maxRequests <= 0) {
+    return {
+      pools,
+      assets: [...assets.values()],
+      provider: {
+        source: "geckoterminal",
+        network: "monad",
+        requestsThisScan: 0,
+        poolCount: 0,
+        availableDexes: [] as string[]
+      }
+    };
+  }
+
+  try {
+    const cacheKey = "geld:arb:gecko:monad:trending:1h:v1";
+    const result = await fetchProviderJson<any>(
+      cacheKey,
+      GECKOTERMINAL_BASE_URL +
+        "/networks/monad/trending_pools?include=base_token,quote_token,dex&page=1",
+      { accept: "application/json", "user-agent": "geld-arbitrage/2.1" },
+      GECKOTERMINAL_CACHE_TTL_MS
+    );
+
+    const rows = Array.isArray(result.data?.data) ? result.data.data : [];
+    const included = Array.isArray(result.data?.included) ? result.data.included : [];
+    const includedById = new Map<string, any>(
+      included.map((item: any) => [String(item?.id ?? "").toLowerCase(), item])
+    );
+
+    const symbolFromName = (name: string, side: "base" | "quote") => {
+      const clean = String(name ?? "").replace(/\s+\d+(?:\.\d+)?%.*$/, "");
+      const parts = clean.split("/").map(x => x.trim()).filter(Boolean);
+      return side === "base" ? (parts[0] ?? "") : (parts[1] ?? "");
+    };
+
+    for (const row of rows) {
+      const a = row?.attributes ?? {};
+      const rel = row?.relationships ?? {};
+      const baseId = String(rel?.base_token?.data?.id ?? "").toLowerCase();
+      const quoteId = String(rel?.quote_token?.data?.id ?? "").toLowerCase();
+      const base = normalizeAssetAddress(baseId.replace(/^monad_/i, ""));
+      const quote = normalizeAssetAddress(quoteId.replace(/^monad_/i, ""));
+      if (!base || !quote || base === quote) continue;
+
+      const baseMeta = includedById.get(baseId);
+      const quoteMeta = includedById.get(quoteId);
+      const baseSymbol =
+        String(baseMeta?.attributes?.symbol ?? "").trim() ||
+        symbolFromName(a.name, "base") ||
+        "TKN_" + base.slice(2, 8).toUpperCase();
+      const quoteSymbol =
+        String(quoteMeta?.attributes?.symbol ?? "").trim() ||
+        symbolFromName(a.name, "quote") ||
+        "TKN_" + quote.slice(2, 8).toUpperCase();
+
+      const baseDecimals = Number(baseMeta?.attributes?.decimals ?? assets.get(base)?.decimals ?? 18);
+      const quoteDecimals = Number(quoteMeta?.attributes?.decimals ?? assets.get(quote)?.decimals ?? 18);
+
+      if (!assets.has(base)) {
+        assets.set(base, { symbol: baseSymbol, address: base, decimals: Number.isFinite(baseDecimals) ? baseDecimals : 18 });
+      }
+      if (!assets.has(quote)) {
+        assets.set(quote, { symbol: quoteSymbol, address: quote, decimals: Number.isFinite(quoteDecimals) ? quoteDecimals : 18 });
+      }
+
+      const poolAddress = addr(a.address);
+      const dex = String(rel?.dex?.data?.id ?? "").toLowerCase();
+      const baseToQuote = num(a.base_token_price_quote_token);
+      if (!poolAddress || !dex || !(baseToQuote > 0)) continue;
+
+      pools.push({
+        id: String(row?.id ?? poolAddress),
+        attributes: {
+          address: poolAddress,
+          name: String(a.name ?? (baseSymbol + "/" + quoteSymbol + " " + dex)),
+          base_token_price_quote_token: String(baseToQuote),
+          pool_fee_percentage: Number(String(a.name ?? "").match(/(\d+(?:\.\d+)?)%/)?.[1] ?? 0),
+          reserve_in_usd: num(a.reserve_in_usd),
+          volume_usd: { h24: num(a.volume_usd?.h24) },
+          price_usd: num(a.base_token_price_usd)
+        },
+        relationships: {
+          base_token: { data: { id: base } },
+          quote_token: { data: { id: quote } },
+          dex: { data: { id: dex } }
+        },
+        __baseTokenMeta: {
+          attributes: { address: base, symbol: baseSymbol, decimals: baseDecimals }
+        },
+        __quoteTokenMeta: {
+          attributes: { address: quote, symbol: quoteSymbol, decimals: quoteDecimals }
+        },
+        __dexMeta: { id: dex },
+        __quoteKind: classifyQuoteKind(poolAddress, dex),
+        __priceUsd: num(a.base_token_price_usd)
+      });
+    }
+
+    const deduped = dedupePoolRecords(pools);
+    return {
+      pools: deduped,
+      assets: [...assets.values()],
+      provider: {
+        source: "geckoterminal",
+        network: "monad",
+        requestsThisScan: result.fromCache ? 0 : 1,
+        poolCount: deduped.length,
+        availableDexes: [...new Set(deduped.map(pool =>
+          String(pool?.relationships?.dex?.data?.id ?? "").toLowerCase()
+        ).filter(Boolean))].sort()
+      }
+    };
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
+    return {
+      pools: [],
+      assets: [...assets.values()],
+      provider: {
+        source: "geckoterminal",
+        network: "monad",
+        requestsThisScan: 1,
+        poolCount: 0,
+        availableDexes: [],
+        errors
+      }
+    };
+  }
+}
+
 function dedupePoolRecords(pools: any[]) {
   const deduped = new Map<string, any>();
   for (const pool of pools) {
@@ -1585,8 +1764,8 @@ function classifyQuoteKind(address: string, dex: string) {
 function isExactQuoteSupported(kind: QuoteKind) {
   return (
     kind === "kuru" ||
+    kind === "nadfun" ||
     kind === "curve-lst" ||
-    kind === "uniswap-v4" ||
     kind === "uniswap-v3" ||
     kind === "uniswap-v2" ||
     kind === "pancake-v3" ||
@@ -2092,6 +2271,57 @@ function buildCurveExchange(edge: any, amountIn: bigint, minOut: bigint, sender:
   });
 }
 
+function buildNadfunCall(
+  edge: any,
+  amountIn: bigint,
+  minOut: bigint,
+  sender: string,
+  deadline: number
+) {
+  const tokenIn = String(edge.tokenIn ?? edge.from).toLowerCase() as Address;
+  const tokenOut = String(edge.tokenOut ?? edge.to).toLowerCase() as Address;
+  const nativeInput = tokenIn === WMON_ADDRESS.toLowerCase();
+
+  if (!nativeInput && tokenOut !== WMON_ADDRESS.toLowerCase()) {
+    throw new Error("Nad.fun only supports WMON/native MON pair edges");
+  }
+
+  if (nativeInput) {
+    return {
+      input: encodeFunctionData({
+        abi: NADFUN_ROUTER_ABI,
+        functionName: "buyWithNative",
+        args: [{
+          amountOutMin: minOut,
+          token: tokenOut,
+          to: sender as Address,
+          deadline: BigInt(deadline)
+        }]
+      }),
+      value: amountIn,
+      nativeInput: true,
+      marketAddress: NADFUN_ADDRESSES.ROUTER
+    };
+  }
+
+  return {
+    input: encodeFunctionData({
+      abi: NADFUN_ROUTER_ABI,
+      functionName: "sellToNative",
+      args: [{
+        amountIn,
+        amountOutMin: minOut,
+        token: tokenIn,
+        to: sender as Address,
+        deadline: BigInt(deadline)
+      }]
+    }),
+    value: 0n,
+    nativeInput: false,
+    marketAddress: NADFUN_ADDRESSES.ROUTER
+  };
+}
+
 function buildKuruCall(edge: any, amountIn: bigint, minOut: bigint) {
   const market = edge.kuruMarket;
   if (!market) throw new Error("Kuru market metadata unavailable");
@@ -2197,7 +2427,8 @@ export async function preflightAllLSTArbitrage(
     }
 
     let amount = parseUnits(String(sizeMon), 18);
-    let nativeHeld = false;
+    // At route entry, WMON represents the wallet's native MON balance.
+    let nativeHeld = true;
     let routeBuildable = true;
     const transactions: any[] = [];
     const legResults: any[] = [];
@@ -2288,6 +2519,48 @@ export async function preflightAllLSTArbitrage(
             )
           );
           nativeHeld = false;
+        } else if (kind === "nadfun") {
+          const built = buildNadfunCall(leg, amount, minOut, sender, deadline);
+
+          if (built.nativeInput) {
+            if (!nativeHeld && fromIsWmon) {
+              transactions.push(
+                txFrom(
+                  WMON_ADDRESS,
+                  encodeFunctionData({
+                    abi: WMON_WRAP_ABI,
+                    functionName: "withdraw",
+                    args: [amount]
+                  }),
+                  0n,
+                  sender
+                )
+              );
+            }
+          } else {
+            transactions.push(
+              txFrom(
+                leg.tokenIn,
+                encodeFunctionData({
+                  abi: ERC20_TX_ABI,
+                  functionName: "approve",
+                  args: [built.marketAddress as Address, amount]
+                }),
+                0n,
+                sender
+              )
+            );
+          }
+
+          transactions.push(
+            txFrom(
+              built.marketAddress,
+              built.input,
+              built.value,
+              sender
+            )
+          );
+          nativeHeld = built.nativeInput ? false : true;
         } else if (kind === "kuru") {
           const built = buildKuruCall(leg, amount, minOut);
 
@@ -2336,6 +2609,27 @@ export async function preflightAllLSTArbitrage(
           minOutRaw: minOut.toString()
         });
         amount = BigInt(String(leg.quoteAmountOutRaw));
+      }
+
+      const finalToken = String(quote.exactLegs[quote.exactLegs.length - 1]?.tokenOut ?? "").toLowerCase();
+      if (
+        routeBuildable &&
+        finalToken === WMON_ADDRESS.toLowerCase() &&
+        nativeHeld
+      ) {
+        transactions.push(
+          txFrom(
+            WMON_ADDRESS,
+            encodeFunctionData({
+              abi: WMON_WRAP_ABI,
+              functionName: "deposit",
+              args: []
+            }),
+            amount,
+            sender
+          )
+        );
+        nativeHeld = false;
       }
 
       if (!routeBuildable) {
@@ -2454,39 +2748,24 @@ export async function preflightAllLSTArbitrage(
         const simulatedMaxUsedGas = simulatedEntry?.maxUsedGas
           ? BigInt(simulatedEntry.maxUsedGas)
           : null;
-        const sequentialSimulationGas = simulatedMaxUsedGas ?? simulatedGas;
         const estimatedGas = estimates[txIndex]?.gas ?? null;
 
-        // eth_estimateGas runs each transaction independently against latest,
-        // so later swaps cannot see uncommitted approvals/transfers. The
-        // uncapped eth_simulateV1 sequence executes the full route in order,
-        // so its per-call gas is the state-aware baseline.
-        let effectiveGas = sequentialSimulationGas;
-        let source = sequentialSimulationGas !== null
-          ? "eth_simulateV1-sequential"
-          : "unavailable";
-
-        if (estimatedGas !== null && effectiveGas !== null) {
-          effectiveGas = effectiveGas > estimatedGas ? effectiveGas : estimatedGas;
-          source = "max(eth_simulateV1-sequential,eth_estimateGas)";
-        } else if (estimatedGas !== null) {
-          effectiveGas = estimatedGas;
-          source = "eth_estimateGas";
-        }
-
+        // Sequential simulation is an execution-state check only. Monad RPCs
+        // can report their configured simulation gas cap as gasUsed, so never
+        // turn simulated gas into a profitability number.
         return {
           simulatedGas,
           simulatedMaxUsedGas,
           estimatedGas,
-          effectiveGas,
-          source,
+          effectiveGas: estimatedGas,
+          source: estimatedGas !== null ? "eth_estimateGas" : "unavailable",
           estimateError: estimates[txIndex]?.error ?? null
         };
       });
 
       const allGasEstimated =
         gasByTx.length === item.transactions.length &&
-        gasByTx.every((entry: any) => entry?.effectiveGas !== null && entry?.effectiveGas !== undefined);
+        gasByTx.every((entry: any) => entry?.estimatedGas !== null && entry?.estimatedGas !== undefined);
       const gasUnits = allGasEstimated
         ? gasByTx.reduce(
             (sum: bigint, entry: any) => sum + (entry.effectiveGas ?? 0n),
@@ -2548,7 +2827,8 @@ export async function preflightAllLSTArbitrage(
           method: "eth_estimateGas",
           batched: true,
           authoritativeForProfitability: true,
-          conservativeRule: "use uncapped sequential eth_simulateV1 gas as the state-aware baseline; when eth_estimateGas is available, use the higher value; never use an artificial simulation ceiling",
+          conservativeRule: "use eth_estimateGas only for profitability; eth_simulateV1 validates sequential execution state and its gas fields are diagnostic only",
+          sequentialStateAware: true
           simulationIsolation: "one route per eth_simulateV1 call to stay under Monad aggregate simulation gas limits",
           sequentialStateAware: true,
           requiresCompleteEstimates: true
@@ -2813,6 +3093,41 @@ async function quoteExactEdge(
   feePct?: number | null;
   feeSource?: string;
 } | null> {
+  if (edge.quoteKind === "nadfun") {
+    const tokenIn = String(edge.from).toLowerCase();
+    const tokenOut = String(edge.to).toLowerCase();
+    const isBuy = tokenIn === WMON_ADDRESS.toLowerCase();
+    if (!isBuy && tokenOut !== WMON_ADDRESS.toLowerCase()) return null;
+
+    try {
+      const result = await client.readContract({
+        address: NADFUN_ADDRESSES.ROUTER,
+        abi: NADFUN_ROUTER_ABI,
+        functionName: "getAmountOut",
+        args: [isBuy ? edge.to as Address : edge.from as Address, amountIn, isBuy]
+      });
+      return {
+        amountOut: BigInt(result as bigint),
+        feeBps: null,
+        feePct: null,
+        feeSource: "nadfun_router_exact_quote"
+      };
+    } catch {
+      const lens = await client.readContract({
+        address: NADFUN_ADDRESSES.V1_LENS,
+        abi: NADFUN_V1_LENS_ABI,
+        functionName: "getAmountOut",
+        args: [isBuy ? edge.to as Address : edge.from as Address, amountIn, isBuy]
+      }) as readonly [Address, bigint];
+      return {
+        amountOut: BigInt(lens[1]),
+        feeBps: null,
+        feePct: null,
+        feeSource: "nadfun_v1_lens_exact_quote"
+      };
+    }
+  }
+
   if (edge.quoteKind === "curve-lst") {
     const indexByAddress: Record<string, number> = {
       "0x3bd359c1119da7da1d913d1c4d2b7c461115433a": 0,

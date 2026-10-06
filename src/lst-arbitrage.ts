@@ -104,7 +104,7 @@ const NON_MEME_SYMBOLS = new Set([
   "WMON", "MON", "USDC", "USDT", "USDT0", "AUSD", "WETH", "WBTC", "CBUSDC",
   "CBBTC", "SHMON", "SMON", "GMON", "APRMON", "CAKE", "LVMON", "LV"
 ]);
-const MEME_PROBE_MIN_LIQUIDITY_USD = 2_500;
+const MEME_PROBE_MIN_LIQUIDITY_USD = 1_000;
 const MEME_PROBE_MIN_VOLUME_24H_USD = 500;
 const normalizeMemeSymbol = (symbol: string) =>
   String(symbol ?? "").trim().toUpperCase().replace(/^V[23]/, "");
@@ -148,7 +148,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-meme-primary-v30-fresh-gecko-meme-priority-2026-10-06";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-meme-primary-v31-direct-meme-cycles-2026-10-07";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KYBER_BASE_URL = "https://aggregator-api.kyberswap.com";
@@ -1966,6 +1966,7 @@ function buildArbitragePotentialTokens(
 
   const supportedKinds = new Set<QuoteKind>([
     "kuru",
+    "nadfun",
     "curve-lst",
     "uniswap-v4",
     "uniswap-v3",
@@ -3179,6 +3180,75 @@ function findCycles(
   return results;
 }
 
+
+function findDirectMemeCycles(
+  edges: PoolEdge[],
+  startAddress: string,
+  maxResults = 500
+) {
+  const wmon = startAddress.toLowerCase();
+  const buyByToken = new Map<string, PoolEdge[]>();
+  const sellByToken = new Map<string, PoolEdge[]>();
+
+  for (const edge of edges) {
+    if (!isExactQuoteSupported(edge.quoteKind)) continue;
+    if (edge.liquidityUsd < MIN_LIQUIDITY_USD) continue;
+
+    const from = edge.from.toLowerCase();
+    const to = edge.to.toLowerCase();
+
+    if (from === wmon && to !== wmon && isMemeLikeSymbol(edge.toSymbol)) {
+      const list = buyByToken.get(to) ?? [];
+      list.push(edge);
+      buyByToken.set(to, list);
+    } else if (to === wmon && from !== wmon && isMemeLikeSymbol(edge.fromSymbol)) {
+      const list = sellByToken.get(from) ?? [];
+      list.push(edge);
+      sellByToken.set(from, list);
+    }
+  }
+
+  const results: Array<any> = [];
+  const seen = new Set<string>();
+
+  for (const [token, buys] of buyByToken) {
+    const sells = sellByToken.get(token) ?? [];
+    for (const buy of buys) {
+      for (const sell of sells) {
+        if (buy.pool.toLowerCase() === sell.pool.toLowerCase()) continue;
+
+        const key = [
+          buy.pool.toLowerCase(),
+          sell.pool.toLowerCase(),
+          token
+        ].join(":");
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        const legs = [buy, sell];
+        const multiplier = legs.reduce(
+          (value, leg) => value * (leg.rate > 0 ? leg.rate : 1),
+          1
+        );
+
+        results.push({
+          path: ["WMON", buy.toSymbol, "WMON"],
+          assets: [wmon, token, wmon],
+          legs,
+          hopCount: 2,
+          multiplier,
+          grossEdgePct: (multiplier - 1) * 100,
+          exactQuoteSupported: true
+        });
+
+        if (results.length >= maxResults) return results;
+      }
+    }
+  }
+
+  return results;
+}
+
 function createClient(rpcUrl: string) {
   return createPublicClient({
     chain: {
@@ -3656,12 +3726,26 @@ export async function scanLSTArbitrage(
     ) ??
     ARBITRAGE_ASSETS.find(a => a.symbol === "WMON")!;
 
-  const discoveryCycles = findCycles(
+  const graphCycles = findCycles(
     edges,
     wmon.address.toLowerCase(),
     MAX_ARBITRAGE_HOPS,
     5000
   );
+  const directMemeCycles = findDirectMemeCycles(
+    edges,
+    wmon.address.toLowerCase(),
+    500
+  );
+  const cycleSeen = new Set<string>();
+  const discoveryCycles = [...graphCycles, ...directMemeCycles].filter(route => {
+    const key = route.legs
+      .map((leg: PoolEdge) => leg.pool.toLowerCase())
+      .join("|");
+    if (cycleSeen.has(key)) return false;
+    cycleSeen.add(key);
+    return true;
+  });
 
   const isMemeArbitrageRoute = (route: any) =>
     route.legs.some((leg: PoolEdge) =>
@@ -3789,12 +3873,6 @@ export async function scanLSTArbitrage(
       dexes.size >= 2
     );
   };
-  const isMemeArbitrageRoute = (route: any) =>
-    route.legs.some((leg: PoolEdge) =>
-    leg.quoteKind === "nadfun" ||
-    isMemeLikeSymbol(leg.fromSymbol) ||
-    isMemeLikeSymbol(leg.toSymbol)
-  );
   const isQualifiedMemeProbe = (route: any) =>
     isMemeArbitrageRoute(route) &&
     route.distinctDexes >= 2 &&

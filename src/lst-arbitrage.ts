@@ -3195,6 +3195,17 @@ export async function scanLSTArbitrage(
       discoveryOnly: !route.legs.every(
         (leg: PoolEdge) => isExactQuoteSupported(leg.quoteKind)
       ),
+      // A transparent discovery-rate projection is useful for ranking and UI,
+      // but it is never treated as executable profit. Exact on-chain quotes
+      // and preflight simulation remain mandatory before a candidate exists.
+      discoveryEstimate: {
+        sizeMon: PROBE_SIZE_MON,
+        estimatedFinalMon: PROBE_SIZE_MON * route.multiplier,
+        estimatedGrossProfitMon: PROBE_SIZE_MON * (route.multiplier - 1),
+        estimatedGrossReturnPct: route.grossEdgePct,
+        basis: "discovery-pool-rates",
+        exactQuoteRequired: true
+      },
       liquidityScore: Math.min(
         ...route.legs.map((leg: PoolEdge) => leg.liquidityUsd)
       ),

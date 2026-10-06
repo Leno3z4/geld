@@ -178,6 +178,14 @@ const ERC20_ALLOWANCE_ABI = parseAbi([
 ]);
 const KYBER_CACHE_TTL_MS = 30_000;
 const KYBER_PROBE_SIZE_MON = 5;
+const KYBER_MEME_SCOUT_TARGETS: Array<{symbol: string; address: string}> = [
+  { symbol: "UNIT", address: "0x788571e0e5067adea87e6ba22a2b738ffdf48888" },
+  { symbol: "CHOG", address: "0x350035555e10d9afaf1566aaebfced5ba6c27777" },
+  { symbol: "MOE", address: "0xd8e004acba279417c04c0633cb5a21ceca207777" },
+  { symbol: "FLING", address: "0xa9da3c77ec7cdc4dfaa1fe142af583543d1c540f" },
+  { symbol: "JAMES", address: "0x43cf5407bda1400498b8064d50a7e17528d87777" },
+  { symbol: "DUST", address: "0xad96c3dffcd6374294e2573a7fbba96097cc8d7c" }
+];
 const KYBER_SCOUT_TARGETS: Array<{symbol: string; address: string}> = [
   { symbol: "USDC", address: "0x754704bc059f8c67012fed69bc8a327a5aafb603" },
   { symbol: "AUSD", address: "0x00000000efe302beaa2b3e6e1b18d08d69a9012a" },
@@ -2114,11 +2122,11 @@ async function fetchKyberRouteFresh(tokenIn: string, tokenOut: string, amountIn:
   return { routeSummary, routerAddress: String((body as any)?.data?.routerAddress ?? "") };
 }
 
-async function buildKyberRouteFresh(routeSummary: any, sender: string, recipient: string, deadline: number, slippageTolerance = KYBER_SIMULATION_SLIPPAGE_BPS) {
+async function buildKyberRouteFresh(routeSummary: any, sender: string, recipient: string, deadline: number, slippageTolerance = KYBER_SIMULATION_SLIPPAGE_BPS, enableGasEstimation = false) {
   const response = await fetch(KYBER_BASE_URL + "/monad/api/v1/route/build", {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json", "user-agent": "geld-arbitrage/1.0", "x-client-id": KYBER_CLIENT_ID },
-    body: JSON.stringify({ routeSummary, sender, origin: sender, recipient, deadline, slippageTolerance, enableGasEstimation: true, source: "GELD" })
+    body: JSON.stringify({ routeSummary, sender, origin: sender, recipient, deadline, slippageTolerance, enableGasEstimation, source: "GELD" })
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error("Kyber build HTTP " + response.status + ": " + String((body as any)?.message ?? "unknown error"));
@@ -2548,27 +2556,25 @@ export async function preflightAllLSTArbitrage(
     const bm = isMemeRoute(b) ? 1 : 0;
     return (bm - am) || (Number(b?.grossEdgePct ?? -Infinity) - Number(a?.grossEdgePct ?? -Infinity));
   });
-  const consideredRoutes = orderedRoutes.slice(0, Math.max(safeRouteLimit, 1));
+  const exactQuotedRoutes = orderedRoutes.filter(route =>
+    (route.exactQuotes ?? []).some(
+      (q: any) =>
+        q.ok === true &&
+        Number(q.sizeMon) === sizeMon &&
+        Array.isArray(q.exactLegs) &&
+        q.exactLegs.length > 0
+    )
+  );
+  const unquotedRoutes = orderedRoutes
+    .filter(route => !exactQuotedRoutes.includes(route))
+    .slice(0, Math.max(safeRouteLimit, 1));
+  const consideredRoutes = exactQuotedRoutes.slice(0, Math.max(safeRouteLimit, 1));
 
   for (const route of consideredRoutes) {
     const quote = (route.exactQuotes ?? []).find(
       (q: any) => q.ok === true && Number(q.sizeMon) === sizeMon
     );
-    if (!quote?.exactLegs?.length) {
-      results.push({
-        route: route.path,
-        ok: false,
-        memeRoute: isMemeRoute(route),
-        reason: "No exact quote legs available",
-        exactQuotes: (route.exactQuotes ?? []).map((q: any) => ({
-          ok: q.ok === true,
-          candidate: q.candidate === true,
-          sizeMon: q.sizeMon ?? sizeMon,
-          error: q.error ?? null
-        }))
-      });
-      continue;
-    }
+    if (!quote?.exactLegs?.length) continue;
 
     let amount = parseUnits(String(sizeMon), 18);
     // At route entry, WMON represents the wallet's native MON balance.
@@ -2982,11 +2988,63 @@ export async function preflightAllLSTArbitrage(
     }
   }
 
+  const memeScout = await scoutKyberRoundTrips(
+    0,
+    KYBER_MEME_SCOUT_TARGETS,
+    sizeMon
+  );
+  const memeTop = memeScout.results[0] ?? null;
+  let memePreflight: any = null;
+  if (memeTop) {
+    const memeTarget = KYBER_MEME_SCOUT_TARGETS.find(
+      target => target.symbol.toUpperCase() === String(memeTop.path?.[1] ?? "").toUpperCase()
+    );
+    if (memeTarget) {
+      try {
+        memePreflight = await preflightKyberRoundTrip(
+          rpcUrl,
+          memeTarget.address,
+          sizeMon,
+          sender,
+          undefined,
+          KYBER_SIMULATION_SLIPPAGE_BPS
+        );
+      } catch (error) {
+        memePreflight = {
+          mode: "PAPER_PREFLIGHT",
+          ok: false,
+          memeRoute: true,
+          provider: "kyberswap",
+          target: memeTarget.symbol,
+          sizeMon,
+          error: error instanceof Error ? error.message : String(error)
+        };
+      }
+    }
+  }
+
   return {
     mode: "PAPER_PREFLIGHT_ALL",
     generatedAt: new Date().toISOString(),
     memeRoutesConsidered: consideredRoutes.filter(isMemeRoute).length,
     memeRoutesPrepared: prepared.filter(item => isMemeRoute(item.route)).length,
+    unquotedRouteCount: unquotedRoutes.length,
+    unquotedRoutes: unquotedRoutes.map(route => ({
+      path: route.path,
+      memeRoute: isMemeRoute(route),
+      exactQuotes: (route.exactQuotes ?? []).map((q: any) => ({
+        ok: q.ok === true,
+        candidate: q.candidate === true,
+        sizeMon: q.sizeMon ?? sizeMon,
+        error: q.error ?? null
+      }))
+    })),
+    memeAggregator: {
+      enabled: true,
+      scout: memeScout,
+      topSignal: memeTop,
+      preflight: memePreflight
+    },
     sender,
     sizeMon,
     scan: {
@@ -3009,11 +3067,12 @@ export async function preflightAllLSTArbitrage(
 
 async function scoutKyberRoundTrips(
   rpcMonUsd = 0,
-  targetOverride?: Array<{symbol: string; address: string}>
+  targetOverride?: Array<{symbol: string; address: string}>,
+  probeSizeMon = KYBER_PROBE_SIZE_MON
 ) {
   const targets = targetOverride?.length ? targetOverride : KYBER_SCOUT_TARGETS;
   const mon = "0x3bd359c1119da7da1d913d1c4d2b7c461115433a";
-  const amountIn = parseUnits(String(KYBER_PROBE_SIZE_MON), 18).toString();
+  const amountIn = parseUnits(String(probeSizeMon), 18).toString();
   const results: any[] = [];
   const errors: string[] = [];
   let requestsThisScan = 0;
@@ -3051,13 +3110,21 @@ async function scoutKyberRoundTrips(
       }
 
       const backMon = Number(backRaw) / 1e18;
-      const grossProfitMon = backMon - KYBER_PROBE_SIZE_MON;
+      const grossProfitMon = backMon - probeSizeMon;
       const gasUsd = Number(routeSummary?.gasUsd ?? 0) + Number(reverse.data?.data?.routeSummary?.gasUsd ?? 0);
+      const forwardAmountMon = Number(routeSummary?.amountIn ?? amountIn) / 1e18;
+      const forwardAmountUsd = Number(routeSummary?.amountInUsd ?? 0);
+      const routeImpliedMonUsd =
+        forwardAmountMon > 0 && forwardAmountUsd > 0
+          ? forwardAmountUsd / forwardAmountMon
+          : 0;
       const impliedMonUsd = rpcMonUsd > 0
         ? rpcMonUsd
-        : target.symbol === "USDC"
-          ? (Number(mid) / 1e6) / KYBER_PROBE_SIZE_MON
-          : 0;
+        : routeImpliedMonUsd > 0
+          ? routeImpliedMonUsd
+          : target.symbol === "USDC"
+            ? (Number(mid) / 1e6) / probeSizeMon
+            : 0;
       const gasMon = impliedMonUsd > 0 ? gasUsd / impliedMonUsd : 0;
       const netProfitMon = grossProfitMon - gasMon - GAS_BUFFER_MON;
 
@@ -3075,7 +3142,7 @@ async function scoutKyberRoundTrips(
       results.push({
         provider: "kyberswap",
         path: ["MON", target.symbol, "MON"],
-        sizeMon: KYBER_PROBE_SIZE_MON,
+        sizeMon: probeSizeMon,
         intermediateAmountRaw: mid,
         finalMon: backMon,
         grossProfitMon,
@@ -3098,7 +3165,7 @@ async function scoutKyberRoundTrips(
   results.sort((a, b) => b.netProfitMon - a.netProfitMon);
   return {
     enabled: true,
-    probeSizeMon: KYBER_PROBE_SIZE_MON,
+    probeSizeMon,
     requestsThisScan,
     targetCount: targets.length,
     results,

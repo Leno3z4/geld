@@ -116,7 +116,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-universal-token-discovery-v24-safe-gas-estimate-gating-2026-10-06";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-universal-token-discovery-v25-kuru-quote-fill-estimation-2026-10-06";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KYBER_BASE_URL = "https://aggregator-api.kyberswap.com";
@@ -2892,7 +2892,7 @@ async function quoteExactEdge(
       : null;
   }
 
-  if (edge.quoteKind === "kuru") {
+  // Kuru quote estimation must not use fill-or-kill: a quote is allowed to\n  // consume available book liquidity partially, while live execution can enforce\n  // FOK separately after the route has passed all profitability/preflight gates.\n  if (edge.quoteKind === "kuru") {
     const market = edge.kuruMarket;
     if (!market) return null;
 
@@ -2934,14 +2934,14 @@ async function quoteExactEdge(
           address: cachedMarket.marketAddress as Address,
           abi: KURU_MARKET_ABI,
           functionName: "placeAndExecuteMarketSell",
-          args: [marketSize, 0n, false, true],
+          args: [marketSize, 0n, false, false],
           value: nativeInput ? amountIn : 0n
         })
       : await (client as any).readContract({
           address: cachedMarket.marketAddress as Address,
           abi: KURU_MARKET_ABI,
           functionName: "placeAndExecuteMarketBuy",
-          args: [marketSize, 0n, false, true],
+          args: [marketSize, 0n, false, false],
           value: nativeInput ? amountIn : 0n
         });
 

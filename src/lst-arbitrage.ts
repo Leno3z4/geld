@@ -2386,6 +2386,7 @@ export async function preflightAllLSTArbitrage(
         ok: String(call?.status ?? "0x0") === "0x1",
         status: String(call?.status ?? ""),
         gasUsed: call?.gasUsed ? String(call.gasUsed) : null,
+        maxUsedGas: call?.maxUsedGas ? String(call.maxUsedGas) : null,
         returnData: String(call?.returnData ?? ""),
         error: call?.error ?? null
       }));

@@ -2367,28 +2367,49 @@ export async function preflightAllLSTArbitrage(
   if (prepared.length > 0) {
     let blockNumber: string | null = null;
     let simulatedBlocks: any[] = [];
-    let simulationError: string | null = null;
+    let simulationErrors: Array<string | null> = [];
 
     try {
       blockNumber = await rpcJson(rpcUrl, "eth_blockNumber");
-      const simulated = await rpcJson(rpcUrl, "eth_simulateV1", [{
-        blockStateCalls: prepared.map((item) => ({
-          stateOverrides: {
-            [sender]: { balance: hexValue(1000n * 10n ** 18n) }
-          },
-          calls: item.transactions.map((tx: any) => ({
-            from: tx.from,
-            to: tx.to,
-            value: tx.value,
-            data: tx.input
-          }))
-        })),
-        traceTransfers: true,
-        validation: true
-      }, "latest"]);
-      simulatedBlocks = Array.isArray(simulated) ? simulated : [];
+      // Simulate each route independently. Sending multiple long routes in one
+      // eth_simulateV1 request can exceed Monad's aggregate simulation gas budget.
+      // Each request still executes its route sequentially, preserving state
+      // changes from wrap/approve/transfer calls for later swaps.
+      const routeSimulations = await Promise.all(
+        prepared.map(async (item) => {
+          try {
+            const simulated = await rpcJson(rpcUrl, "eth_simulateV1", [{
+              blockStateCalls: [{
+                stateOverrides: {
+                  [sender]: { balance: hexValue(1000n * 10n ** 18n) }
+                },
+                calls: item.transactions.map((tx: any) => ({
+                  from: tx.from,
+                  to: tx.to,
+                  value: tx.value,
+                  data: tx.input
+                }))
+              }],
+              traceTransfers: true,
+              validation: true
+            }, "latest"]);
+            return {
+              block: Array.isArray(simulated) ? (simulated[0] ?? null) : null,
+              error: null as string | null
+            };
+          } catch (error) {
+            return {
+              block: null,
+              error: error instanceof Error ? error.message : String(error)
+            };
+          }
+        })
+      );
+      simulatedBlocks = routeSimulations.map(result => result.block);
+      simulationErrors = routeSimulations.map(result => result.error);
     } catch (error) {
-      simulationError = error instanceof Error ? error.message : String(error);
+      const message = error instanceof Error ? error.message : String(error);
+      simulationErrors = prepared.map(() => message);
     }
 
     const gasPriceRaw = await rpcJson(rpcUrl, "eth_gasPrice").catch(() => "0x0");
@@ -2515,13 +2536,14 @@ export async function preflightAllLSTArbitrage(
           blockNumber,
           successful,
           results: simulatedResults,
-          error: simulationError
+          error: simulationErrors[index] ?? null
         },
         gasEstimation: {
           method: "eth_estimateGas",
           batched: true,
           authoritativeForProfitability: true,
           conservativeRule: "use uncapped sequential eth_simulateV1 gas as the state-aware baseline; when eth_estimateGas is available, use the higher value; never use an artificial simulation ceiling",
+          simulationIsolation: "one route per eth_simulateV1 call to stay under Monad aggregate simulation gas limits",
           sequentialStateAware: true,
           requiresCompleteEstimates: true
         },

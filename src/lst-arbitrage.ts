@@ -112,7 +112,7 @@ const isMemeLikeSymbol = (symbol: string) => {
   const normalized = normalizeMemeSymbol(symbol);
   if (!normalized || normalized.startsWith("TKN_")) return false;
   if (NON_MEME_SYMBOLS.has(normalized)) return false;
-  return MEME_SYMBOLS.has(normalized) || normalized.length > 0;
+  return MEME_SYMBOLS.has(normalized);
 };
 const EXECUTION_BUFFER_BPS = Math.round(EXECUTION_BUFFER_PCT * 100);
 const DEXPAPRIKA_NETWORK = "monad";
@@ -148,7 +148,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-meme-primary-v27-nadfun-gecko-safe-gas-2026-10-06";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-meme-primary-v28-nadfun-exact-2026-10-06";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KYBER_BASE_URL = "https://aggregator-api.kyberswap.com";
@@ -246,6 +246,8 @@ export const ARBITRAGE_ASSETS: ArbitrageAsset[] = [
   // High-liquidity / frequently traded Monad assets used as an expanded
   // arbitrage universe. Exact execution still requires a supported quote adapter.
   { symbol: "FLING", address: "0xa9da3c77ec7cdc4dfaa1fe142af583543d1c540f", decimals: 18 },
+  { symbol: "CHOG", address: "0x350035555e10d9afaf1566aaebfced5ba6c27777", decimals: 18 },
+  { symbol: "JAMES", address: "0x43cf5407bda1400498b8064d50a7e17528d87777", decimals: 18 },
   { symbol: "ANAGO", address: "0x99ae2dc76c43979e3bcc0ae8d69f1fca077c8888", decimals: 18 },
   { symbol: "UNIT", address: "0x788571e0e5067adea87e6ba22a2b738ffdf48888", decimals: 18 },
   { symbol: "DUST", address: "0xad96c3dffcd6374294e2573a7fbba96097cc8d7c", decimals: 18 },
@@ -3774,7 +3776,11 @@ export async function scanLSTArbitrage(
     );
   };
   const isMemeArbitrageRoute = (route: any) =>
-    route.legs.some((leg: PoolEdge) => isMemeLikeSymbol(leg.fromSymbol) || isMemeLikeSymbol(leg.toSymbol));
+    route.legs.some((leg: PoolEdge) =>
+    leg.quoteKind === "nadfun" ||
+    isMemeLikeSymbol(leg.fromSymbol) ||
+    isMemeLikeSymbol(leg.toSymbol)
+  );
   const isQualifiedMemeProbe = (route: any) =>
     isMemeArbitrageRoute(route) &&
     route.distinctDexes >= 2 &&

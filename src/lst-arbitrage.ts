@@ -120,7 +120,7 @@ const DEXPAPRIKA_BASE_URL = "https://api.dexpaprika.com";
 const DEXPAPRIKA_CACHE_TTL_MS = 5 * 60_000;
 const DEXPAPRIKA_ASSET_LIMIT = 100;
 const DEXPAPRIKA_PRICE_BATCH_LIMIT = 10;
-const NADFUN_BASE_URL = "https://api.nad.fun";
+const NADFUN_BASE_URL = "https://api.nadapp.net";
 const NADFUN_CACHE_TTL_MS = 60_000;
 const DEXSCREENER_BASE_URL = "https://api.dexscreener.com";
 const DEXSCREENER_CACHE_TTL_MS = 5 * 60_000;
@@ -148,7 +148,7 @@ const UNISWAP_V4_POOL_MANAGER =
   "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e" as Address;
 const UNISWAP_V4_QUOTER =
   "0xa222Dd357A9076d1091Ed6Aa2e16C9742dD26891" as Address;
-const LST_ARBITRAGE_BUILD_REVISION = "arb-meme-primary-v31-direct-meme-cycles-2026-10-07";
+const LST_ARBITRAGE_BUILD_REVISION = "arb-meme-primary-v32-live-meme-preflight-2026-10-07";
 const KURU_EXCHANGE_INFO_URL = "https://exchange.kuru.io/api/v3/exchangeInfo";
 const KURU_DEPTH_URL = "https://exchange.kuru.io/api/v3/depth";
 const KYBER_BASE_URL = "https://aggregator-api.kyberswap.com";
@@ -225,7 +225,7 @@ export type LSTArbitrageCache = {
 const PROVIDER_COOLDOWN_MS = 2 * 60_000;
 const DEXPAPRIKA_CACHE_PREFIX = "lst-arb:dexpaprika";
 const PROVIDER_BLOCK_KEY = "lst-arb:dexpaprika:blocked-until";
-const DEXSCREENER_BLOCK_KEY = "lst-arb:dexscreener:blocked-until:v2";
+const DEXSCREENER_BLOCK_KEY = "lst-arb:dexscreener:blocked-until:v3";
 const DEXSCREENER_BOOSTS_URL = DEXSCREENER_BASE_URL + "/token-boosts/latest/v1";
 const DEXSCREENER_SEARCH_URL = DEXSCREENER_BASE_URL + "/latest/dex/search";
 const DEXSCREENER_FRONTIER_CURSOR_KEY = "lst-arb:dexscreener:frontier-cursor:v1";
@@ -2526,8 +2526,10 @@ export async function preflightAllLSTArbitrage(
   routeLimit = 2
 ) {
   const safeRouteLimit = Math.max(1, Math.min(MAX_EXACT_ROUTES, Math.floor(routeLimit)));
+  // Probe the full small route set, then choose up to routeLimit buildable routes.
+  // This prevents one unsupported/non-exact probe from starving a real meme route.
   const scan = await scanLSTArbitrage(rpcUrl, cache, apiKey, {
-    probeLimit: safeRouteLimit,
+    probeLimit: MAX_EXACT_ROUTES,
     includeKyberScout: false,
     exactOnly: true,
     probeSizeMon: sizeMon
@@ -2535,12 +2537,36 @@ export async function preflightAllLSTArbitrage(
 
   const results: any[] = [];
   const prepared: Array<{ route: any; quote: any; transactions: any[]; legResults: any[] }> = [];
-  for (const route of scan.routes as any[]) {
+  const isMemeRoute = (route: any) =>
+    route.legs.some((leg: PoolEdge) =>
+      leg.quoteKind === "nadfun" ||
+      isMemeLikeSymbol(leg.fromSymbol) ||
+      isMemeLikeSymbol(leg.toSymbol)
+    );
+  const orderedRoutes = [...(scan.routes as any[])].sort((a, b) => {
+    const am = isMemeRoute(a) ? 1 : 0;
+    const bm = isMemeRoute(b) ? 1 : 0;
+    return (bm - am) || (Number(b?.grossEdgePct ?? -Infinity) - Number(a?.grossEdgePct ?? -Infinity));
+  });
+  const consideredRoutes = orderedRoutes.slice(0, Math.max(safeRouteLimit, 1));
+
+  for (const route of consideredRoutes) {
     const quote = (route.exactQuotes ?? []).find(
       (q: any) => q.ok === true && Number(q.sizeMon) === sizeMon
     );
     if (!quote?.exactLegs?.length) {
-      results.push({ route: route.path, ok: false, reason: "No exact quote legs available" });
+      results.push({
+        route: route.path,
+        ok: false,
+        memeRoute: isMemeRoute(route),
+        reason: "No exact quote legs available",
+        exactQuotes: (route.exactQuotes ?? []).map((q: any) => ({
+          ok: q.ok === true,
+          candidate: q.candidate === true,
+          sizeMon: q.sizeMon ?? sizeMon,
+          error: q.error ?? null
+        }))
+      });
       continue;
     }
 
@@ -2906,6 +2932,7 @@ export async function preflightAllLSTArbitrage(
         route: item.route.path,
         ok: true,
         quoteOnly: false,
+        memeRoute: isMemeRoute(item.route),
         sizeMon,
         quotedFinalMon: item.quote.finalMon,
         quotedGrossProfitMon: item.quote.grossProfitMon,
@@ -2958,6 +2985,8 @@ export async function preflightAllLSTArbitrage(
   return {
     mode: "PAPER_PREFLIGHT_ALL",
     generatedAt: new Date().toISOString(),
+    memeRoutesConsidered: consideredRoutes.filter(isMemeRoute).length,
+    memeRoutesPrepared: prepared.filter(item => isMemeRoute(item.route)).length,
     sender,
     sizeMon,
     scan: {

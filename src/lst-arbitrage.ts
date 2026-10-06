@@ -2892,7 +2892,10 @@ async function quoteExactEdge(
       : null;
   }
 
-  // Kuru quote estimation must not use fill-or-kill: a quote is allowed to\n  // consume available book liquidity partially, while live execution can enforce\n  // FOK separately after the route has passed all profitability/preflight gates.\n  if (edge.quoteKind === "kuru") {
+  // Kuru quote estimation must not use fill-or-kill: a quote is allowed to
+  // consume available book liquidity partially, while live execution can enforce
+  // FOK separately after the route has passed all profitability/preflight gates.
+  if (edge.quoteKind === "kuru") {
     const market = edge.kuruMarket;
     if (!market) return null;
 

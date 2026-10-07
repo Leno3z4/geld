@@ -28,9 +28,7 @@ export const config = {
   rpcUrl: process.env.ALCHEMY_RPC_URL ?? process.env.MONAD_RPC_URL ?? "https://rpc.monad.xyz",
   wsUrl: process.env.MONAD_WS_URL ?? "",
   privateKey: process.env.MONAD_PRIVATE_KEY ?? "",
-  // Temporarily disable normal meme-token execution. Keep the engine/code intact
-  // so LIVE_TRADING can be restored later without reverting strategy changes.
-  liveTrading: false,
+  liveTrading: bool("LIVE_TRADING", false),
   autoStart: bool("AUTO_START", false),
 
   // High-aggression defaults; override them in Cloudflare Worker vars if needed.

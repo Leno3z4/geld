@@ -52,9 +52,18 @@ export function CandidateDiagnostics() {
         </div>
       </CardHeader>
       <CardContent className="space-y-2">
+        {s.stats?.lastDiscoveryError || s.stats?.lastNewEventError ? (
+          <div className="rounded-lg border border-amber-900/60 bg-amber-950/20 p-3 text-xs text-amber-300">
+            Discovery feed warning: {[s.stats?.lastDiscoveryError, s.stats?.lastNewEventError].filter(Boolean).join(" · ")}
+          </div>
+        ) : null}
         {!rows.length ? (
           <div className="rounded-lg border border-zinc-800 bg-black/20 p-4 text-sm text-zinc-500">
-            No discovered tokens yet.
+            {!s.running
+              ? "Engine is stopped; token discovery runs while the engine is active."
+              : s.stats?.lastDiscoveryError || s.stats?.lastNewEventError
+                ? "No discovered tokens yet; see the discovery feed warning above."
+                : "No discovered tokens yet; waiting for the next discovery cycle."}
           </div>
         ) : (
           rows.map((token: any) => {

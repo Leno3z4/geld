@@ -22,6 +22,8 @@ type DashboardState = {
     lastCycleAt?: number;
     lastError?: string;
     lastDiscoveryAt?: number;
+    lastDiscoveryError?: string;
+    lastNewEventError?: string;
     discoveredTokens?: number;
     watchedTokens?: number;
     eligibleCandidates?: number;

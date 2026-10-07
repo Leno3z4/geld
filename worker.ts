@@ -733,6 +733,9 @@ export class GeldBot extends DurableObject<Env> {
           lastScheduledPhaseErrorAt: state.stats.lastScheduledPhaseErrorAt ?? 0,
           lastScheduledDurationMs: state.stats.lastScheduledDurationMs ?? 0,
           lastScheduledError: state.stats.lastScheduledError ?? null,
+          lastDiscoveryError: state.stats.lastDiscoveryError ?? null,
+          lastNewEventError: state.stats.lastNewEventError ?? null,
+          discoveredTokens: state.stats.discoveredTokens ?? 0,
           minLiquidityUsd: runtimeConfig.minLiquidityUsd,
           minMarketCapUsd: runtimeConfig.minMarketCapUsd
         });

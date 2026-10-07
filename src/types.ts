@@ -234,6 +234,8 @@ export interface BotStats {
   lastDexProcessedBlock?: string;
   eventBackfillDone?: boolean;
   lastDiscoveryAt?: number;
+  lastDiscoveryError?: string;
+  lastNewEventError?: string;
   discoveredTokens?: number;
   watchedTokens?: number;
   eligibleCandidates?: number;

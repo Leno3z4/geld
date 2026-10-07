@@ -442,10 +442,18 @@ export class TradingEngine {
           ...(config.nadfunApiKey ? { "X-API-Key": config.nadfunApiKey } : {})
         }
       });
-      if (!response.ok) return;
+      if (!response.ok) {
+        this.store.update((s) => {
+          s.stats.lastNewEventError = "NadFun new-event feed: HTTP " + response.status;
+        });
+        return;
+      }
 
       const payload = decodeNadfunPayload(await response.text());
       const events = Array.isArray(payload) ? payload : [];
+      this.store.update((s) => {
+        s.stats.lastNewEventError = undefined;
+      });
       const recentEvents = events
         .map((event: any) => ({
           event,
@@ -525,13 +533,21 @@ export class TradingEngine {
           this.store.upsertToken(token);
         }
       }
-    } catch {
+    } catch (error) {
+      this.store.update((s) => {
+        s.stats.lastNewEventError = error instanceof Error ? error.message : String(error);
+      });
       // The on-chain event stream and scheduled discovery remain the fallback.
     }
   }
 
   private async discoverEstablishedTokens() {
-    if (this.nadfunRequestsBlocked()) return;
+    if (this.nadfunRequestsBlocked()) {
+      this.store.update((s) => {
+        s.stats.lastDiscoveryError = "NadFun discovery is rate-limited; retrying after backoff.";
+      });
+      return;
+    }
 
     try {
       const url =
@@ -545,35 +561,49 @@ export class TradingEngine {
         ...(config.nadfunApiKey ? { "X-API-Key": config.nadfunApiKey } : {})
       };
 
-      const response = await fetch(url, { headers });
-      if (response.status === 429) {
-        this.noteNadfunRateLimit();
-        throw new Error("NadFun market-cap discovery rate limited: HTTP 429");
-      }
-      if (!response.ok) throw new Error("NadFun market-cap discovery failed: HTTP " + response.status);
-      this.clearNadfunBackoff();
-
-      const payload = decodeNadfunPayload(await response.text());
-      const marketRows = Array.isArray(payload?.tokens) ? payload.tokens : [];
-
-      // Market-cap alone misses the $8k-$25k lane because it is dominated by
-      // higher-cap tokens. Pull newest tokens separately and merge the full
-      // market objects so low-cap momentum candidates enter the same pipeline.
-      let newestRows: any[] = [];
-      if (config.lowCapMomentumEnabled) {
-        const newestUrl =
-          config.nadfunApiUrl +
-          "/order/creation_time?page=1&limit=50&is_nsfw=false&direction=DESC";
+      // Treat the market-cap and newest-token feeds as independent sources.
+      // Previously an error from the first request aborted the scan before the
+      // creation-time feed could run, making token discovery appear empty.
+      const fetchListing = async (listingUrl: string, label: string) => {
         try {
-          const newestResponse = await fetch(newestUrl, { headers });
-          if (newestResponse.status === 429) {
-            this.noteNadfunRateLimit();
-          } else if (newestResponse.ok) {
-            const newestPayload = decodeNadfunPayload(await newestResponse.text());
-            newestRows = Array.isArray(newestPayload?.tokens) ? newestPayload.tokens : [];
+          const response = await fetch(listingUrl, {
+            headers,
+            signal: AbortSignal.timeout(10_000)
+          });
+          if (response.status === 429) this.noteNadfunRateLimit();
+          if (!response.ok) throw new Error(label + ": HTTP " + response.status);
+          const payload = decodeNadfunPayload(await response.text());
+          if (!Array.isArray(payload?.tokens)) {
+            throw new Error(label + ": unexpected response (missing tokens array)");
           }
-        } catch {}
+          this.clearNadfunBackoff();
+          return { rows: payload.tokens as any[], error: "" };
+        } catch (error) {
+          return {
+            rows: [] as any[],
+            error: label + ": " + (error instanceof Error ? error.message : String(error))
+          };
+        }
+      };
+
+      const marketResult = await fetchListing(url, "NadFun market-cap feed");
+      let newestResult = { rows: [] as any[], error: "" };
+      if (config.lowCapMomentumEnabled) {
+        const newestUrl = config.nadfunApiUrl +
+          "/order/creation_time?page=1&limit=50&is_nsfw=false&direction=DESC";
+        newestResult = await fetchListing(newestUrl, "NadFun newest-token feed");
       }
+      const marketRows = marketResult.rows;
+      const newestRows = newestResult.rows;
+      const feedErrors = [marketResult.error, newestResult.error].filter(Boolean);
+      if (marketRows.length === 0 && newestRows.length === 0) {
+        throw new Error(feedErrors.join("; ") || "NadFun discovery feeds returned no token rows");
+      }
+      this.store.update((s) => {
+        s.stats.lastDiscoveryError = feedErrors.length
+          ? "Partial discovery: " + feedErrors.join("; ")
+          : undefined;
+      });
 
       const byToken = new Map<string, any>();
       for (const row of [...marketRows, ...newestRows]) {
@@ -867,6 +897,7 @@ export class TradingEngine {
     } catch (error) {
       this.store.update((s) => {
         s.stats.lastError = error instanceof Error ? error.message : String(error);
+        s.stats.lastDiscoveryError = error instanceof Error ? error.message : String(error);
         s.stats.lastDiscoveryAt = Date.now();
       });
     }

@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { GeldHighCapLearning } from "./src/highcap-learning.js";
 import { GeldLeverUpPaper } from "./src/leverup-paper.js";
+import { autoStartEnabled, parseGeldConfig } from "./src/worker-config.js";
 
 interface Env {
   GELD_BOT: DurableObjectNamespace<GeldBot>;
@@ -169,10 +170,6 @@ interface Env {
   LEVERUP_AUTO_LIVE_AFTER_PAPER?: string;
 }
 
-function isTrue(value?: string) {
-  return ["1", "true", "yes", "on"].includes((value ?? "").toLowerCase());
-}
-
 const PUBLIC_API_GET_PATHS = new Set([
   "/api/health",
   "/api/state",
@@ -210,29 +207,8 @@ function withCors(response: Response, request: Request) {
   });
 }
 
-function parseGeldConfig(env: Env): Record<string, string | undefined> {
-  if (!env.GELD_CONFIG) return {};
-
-  try {
-    const parsed = JSON.parse(env.GELD_CONFIG) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("GELD_CONFIG must be a JSON object");
-    }
-
-    const config: Record<string, string | undefined> = {};
-    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-      if (value === undefined || value === null) continue;
-      config[key] = typeof value === "string" ? value : String(value);
-    }
-    return config;
-  } catch (error) {
-    console.error("Invalid GELD_CONFIG:", error);
-    return {};
-  }
-}
-
 function hydrateProcessEnv(env: Env) {
-  const config = parseGeldConfig(env);
+  const config = parseGeldConfig(env.GELD_CONFIG);
 
   const valueFor = (key: string, fallback?: string) =>
     config[key] !== undefined ? config[key] : fallback;
@@ -685,7 +661,9 @@ export class GeldBot extends DurableObject<Env> {
       }
 
       if (!engine.snapshot().running) {
-        const autoStart = isTrue(this.env.GELD_AUTO_START);
+        // GELD_AUTO_START is commonly supplied inside GELD_CONFIG, not as a
+        // top-level Worker variable. Resolve it using the shared config parser.
+        const autoStart = autoStartEnabled(this.env);
         if (!autoStart) return Response.json(engine.snapshot());
       }
 

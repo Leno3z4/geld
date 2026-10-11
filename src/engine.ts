@@ -469,7 +469,7 @@ export class TradingEngine {
       token.watchReason = "SURGE BUY FAILED: " + (error instanceof Error ? error.message : String(error));
       this.store.upsertToken(token);
       this.store.update((s) => {
-        s.stats.lastError = token.watchReason;
+        s.stats.lastError = token.watchReason ?? "SURGE BUY FAILED";
       });
       return false;
     } finally {
@@ -2185,6 +2185,7 @@ export class TradingEngine {
   }
 
   private async openPosition(token: TokenSnapshot, aiSizePct: number, strategyOverride?: Position["strategy"], spendBalancePct?: number) {
+    const surgeHold = strategyOverride === "SURGE_HOLD";
     const ageMinutes = (Date.now() - token.createdAt) / 60000;
     if (this.entryCircuitBreakerActive()) return;
     const lowCapMomentum = isLowCapMomentumCandidate(token, {
@@ -2206,6 +2207,7 @@ export class TradingEngine {
       config.establishedOnly &&
       !lowCapMomentum &&
       !earlyLaunch &&
+      !surgeHold &&
       (!token.graduated ||
         ageMinutes < config.minEstablishedAgeMinutes ||
         (token.liquidityUsd ?? 0) < config.minLiquidityUsd ||
@@ -2243,7 +2245,6 @@ export class TradingEngine {
       (pending) => pending.side === "BUY" && pending.token.toLowerCase() === normalizedToken
     );
     if (hasOpenPositionAfterRefresh || hasPendingBuyAfterRefresh) return;
-    const surgeHold = strategyOverride === "SURGE_HOLD";
     const freeBalance = Math.max(0, state.balanceMon - config.gasReserveMon);
     const perTrade = freeBalance * (surgeHold ? (spendBalancePct ?? config.surgeBuyBalancePct) : config.positionSizePct) / 100;
     const maxExposure = Math.max(0, state.balanceMon * config.maxTotalExposurePct / 100);

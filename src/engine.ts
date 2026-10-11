@@ -430,6 +430,53 @@ export class TradingEngine {
     token.creatorPriorGraduations = prior.filter((candidate) => candidate.graduated).length;
   }
 
+  private isSurgeMomentumCandidate(token: TokenSnapshot) {
+    if (!config.surgeBuyEnabled) return false;
+    const ageMs = Date.now() - token.createdAt;
+    if (!(token.createdAt > 0) || ageMs < 0 || ageMs > config.surgeMaxAgeMinutes * 60_000) return false;
+    if (!(token.priceMon > 0) || (token.liquidityUsd ?? 0) < config.surgeMinLiquidityUsd) return false;
+    if (!(token.lastFlowApiAt && Date.now() - token.lastFlowApiAt <= Math.max(120_000, config.flowApiRefreshMs * 3))) return false;
+    const volume5mUsd = token.apiVolume5mUsd ?? ((token.volume5mMon ?? 0) * (token.monUsdPrice ?? 0));
+    if (volume5mUsd < config.surgeMinVolume5mUsd) return false;
+    return (token.apiTrend5mPct ?? -Infinity) >= config.surgeTriggerPct ||
+      (token.apiTrend1hPct ?? -Infinity) >= config.surgeTriggerPct;
+  }
+
+  private async maybeBuySurgeToken(token: TokenSnapshot) {
+    if (!this.store.get().running || !this.isSurgeMomentumCandidate(token)) return false;
+    const tokenKey = token.token.toLowerCase();
+    const state = this.store.get();
+    const hasOpenPosition = Object.values(state.positions).some(
+      (position) => position.token.toLowerCase() === tokenKey &&
+        (position.status === "OPEN" || position.status === "CLOSING")
+    );
+    const hasPendingBuy = Object.values(state.pendingExecutions).some(
+      (pending) => pending.side === "BUY" && pending.token.toLowerCase() === tokenKey
+    );
+    if (hasOpenPosition || hasPendingBuy || this.pendingCandidates.has(tokenKey)) return false;
+
+    this.pendingCandidates.add(tokenKey);
+    try {
+      token.entryStrategy = "SURGE_HOLD";
+      token.watchReason = "SURGE BUY: rolling 5m or 1h change exceeded threshold; 50% free-balance target; automatic exits suppressed";
+      token.aiAction = "BUY";
+      token.aiConfidence = 1;
+      token.aiReason = "Deterministic momentum trigger; normal AI veto and normal take-profit exits are bypassed.";
+      this.store.upsertToken(token);
+      await this.openPosition(token, 1, "SURGE_HOLD", config.surgeBuyBalancePct);
+      return true;
+    } catch (error) {
+      token.watchReason = "SURGE BUY FAILED: " + (error instanceof Error ? error.message : String(error));
+      this.store.upsertToken(token);
+      this.store.update((s) => {
+        s.stats.lastError = token.watchReason;
+      });
+      return false;
+    } finally {
+      this.pendingCandidates.delete(tokenKey);
+    }
+  }
+
   private async pollNewEvents() {
     const now = Date.now();
     if (now - this.lastNewEventPollAt < config.newEventPollMs) return;
@@ -518,6 +565,7 @@ export class TradingEngine {
         await this.enrichToken(token);
         await this.enrichFlowMetrics(token);
         updateMarketMetrics(token);
+        if (await this.maybeBuySurgeToken(token)) continue;
         token.localScore = scoreToken(token, this.seasonality);
         token.entryStrategy = selectEntryStrategy(token, config.dailyMinSamples);
 
@@ -829,6 +877,21 @@ export class TradingEngine {
       // Pull precise 5-minute USD flow for only the strongest low-cap seeds.
       // Nad.fun's documented swap-history values are USD-denominated, which
       // lets us compute both the current and previous 5m windows exactly.
+      // Scan a small bounded set of the newest launches for the momentum lane,
+      // independently of ordinary score/AI candidate eligibility.
+      const freshSurgeSeeds = Object.values(this.store.get().tokens)
+        .filter((token) => token.createdAt > 0 &&
+          Date.now() - token.createdAt <= config.surgeMaxAgeMinutes * 60_000 &&
+          (!token.lastFlowApiAt || Date.now() - token.lastFlowApiAt >= config.flowApiRefreshMs))
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .slice(0, Math.max(1, config.newEventCandidateLimit));
+      for (const token of freshSurgeSeeds) {
+        await this.enrichToken(token);
+        await this.enrichFlowMetrics(token);
+        await this.maybeBuySurgeToken(token);
+        this.store.upsertToken(token);
+      }
+
       for (const token of lowCapSeeds
         .sort((a, b) =>
           (b.localScore - a.localScore) ||
@@ -2121,7 +2184,7 @@ export class TradingEngine {
     }
   }
 
-  private async openPosition(token: TokenSnapshot, aiSizePct: number) {
+  private async openPosition(token: TokenSnapshot, aiSizePct: number, strategyOverride?: Position["strategy"], spendBalancePct?: number) {
     const ageMinutes = (Date.now() - token.createdAt) / 60000;
     if (this.entryCircuitBreakerActive()) return;
     const lowCapMomentum = isLowCapMomentumCandidate(token, {
@@ -2180,24 +2243,28 @@ export class TradingEngine {
       (pending) => pending.side === "BUY" && pending.token.toLowerCase() === normalizedToken
     );
     if (hasOpenPositionAfterRefresh || hasPendingBuyAfterRefresh) return;
+    const surgeHold = strategyOverride === "SURGE_HOLD";
     const freeBalance = Math.max(0, state.balanceMon - config.gasReserveMon);
-    const perTrade = freeBalance * config.positionSizePct / 100;
+    const perTrade = freeBalance * (surgeHold ? (spendBalancePct ?? config.surgeBuyBalancePct) : config.positionSizePct) / 100;
     const maxExposure = Math.max(0, state.balanceMon * config.maxTotalExposurePct / 100);
     const capacity = Math.max(0, maxExposure - state.openExposureMon);
     const availableCapacity = Math.max(0, capacity - this.reservedSpendMon);
-    const volatilityFactor = entrySizeVolatilityFactor(token);
-    const baseSpend = Math.min(perTrade, availableCapacity, freeBalance) * aiSizePct * volatilityFactor;
+    const volatilityFactor = surgeHold ? 1 : entrySizeVolatilityFactor(token);
+    const baseSpend = Math.min(perTrade, availableCapacity, freeBalance) * (surgeHold ? 1 : aiSizePct * volatilityFactor);
     const earlyProbeCap = earlyLaunch
       ? state.balanceMon * config.earlyLaunchProbePortfolioPct / 100
       : Number.POSITIVE_INFINITY;
     // On low-cap pools, size the order against available quote liquidity so the
     // bot does not become the market. The 2% default is a risk guard, not a
     // claim about an optimal market-impact threshold.
-    const lowCapLiquidityMon = (lowCapMomentum || earlyLaunch) && (token.liquidityMon ?? 0) > 0
+    const lowCapLiquidityMon = (lowCapMomentum || earlyLaunch || surgeHold) && (token.liquidityMon ?? 0) > 0
       ? token.liquidityMon!
       : Number.POSITIVE_INFINITY;
+    // Protect against becoming the market: surge orders target 50% of free MON,
+    // but are capped at 10% of visible quote liquidity and the global exposure limit.
+    const liquidityPct = surgeHold ? Math.max(config.lowCapMaxLiquidityPositionPct, 10) : config.lowCapMaxLiquidityPositionPct;
     const liquidityCap = Number.isFinite(lowCapLiquidityMon)
-      ? lowCapLiquidityMon * config.lowCapMaxLiquidityPositionPct / 100
+      ? lowCapLiquidityMon * liquidityPct / 100
       : Number.POSITIVE_INFINITY;
     const spend = Math.min(baseSpend, liquidityCap, earlyProbeCap);
 
@@ -2313,7 +2380,7 @@ export class TradingEngine {
       peakMon: spend,
       peakPnlPct: 0,
       entryLiquidityUsd: token.liquidityUsd ?? 0,
-      strategy: token.entryStrategy ?? "UNKNOWN",
+      strategy: strategyOverride ?? token.entryStrategy ?? "UNKNOWN",
       openedAt: Date.now(),
       lastAiAt: 0,
       entryTx: tx,
@@ -2586,6 +2653,14 @@ export class TradingEngine {
         position.peakPnlPct = Math.max(position.peakPnlPct ?? position.pnlPct, position.pnlPct);
 
         const now = Date.now();
+        if (position.strategy === "SURGE_HOLD") {
+          // Let this momentum position run; skip normal TP, stop, trailing, max-hold,
+          // liquidity, and sell-pressure exits. Manual close remains available.
+          unrealized += position.pnlMon;
+          exposure += position.currentMon;
+          position.closeReason = "SURGE_HOLD: automatic exits suppressed; manual close remains available";
+          continue;
+        }
         const infrastructureSellFailure = isTransientSellInfrastructureError(position.lastSellError ?? "");
         // Legacy versions could quarantine a position for an hour after an RPC
         // transport failure. Clear that stale quarantine so the fixed sell path
@@ -2636,6 +2711,7 @@ export class TradingEngine {
   private async reviewOpenPositions() {
     for (const position of Object.values(this.store.get().positions).filter((p) => p.status === "OPEN")) {
       if (!this.store.get().running) return;
+      if (position.strategy === "SURGE_HOLD") continue;
       if (this.aiCallsThisCycle >= config.aiMaxCallsPerCycle) break;
       if (!this.aiDailyBudgetAvailable()) break;
       if ((position.sellBlockedUntil ?? 0) > Date.now()) continue;

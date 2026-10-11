@@ -464,7 +464,16 @@ export class TradingEngine {
       token.aiReason = "Deterministic momentum trigger; normal AI veto and normal take-profit exits are bypassed.";
       this.store.upsertToken(token);
       await this.openPosition(token, 1, "SURGE_HOLD", config.surgeBuyBalancePct);
-      return true;
+      const opened = Object.values(this.store.get().positions).some(
+        (position) => position.token.toLowerCase() === tokenKey &&
+          position.strategy === "SURGE_HOLD" &&
+          (position.status === "OPEN" || position.status === "CLOSING")
+      );
+      if (!opened) {
+        token.watchReason = "SURGE TRIGGERED BUT BLOCKED by exposure, position-count, or liquidity cap";
+        this.store.upsertToken(token);
+      }
+      return opened;
     } catch (error) {
       token.watchReason = "SURGE BUY FAILED: " + (error instanceof Error ? error.message : String(error));
       this.store.upsertToken(token);

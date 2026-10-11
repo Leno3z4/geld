@@ -63,7 +63,7 @@ export interface TokenSnapshot {
   distanceFromDayLowPct?: number;
   distanceFromDayAvgPct?: number;
   distanceFromDayHighPct?: number;
-  entryStrategy?: "DAILY_MEAN_REVERSION" | "DIP_REVERSION" | "MOMENTUM" | "FLOW" | "HYBRID";
+  entryStrategy?: "DAILY_MEAN_REVERSION" | "DIP_REVERSION" | "MOMENTUM" | "FLOW" | "HYBRID" | "SURGE_HOLD";
   flowHistory?: Array<{ ts: number; buyMon: number; sellMon: number }>;
   lastMarketAt?: number;
   priceHistory?: Array<{ ts: number; priceMon: number }>;
@@ -146,7 +146,7 @@ export interface Position {
   profitTake1Done?: boolean;
   profitTake2Done?: boolean;
   profitTake3Done?: boolean;
-  strategy?: "DAILY_MEAN_REVERSION" | "DIP_REVERSION" | "MOMENTUM" | "FLOW" | "HYBRID" | "UNKNOWN";
+  strategy?: "DAILY_MEAN_REVERSION" | "DIP_REVERSION" | "MOMENTUM" | "FLOW" | "HYBRID" | "SURGE_HOLD" | "UNKNOWN";
   openedAt: number;
   lastAiAt: number;
   lastAiAction?: DecisionAction;
